@@ -501,10 +501,13 @@ DATA_DIR/
 ```bash
 (cd backend && go test -count=1 ./...)
 (cd backend && go vet ./...)
+(cd backend && go test -race -count=1 ./internal/service)
 (cd backend && go build ./cmd/server)
 (cd web && npm run typecheck)
 (cd web && npm test)          # 10 个测试文件、32 个用例
 (cd web && npm run build)
+docker compose build
+docker compose up -d
 ```
 
 覆盖范围：
@@ -512,12 +515,12 @@ DATA_DIR/
 - 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU/PaddleOCR 协议、搜索文本/高亮、迁移幂等。
 - 后端集成测试（临时 SQLite + httptest 模拟上游）：上传→归档→ZIP 展开→合集→本地副本；恶意 ZIP 拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；Agent 单一 Bearer/MCP/撤销；未鉴权 401；删除级联。
 - 前端：typecheck、10 个测试文件 32 个用例、生产构建。
+- PostgreSQL 部署：`postgres:16-alpine` 一次性迁移、两个应用实例、Nginx 单端口网关均健康；旧 SQLite 的账号、资料、Blob、任务与设置已复制，登录、`/auth/me` 和资料列表实测成功。租约竞争自动化测试仍以临时 SQLite 执行，未在生产库注入合成任务。
 
 未验证（不得写成已通过）：
 
 - 真实蓝奏云、123 云盘、WebDAV 的联网上传/下载/分享；
 - 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；
-- 本次没有对 PostgreSQL 运行集成测试；
 - 浏览器逐页人工操作、真实 Agent 客户端、真实大文件/长文档；
 - 任务运行指标、租约告警与按上游配额动态限流。
 
