@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -96,4 +97,25 @@ func Migrate(conn *gorm.DB) error {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 	return nil
+}
+
+// CopyModels copies every model in dependency order inside one transaction. It
+// is used only for an empty SQLite-to-PostgreSQL cutover.
+func CopyModels(source, target *gorm.DB) error {
+	return target.Transaction(func(tx *gorm.DB) error {
+		for _, value := range model.Models() {
+			typ := reflect.TypeOf(value).Elem()
+			rows := reflect.New(reflect.SliceOf(typ)).Interface()
+			if err := source.Find(rows).Error; err != nil {
+				return fmt.Errorf("读取 %s: %w", typ.Name(), err)
+			}
+			if reflect.ValueOf(rows).Elem().Len() == 0 {
+				continue
+			}
+			if err := tx.Create(rows).Error; err != nil {
+				return fmt.Errorf("写入 %s: %w", typ.Name(), err)
+			}
+		}
+		return nil
+	})
 }

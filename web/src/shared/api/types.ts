@@ -318,16 +318,33 @@ export interface AITestResult {
 
 export interface AISettings {
   analysis_enabled: boolean;
+  ocr_provider_id: string;
   mineru_base_url: string;
   max_pages: number;
   max_images: number;
   mineru_configured: boolean;
+  ocr_configured: boolean;
   updated_at: string;
 }
 
 export interface MinerUTestResult {
   healthy: boolean;
   message: string;
+}
+
+export type OCRProviderKind = 'mineru' | 'paddleocr';
+
+export interface OCRProvider {
+  id: string;
+  name: string;
+  kind: OCRProviderKind;
+  base_url: string;
+  model: string;
+  enabled: boolean;
+  priority: number;
+  token_configured: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface MaterialAnalysis {

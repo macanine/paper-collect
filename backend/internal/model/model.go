@@ -297,15 +297,27 @@ type UploadEntry struct {
 
 // Job is a persisted unit of background work.
 type Job struct {
-	ID         string `gorm:"primaryKey;size:36"`
-	Kind       string `gorm:"size:16;not null;index"`
-	Status     string `gorm:"size:16;not null;index"`
-	UploadID   string `gorm:"size:36;index"`
-	ReplicaID  string `gorm:"size:36;index"`
-	MaterialID string `gorm:"size:36;index"`
-	Attempts   int    `gorm:"not null"`
-	Error      string `gorm:"type:text;not null"`
-	CreatedAt  time.Time
+	ID          string `gorm:"primaryKey;size:36"`
+	Kind        string `gorm:"size:16;not null;index"`
+	Status      string `gorm:"size:16;not null;index"`
+	UploadID    string `gorm:"size:36;index"`
+	ReplicaID   string `gorm:"size:36;index"`
+	MaterialID  string `gorm:"size:36;index"`
+	Attempts    int    `gorm:"not null"`
+	Error       string `gorm:"type:text;not null"`
+	LeaseOwner  string `gorm:"size:128;index"`
+	LeaseUntil  *time.Time
+	HeartbeatAt *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// JobLock serialises analyze and index work for one material across instances.
+// Keys are stable resource names; the lease makes an abandoned claim recoverable.
+type JobLock struct {
+	Key        string    `gorm:"primaryKey;size:80"`
+	JobID      string    `gorm:"size:36;not null;index"`
+	LeaseUntil time.Time `gorm:"not null;index"`
 	UpdatedAt  time.Time
 }
 
@@ -367,6 +379,26 @@ const (
 	AnalysisFailed    = "failed"
 )
 
+// OCR provider kinds.
+const (
+	OCRKindMinerU    = "mineru"
+	OCRKindPaddleOCR = "paddleocr"
+)
+
+// OCRProvider is one hosted document parser. The token is stored encrypted and never returned.
+type OCRProvider struct {
+	ID          string `gorm:"primaryKey;size:36"`
+	Name        string `gorm:"size:128;not null"`
+	Kind        string `gorm:"size:16;not null;index"`
+	BaseURL     string `gorm:"type:text;not null"`
+	TokenCipher string `gorm:"type:text"`
+	Model       string `gorm:"size:200;not null"`
+	Enabled     bool   `gorm:"not null;index"`
+	Priority    int    `gorm:"not null;index"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 // AIProvider is one OpenAI-compatible endpoint. The API key is stored encrypted and never returned.
 type AIProvider struct {
 	ID           string `gorm:"primaryKey;size:36"`
@@ -386,6 +418,7 @@ type AIProvider struct {
 type AISettings struct {
 	ID                int    `gorm:"primaryKey"`
 	AnalysisEnabled   bool   `gorm:"not null"`
+	OCRProviderID     string `gorm:"size:36;index"`
 	MinerUBaseURL     string `gorm:"column:mineru_base_url;type:text;not null"`
 	MinerUTokenCipher string `gorm:"column:mineru_token_cipher;type:text"`
 	MaxPages          int    `gorm:"not null"`
@@ -430,7 +463,7 @@ type SearchSettings struct {
 // TableName pins the singleton search settings table.
 func (SearchSettings) TableName() string { return "search_settings" }
 
-// MaterialText caches MinerU Markdown and per-page text for analysis and indexing.
+// MaterialText caches OCR Markdown and per-page text for analysis and indexing.
 type MaterialText struct {
 	MaterialID string `gorm:"primaryKey;size:36"`
 	SourceHash string `gorm:"size:64;not null"`
@@ -484,9 +517,9 @@ func Models() []any {
 		&User{}, &APIKey{}, &Session{}, &Audit{},
 		&Blob{}, &Material{}, &MaterialSubject{},
 		&Collection{}, &CollectionItem{},
-		&Upload{}, &UploadEntry{}, &Job{},
+		&Upload{}, &UploadEntry{}, &Job{}, &JobLock{},
 		&StorageProvider{}, &Replica{}, &Policy{},
-		&AIProvider{}, &AISettings{}, &MaterialAnalysis{},
+		&AIProvider{}, &OCRProvider{}, &AISettings{}, &MaterialAnalysis{},
 		&SearchSettings{}, &MaterialText{}, &QuestionBlock{}, &QuestionTerm{}, &MaterialIndexState{},
 	}
 }

@@ -1,8 +1,8 @@
 # 高中资料归档系统技术架构
 
-版本 1.2.0 · 2026-10-28。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
+版本 1.3.0 · 2026-10-28。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
 
-本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、模型网关或 PostgreSQL 的联调结论。
+本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。
 
 ## 1. 系统定位
 
@@ -11,7 +11,7 @@
 - **归档**：PDF、DOC、DOCX、PPTX、文件夹和 ZIP；资料是一份逻辑文件，原件按 SHA-256 去重。
 - **存储**：本地、WebDAV、蓝奏云、123 云盘适配器；一个 Blob 可在多个端点各保存一份副本。
 - **编目**：学科、年级、学年、标签、角色和合集摆放；角色来自资料本身，不来自合集条目。
-- **AI**：MinerU 解析文档，OpenAI 兼容模型生成编目建议；建议必须人工应用。
+- **AI**：可切换的 MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；建议必须人工应用。
 - **搜题**：索引任务把试卷切成题目并建立可移植倒排表，按题干文本检索并返回页码。
 - **Agent**：用受限 API Key 换取短期 JWT，再以单一 Bearer JWT 访问 REST 和 `/mcp` 只读工具。
 
@@ -26,8 +26,8 @@
 | 后端基础库 | `golang-jwt/jwt/v5`、`golang.org/x/crypto`（argon2id）、`golang.org/x/text`（ZIP 文件名解码） |
 | 前端 | React 19、Ant Design 6、React Router 8、TanStack Query 5、Vite 8 |
 | 前端语言/样式/测试 | TypeScript 7 strict、UnoCSS 66（Tailwind v4 兼容 preset）、Vitest 5 |
-| 运行形态 | 单个 Go 进程：HTTP/MCP + 后台 worker；前端构建为 `web/dist` 静态文件，由同一进程从磁盘托管 |
-| 外部依赖 | OpenAI 兼容端点、MinerU v4 解析 API、各存储端点 |
+| 运行形态 | 每实例一个 Go 进程：HTTP/MCP + 后台 worker；PostgreSQL 支持多实例；前端构建为 `web/dist` 静态文件，由同一进程从磁盘托管 |
+| 外部依赖 | OpenAI 兼容端点、MinerU v4/PaddleOCR 异步解析 API、各存储端点 |
 
 前端只使用 HTTP API，不直接访问数据库、本地文件或存储凭据。
 
@@ -47,15 +47,16 @@
 │                ├─ GORM ─────────── SQLite / PostgreSQL             │
 │                ├─ blob Store ───── DATA_DIR/blobs（CAS）           │
 │                ├─ storage ──────── local / webdav / lanzou / 123pan │
-│                └─ ai ───────────── OpenAI 兼容 / MinerU             │
+│                └─ ai ─────── OpenAI 兼容 / MinerU / PaddleOCR        │
 │                                                                    │
-│ 单 worker goroutine ← jobs 表（pending）                            │
+│ 按类型的有界 worker 池 ← jobs 表（pending + lease）                 │
 │   ├─ ingest / replicate / analyze / index                          │
-│   └─ in-process wake + 2 秒轮询兜底                                │
+│   ├─ PostgreSQL SKIP LOCKED；SQLite BEGIN IMMEDIATE                │
+│   └─ 心跳续租 + 过期回收 + 同资料 job_locks 互斥                    │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-没有消息队列、Redis 或独立 worker 服务。任务状态、重试和启动恢复全部在数据库中完成；默认部署是**单进程、单 worker**。PostgreSQL 只改变连接池和 SQL 方言，不使当前 worker 自动支持多实例领取。
+没有消息队列、Redis 或独立 worker 服务。任务状态、重试、租约和启动恢复全部在数据库中完成。PostgreSQL 支持多实例领取；SQLite 仍是单实例。
 
 ## 4. 代码分层
 
@@ -70,7 +71,7 @@
 | `internal/service` | 业务用例、事务、任务状态机、存储规划、AI 和检索 | 事务内使用传入的 `tx`；网络调用不放在数据库事务里 |
 | `internal/server` | Gin 路由、JSON envelope、鉴权/scope、DTO、MCP | 薄适配层；字段以 API.md 为准 |
 | `internal/storage` | 存储适配器和稳定错误分类 | 不依赖 GORM/HTTP 路由；远端对象只通过 `Adapter` 端口访问 |
-| `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU 批量解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
+| `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU/PaddleOCR 解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
 | `internal/blob` | 本地 CAS、临时文件、文件签名嗅探 | 扩展名不是格式判定的唯一依据 |
 | `internal/archive` | ZIP 全量校验、编码还原、成员提取 | 先 `Inspect` 后 `Extract`；拒绝不安全包 |
 | `internal/auth` | JWT、密码哈希、refresh/API Key 原语、登录节流、角色 scope | 不在日志或响应中输出秘密 |
@@ -144,11 +145,11 @@ web/src/
 | MaterialSubject | `material_subjects` | `(material_id, code)` 主键；用于列表/搜索筛选 |
 | Collection / CollectionItem | `collections`、`collection_items` | 合集中同一资料唯一；条目角色读取时取资料角色；父级禁止循环 |
 | Upload / UploadEntry | `uploads`、`upload_entries` | 清单先声明；条目 `received` 需字节数、SHA、真实格式和 CAS 全部通过 |
-| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index；单进程领取 |
+| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index；租约领取，PostgreSQL 多实例、SQLite 单实例 |
 | StorageProvider | `storage_providers` | kind 不可改；secret 只写不读；local 根目录由服务端固定 |
 | Replica | `replicas` | `(blob_id, provider_id)` 唯一；目标在规划时冻结；上传与分享状态分离 |
 | StoragePolicy | `storage_policies` | 单例 `id=1`；模式与 `minimum_replicas(1..20)` |
-| AIProvider / AISettings | `ai_providers`、`ai_settings` | API Key/MinerU 令牌加密；AI 端点没有物理删除，只能停用 |
+| AIProvider / OCRProvider / AISettings | `ai_providers`、`ocr_providers`、`ai_settings` | API Key/OCR 令牌加密；端点没有物理删除，只能停用；设置保存当前 OCR provider |
 | MaterialAnalysis | `material_analyses` | 每资料一行；建议永不自动应用；图片不落盘 |
 | SearchSettings | `search_settings` | 单例；默认启用、500 页、10 页/批、12000 字/批 |
 | MaterialText | `material_texts` | 每资料一行；按文件 SHA + 解析器地址/缓存版本校验 |
@@ -191,7 +192,7 @@ Analysis: pending ──> running ──> succeeded | failed
 Index:    pending ──> running ──> succeeded | failed
 ```
 
-`RecoverInterrupted` 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；随后才启动 worker。进程取消（关机）时 ingest/replicate/analyze 会尝试回到 pending；index 的取消当前按失败记录，重建可恢复。
+`RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时四类任务都会在租约仍然有效时回到 pending。
 
 ## 7. 上传与归档流水线
 
@@ -294,9 +295,13 @@ worker RunAnalyze
   → 读取 AISettings / Material
   → 取原件：本地 CAS 优先，否则从可读副本下载（≤256 MiB）
   → 不需要图片且 material_texts 命中（SHA + parse key）：复用解析文本
-  → 否则 MinerU：POST /api/v4/file-urls/batch → PUT 预签名 URL
-       → 轮询 /api/v4/extract-results/batch/{batch_id}（默认 15 分钟）
-       → 下载 full_zip_url，读 content_list.json/full.md/页面图
+  → 否则按 ai_settings.ocr_provider_id（空则 priority 最小的启用项）：
+       MinerU：POST /api/v4/file-urls/batch → PUT 预签名 URL
+         → 轮询 /api/v4/extract-results/batch/{batch_id}（默认 15 分钟）
+         → 下载 full_zip_url，读 content_list.json/full.md/页面图
+       PaddleOCR：multipart POST /api/v2/ocr/jobs（model=PP-OCRv6）
+         → 轮询 /api/v2/ocr/jobs/{jobId}（默认 15 分钟）
+         → 下载 resultUrl.jsonUrl JSONL，提取 rec_texts
   → 写 material_texts（Markdown + 逐页文本）
   → 写 DATA_DIR/analysis/<materialID>/document.md（截断 2 MiB）
   → 按 max_pages/max_images 限制图片；图片只在内存中传给视觉模型
@@ -306,13 +311,13 @@ worker RunAnalyze
 ```
 
 - 自动分析只对非 ZIP 容器入队；ZIP 展开成员各自入队，避免对容器重复付费。
-- 分页/图片限制：`max_pages` 1..10，`max_images` 0..4；`max_pages` 限制送入视觉模型的页面图片数，MinerU 仍解析全文；文本提示另有 12000 字符级别上限。
+- 分页/图片限制：`max_pages` 1..10，`max_images` 0..4；`max_pages` 限制送入视觉模型的页面图片数，OCR 仍解析全文；文本提示另有 12000 字符级别上限。PaddleOCR 不返回持久化页面图，因此视觉模型只收到文本。
 - `analysis_enabled` 只控制归档后的自动入队；手动触发不依赖它。
 - 图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。
-- 解析缓存按文件 SHA + `mineru-text-v1:<base_url>` 的哈希校验；修改 MinerU 地址会自然失效。需要视觉图片时会重新解析，因为图片没有缓存。
+- 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。
 - 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃；建议永不自动应用。
-- 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。provider 按 priority 故障切换；没有可用模型或 MinerU 令牌时任务明确失败。
-- 关键超时：MinerU 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；MinerU 健康检查 20 秒。
+- 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
+- 关键超时：OCR 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
 
 ## 10. 题目索引与搜题
 
@@ -321,7 +326,7 @@ worker RunAnalyze
 ```
 RunIndex
   → material_texts 命中（SHA + parse key）则复用逐页文本
-  → 否则 MinerU 解析一次，保存 material_texts
+  → 否则当前 OCR provider 解析一次，保存 material_texts
   → 取前 max_pages 页；超过 batch_chars/2 的长页按段落切块（重叠 400 字）
   → 每批 batch_pages（默认 10）且不超过 batch_chars（默认 12000）调用 LLM
        → 输出 page_no/question_no/text/confidence
@@ -470,7 +475,7 @@ DATA_DIR/
 
 - **认证**：JWT 只接受 HS256，校验 issuer/audience/exp/nbf；每次请求重新查 Session/User/Key，撤销立即生效。
 - **授权**：HTTP scope 与 MCP 工具二次检查；Agent scope 取角色与密钥交集，并禁止管理/AI scope；MCP 仅 Agent。
-- **秘密**：存储/AI/MinerU 凭据加密；API Key/refresh 只存哈希；日志和审计不写秘密、Cookie、分享链接或完整 URL；`redact` 处理存储错误。
+- **秘密**：存储/AI/OCR 凭据加密；API Key/refresh 只存哈希；日志和审计不写秘密、Cookie、分享链接或完整 URL；`redact` 处理存储与上游错误。
 - **请求**：严格 JSON、1 MiB 限制、未知字段/非法 null 拒绝；MCP 无任意 URL/路径工具。
 - **文件**：相对路径校验；ZIP 先全量检查再提取；拒绝遍历/符号链接/加密/炸弹/格式伪装；本地端点根目录由服务端固定，适配器再次校验路径不逃逸。
 - **AI 输入**：文档内容按不可信数据处理；提示要求忽略其中指令；模型输出只作建议，人工应用才改资料。
@@ -479,12 +484,13 @@ DATA_DIR/
 
 ## 15. 一致性、失败与运维事实
 
-- **事务**：资料发布、合集条目替换、副本计划/状态刷新、分析/索引最终写入、策略/密钥更新均在数据库事务中；网络上传、MinerU、模型调用不在事务内。
+- **事务**：资料发布、合集条目替换、副本计划/状态刷新、分析/索引最终写入、策略/密钥更新均在数据库事务中；网络上传、OCR、模型调用不在事务内。
 - **非事务副作用**：CAS、临时文件、远端对象和数据库更新不能原子提交。失败可能留下孤儿 CAS、远端对象或已上传但未记库的副本；当前没有自动 GC/远端删除。
 - **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；Replica 规划复用已有行；Analysis/Index 重跑覆盖自身结果。
-- **恢复**：启动时把 `running` 改回 `pending`；worker 单 goroutine 顺序领取最老的 pending Job，`attempts` 递增。
+- **恢复与领取**：SQLite 启动时将遗留 `running` 改回 `pending`；PostgreSQL 仅回收过期租约。worker 按类型领取 pending Job，`attempts` 递增。
+- **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index 由 `job_locks` 串行化，不同资料可并行。
 - **取消**：ingest/replicate/analyze 在进程 context 取消时回到 pending；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
-- **单进程假设**：SQLite 单连接、单 writer、WAL；任务领取没有租约/心跳/分布式锁。多实例部署前必须先设计任务租约与恢复，不能直接把当前 worker 并行启动。
+- **部署边界**：SQLite 单连接、单 writer、WAL，只支持单实例。PostgreSQL 支持多实例；内置 Compose 运行两个应用实例，并共享 `DATA_DIR`（CAS 与本地存储）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。
 - **增长**：`material_texts`、`question_terms`、`material_analyses`、`audits`、`jobs` 和孤儿 CAS 会持续增长；没有保留期/清理任务。`AutoMigrate` 不会删除旧表/旧列。
 - **迁移**：没有版本化 migration；升级前先备份，启动时由 `AutoMigrate` 增量建表/加列。已删除功能留下的表和列不会自动清理。
 
@@ -503,21 +509,21 @@ DATA_DIR/
 
 覆盖范围：
 
-- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU 协议、搜索文本/高亮、迁移幂等。
+- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU/PaddleOCR 协议、搜索文本/高亮、迁移幂等。
 - 后端集成测试（临时 SQLite + httptest 模拟上游）：上传→归档→ZIP 展开→合集→本地副本；恶意 ZIP 拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；Agent 单一 Bearer/MCP/撤销；未鉴权 401；删除级联。
 - 前端：typecheck、10 个测试文件 32 个用例、生产构建。
 
 未验证（不得写成已通过）：
 
 - 真实蓝奏云、123 云盘、WebDAV 的联网上传/下载/分享；
-- 真实 MinerU 账号、真实 OpenAI 兼容网关的质量、限流和费用；
+- 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；
 - 本次没有对 PostgreSQL 运行集成测试；
 - 浏览器逐页人工操作、真实 Agent 客户端、真实大文件/长文档；
-- 多实例 worker 租约/抢占。
+- 任务运行指标、租约告警与按上游配额动态限流。
 
 ## 17. 已知边界与后续方向
 
-1. **多实例**：先实现 Job 租约、心跳、过期回收和唯一领取，再考虑多 worker；仅切 PostgreSQL 不够。
+1. **多实例运维**：为各实例设置唯一 `WORKER_INSTANCE_ID`，共享 `DATA_DIR`，监控过期租约和任务失败率。
 2. **真实存储**：WebDAV/蓝奏需要真实端点联调；123 云盘在官方接口可核对前保持 unsupported，不应作为可上传端点启用。
 3. **远端删除/改名**：适配器没有删除接口；改名只同步本地副本。需要远端生命周期管理时另设能力与审计。
 4. **AI/索引质量**：真实试卷的 OCR 纠错、切题、页码准确率和大文件成本未系统验证；分析与索引可继续共享解析缓存。

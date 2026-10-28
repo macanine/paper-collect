@@ -64,15 +64,19 @@ func (s *Service) RunIngest(ctx context.Context, jobID string) {
 		return
 	}
 	if ctx.Err() != nil {
-		s.requeueJob(job.ID)
+		if !errors.Is(context.Cause(ctx), errLeaseLost) {
+			s.requeueJob(job.ID, job.LeaseOwner)
+		}
 		return
 	}
 	s.logf("ingest job failed: %v", err)
-	s.failJob(job.ID, publicMessage(err))
-	if job.UploadID != "" {
-		_ = db.Model(&model.Upload{}).Where("id = ?", job.UploadID).
+	s.failJob(job.ID, job.LeaseOwner, publicMessage(err), func(tx *gorm.DB) error {
+		if job.UploadID == "" {
+			return nil
+		}
+		return tx.Model(&model.Upload{}).Where("id = ? AND job_id = ?", job.UploadID, job.ID).
 			Updates(map[string]any{"status": model.UploadFailed, "updated_at": s.now()}).Error
-	}
+	})
 }
 
 func (s *Service) ingest(ctx context.Context, job model.Job) error {
@@ -148,6 +152,9 @@ func (s *Service) ingest(ctx context.Context, job model.Job) error {
 // publishIngest writes blobs, materials, collections, replica plans and job state in one transaction.
 func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top []*plannedMaterial, groups []*zipGroup, staged map[string]stagedBlob) error {
 	now := s.now()
+	if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
+		return fmt.Errorf("claim ingest job: %w", err)
+	}
 	blobIDs := make(map[string]string, len(staged))
 	for sha, st := range staged {
 		var existing model.Blob
@@ -318,8 +325,7 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 		Updates(map[string]any{"status": model.UploadCompleted, "collection_id": manifest.ID, "material_id": materialID, "updated_at": now}).Error; err != nil {
 		return fmt.Errorf("complete upload: %w", err)
 	}
-	if err := tx.Model(&model.Job{}).Where("id = ?", job.ID).
-		Updates(map[string]any{"status": model.JobSucceeded, "error": "", "updated_at": now}).Error; err != nil {
+	if err := s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, ""); err != nil {
 		return fmt.Errorf("complete job: %w", err)
 	}
 	return s.auditSystem(tx, "ingest.complete", up.ID)
@@ -367,17 +373,48 @@ func (s *Service) expandPackage(e model.UploadEntry) ([]expandedMember, error) {
 	return out, nil
 }
 
-// failJob marks a job failed with a safe, stored message.
-func (s *Service) failJob(jobID, message string) {
-	_ = s.db.Model(&model.Job{}).Where("id = ?", jobID).
-		Updates(map[string]any{"status": model.JobFailed, "error": message, "updated_at": s.now()}).Error
+// failJob marks a job failed and optionally applies related projection writes
+// in the same transaction, guarded by the job lease.
+func (s *Service) failJob(jobID, owner, message string, projections ...func(*gorm.DB) error) bool {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.finishJobTx(tx, jobID, owner, model.JobFailed, message); err != nil {
+			return err
+		}
+		for _, projection := range projections {
+			if err := projection(tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if !errors.Is(err, errLeaseLost) {
+			s.logf("fail job: %v", err)
+		}
+		return false
+	}
+	return true
 }
 
-// requeueJob returns an interrupted job to pending so the next start retries it.
-func (s *Service) requeueJob(jobID string) {
-	_ = s.db.Model(&model.Job{}).Where("id = ? AND status = ?", jobID, model.JobRunning).
-		Updates(map[string]any{"status": model.JobPending, "updated_at": s.now()}).Error
-	s.notify()
+// requeueJob returns an interrupted job to pending and applies related
+// projection resets atomically.
+func (s *Service) requeueJob(jobID, owner string, projections ...func(*gorm.DB) error) bool {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.finishJobTx(tx, jobID, owner, model.JobPending, ""); err != nil {
+			return err
+		}
+		for _, projection := range projections {
+			if err := projection(tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		s.notify()
+		return true
+	}
+	return false
 }
 
 func addStaged(m map[string]stagedBlob, sha string, st stagedBlob) {

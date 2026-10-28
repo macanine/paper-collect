@@ -12,7 +12,8 @@ WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/paper-collect ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/paper-collect ./cmd/server \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/paper-collect-migrate ./cmd/migrate
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -24,6 +25,7 @@ RUN apt-get update \
     && chown -R app:app /app
 
 COPY --from=server-build /out/paper-collect /app/paper-collect
+COPY --from=server-build /out/paper-collect-migrate /app/paper-collect-migrate
 COPY --from=web-build /src/web/dist/ /app/web/
 
 WORKDIR /app

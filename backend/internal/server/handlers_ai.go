@@ -2,8 +2,10 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/service"
 )
 
@@ -140,6 +142,7 @@ func (s *Server) handleGetAISettings(c *gin.Context) {
 func (s *Server) handlePutAISettings(c *gin.Context) {
 	var req struct {
 		AnalysisEnabled bool    `json:"analysis_enabled"`
+		OCRProviderID   *string `json:"ocr_provider_id"`
 		MinerUBaseURL   string  `json:"mineru_base_url"`
 		MinerUToken     *string `json:"mineru_token"`
 		MaxPages        int     `json:"max_pages"`
@@ -150,8 +153,9 @@ func (s *Server) handlePutAISettings(c *gin.Context) {
 		return
 	}
 	view, err := s.svc.PutAISettings(c.Request.Context(), principal(c), service.AISettingsInput{
-		AnalysisEnabled: req.AnalysisEnabled, MinerUBaseURL: req.MinerUBaseURL,
-		MinerUToken: req.MinerUToken, MaxPages: req.MaxPages, MaxImages: req.MaxImages,
+		AnalysisEnabled: req.AnalysisEnabled, OCRProviderID: req.OCRProviderID,
+		MinerUBaseURL: req.MinerUBaseURL,
+		MinerUToken:   req.MinerUToken, MaxPages: req.MaxPages, MaxImages: req.MaxImages,
 	})
 	if err != nil {
 		respondError(c, err)
@@ -167,6 +171,87 @@ func (s *Server) handleTestMinerU(c *gin.Context) {
 		return
 	}
 	s.respondData(c, http.StatusOK, gin.H{"healthy": healthy, "message": message})
+}
+
+func (s *Server) handleListOCRProviders(c *gin.Context) {
+	items, err := s.svc.ListOCRProviders(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	out := make([]ocrProviderDTO, 0, len(items))
+	for _, item := range items {
+		out = append(out, toOCRProvider(item))
+	}
+	s.respondData(c, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateOCRProvider(c *gin.Context) {
+	var req struct {
+		Name     string  `json:"name"`
+		Kind     string  `json:"kind"`
+		BaseURL  string  `json:"base_url"`
+		Token    *string `json:"token"`
+		Model    string  `json:"model"`
+		Enabled  *bool   `json:"enabled"`
+		Priority *int    `json:"priority"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	in := service.OCRProviderInput{
+		Name: req.Name, Kind: strings.TrimSpace(req.Kind), BaseURL: req.BaseURL,
+		Token: req.Token, Model: req.Model, Enabled: true, Priority: 100,
+	}
+	if in.Kind == "" {
+		in.Kind = model.OCRKindPaddleOCR
+	}
+	if req.Enabled != nil {
+		in.Enabled = *req.Enabled
+	}
+	if req.Priority != nil {
+		in.Priority = *req.Priority
+	}
+	view, err := s.svc.CreateOCRProvider(c.Request.Context(), principal(c), in)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusCreated, toOCRProvider(view))
+}
+
+func (s *Server) handlePatchOCRProvider(c *gin.Context) {
+	var req struct {
+		Name     *string `json:"name"`
+		BaseURL  *string `json:"base_url"`
+		Token    *string `json:"token"`
+		Model    *string `json:"model"`
+		Enabled  *bool   `json:"enabled"`
+		Priority *int    `json:"priority"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	view, err := s.svc.UpdateOCRProvider(c.Request.Context(), principal(c), c.Param("id"), service.OCRProviderPatch{
+		Name: req.Name, BaseURL: req.BaseURL, Token: req.Token, Model: req.Model,
+		Enabled: req.Enabled, Priority: req.Priority,
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toOCRProvider(view))
+}
+
+func (s *Server) handleTestOCRProvider(c *gin.Context) {
+	result, err := s.svc.TestOCRProvider(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, gin.H{"healthy": result.Healthy, "message": result.Message})
 }
 
 func (s *Server) handleEnqueueAnalysis(c *gin.Context) {

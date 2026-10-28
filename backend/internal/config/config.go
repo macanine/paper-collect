@@ -9,7 +9,9 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -19,11 +21,26 @@ type Config struct {
 	DataDir        string
 	DatabaseDriver string // sqlite | postgres
 	DatabaseDSN    string
+	AutoMigrate    bool
 	WebDist        string // absolute path; the directory may be absent
 	AdminUsername  string // optional; only needed to bootstrap an empty database
 	AdminPassword  string // optional; only needed to bootstrap an empty database
 	JWTSecret      string
 	MasterKey      []byte // 32 bytes, decoded from base64
+	Worker         WorkerConfig
+}
+
+// WorkerConfig controls the embedded job runners. Analyze and index tasks are
+// isolated by material; ingest and replicate have their own bounded pools.
+type WorkerConfig struct {
+	InstanceID           string
+	IngestConcurrency    int
+	ReplicateConcurrency int
+	AnalyzeConcurrency   int
+	IndexConcurrency     int
+	LeaseDuration        time.Duration
+	HeartbeatInterval    time.Duration
+	PollInterval         time.Duration
 }
 
 var adminUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
@@ -64,6 +81,7 @@ func Load(getenv func(string) string) (Config, error) {
 	default:
 		add("DATABASE_DRIVER 只能是 sqlite 或 postgres")
 	}
+	cfg.AutoMigrate = strings.ToLower(strings.TrimSpace(getenv("DB_AUTO_MIGRATE"))) != "false"
 
 	webDist, err := filepath.Abs(valueOr(getenv("WEB_DIST"), "../web/dist"))
 	if err != nil {
@@ -100,6 +118,23 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	cfg.Worker = WorkerConfig{
+		InstanceID:           strings.TrimSpace(getenv("WORKER_INSTANCE_ID")),
+		IngestConcurrency:    positiveInt(getenv, "WORKER_INGEST_CONCURRENCY", 1, &problems),
+		ReplicateConcurrency: positiveInt(getenv, "WORKER_REPLICATE_CONCURRENCY", 2, &problems),
+		AnalyzeConcurrency:   positiveInt(getenv, "WORKER_ANALYZE_CONCURRENCY", 2, &problems),
+		IndexConcurrency:     positiveInt(getenv, "WORKER_INDEX_CONCURRENCY", 2, &problems),
+		LeaseDuration:        positiveDuration(getenv, "WORKER_LEASE_DURATION", 2*time.Minute, &problems),
+		HeartbeatInterval:    positiveDuration(getenv, "WORKER_HEARTBEAT_INTERVAL", 20*time.Second, &problems),
+		PollInterval:         positiveDuration(getenv, "WORKER_POLL_INTERVAL", 2*time.Second, &problems),
+	}
+	if cfg.Worker.HeartbeatInterval >= cfg.Worker.LeaseDuration {
+		add("WORKER_HEARTBEAT_INTERVAL 必须小于 WORKER_LEASE_DURATION")
+	}
+	if cfg.DatabaseDriver == "sqlite" && strings.TrimSpace(cfg.Worker.InstanceID) != "" {
+		add("SQLite 不支持多实例，WORKER_INSTANCE_ID 仅用于 PostgreSQL")
+	}
+
 	if len(problems) > 0 {
 		errs := make([]error, 0, len(problems))
 		for _, p := range problems {
@@ -108,6 +143,32 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.Join(errs...)
 	}
 	return cfg, nil
+}
+
+func positiveInt(getenv func(string) string, name string, fallback int, problems *[]string) int {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > 64 {
+		*problems = append(*problems, fmt.Sprintf("%s 必须是 1 到 64 的整数", name))
+		return fallback
+	}
+	return n
+}
+
+func positiveDuration(getenv func(string) string, name string, fallback time.Duration, problems *[]string) time.Duration {
+	raw := strings.TrimSpace(getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		*problems = append(*problems, fmt.Sprintf("%s 必须是正的 Go duration（例如 30s）", name))
+		return fallback
+	}
+	return d
 }
 
 func valueOr(v, fallback string) string {

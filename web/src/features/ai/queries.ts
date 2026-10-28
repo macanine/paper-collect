@@ -2,21 +2,26 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   applyMaterialAnalysis,
   createAIProvider,
+  createOCRProvider,
   getAISettings,
   getMaterialAnalysis,
   enqueueMaterialAnalysis,
   listAIProviders,
+  listOCRProviders,
   probeAIProviders,
   probeSavedProvider,
   putAISettings,
   testAIProvider,
+  testOCRProvider,
+  updateOCRProvider,
   updateAIProvider,
 } from './api';
-import type { AIProviderDraft, AIProviderPatch } from './api';
+import type { AIProviderDraft, AIProviderPatch, OCRProviderDraft, OCRProviderPatch } from './api';
 import { ApiError } from '../../shared/api/errors';
 
 export const aiKeys = {
   providers: ['ai', 'providers'] as const,
+  ocrProviders: ['ai', 'ocr-providers'] as const,
   settings: ['ai', 'settings'] as const,
   analysis: (materialId: string) => ['materials', materialId, 'analysis'] as const,
 };
@@ -65,6 +70,30 @@ export function useUpdateAISettings() {
     mutationFn: putAISettings,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: aiKeys.settings }),
   });
+}
+
+export function useOCRProviders(enabled = true) {
+  return useQuery({ queryKey: aiKeys.ocrProviders, queryFn: listOCRProviders, enabled });
+}
+
+export function useCreateOCRProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (draft: OCRProviderDraft) => createOCRProvider(draft),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: aiKeys.ocrProviders }),
+  });
+}
+
+export function useUpdateOCRProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: OCRProviderPatch }) => updateOCRProvider(id, patch),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: aiKeys.ocrProviders }),
+  });
+}
+
+export function useTestOCRProvider() {
+  return useMutation({ mutationFn: (id: string) => testOCRProvider(id) });
 }
 
 export function useMaterialAnalysis(materialId: string, enabled = true) {

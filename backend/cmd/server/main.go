@@ -38,8 +38,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("打开数据库失败: %w", err)
 	}
-	if err := db.Migrate(conn); err != nil {
-		return fmt.Errorf("迁移数据库失败: %w", err)
+	if cfg.AutoMigrate {
+		if err := db.Migrate(conn); err != nil {
+			return fmt.Errorf("迁移数据库失败: %w", err)
+		}
 	}
 
 	store, err := blob.NewStore(cfg.DataDir)
@@ -64,6 +66,17 @@ func run() error {
 		Limiter: limiter,
 		Factory: storage.New,
 		Logf:    log.Printf,
+		Worker: service.WorkerSettings{
+			InstanceID:           cfg.Worker.InstanceID,
+			IngestConcurrency:    cfg.Worker.IngestConcurrency,
+			ReplicateConcurrency: cfg.Worker.ReplicateConcurrency,
+			AnalyzeConcurrency:   cfg.Worker.AnalyzeConcurrency,
+			IndexConcurrency:     cfg.Worker.IndexConcurrency,
+			LeaseDuration:        cfg.Worker.LeaseDuration,
+			HeartbeatInterval:    cfg.Worker.HeartbeatInterval,
+			PollInterval:         cfg.Worker.PollInterval,
+		},
+		ResetAllRunningOnStart: cfg.DatabaseDriver == "sqlite",
 	})
 	if err != nil {
 		return err

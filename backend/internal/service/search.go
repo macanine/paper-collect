@@ -16,6 +16,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -159,12 +160,12 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 	}
 	var material model.Material
 	if err := db.Where("id = ?", job.MaterialID).First(&material).Error; err != nil {
-		s.failIndex(job.ID, job.MaterialID, "资料不存在")
+		s.failIndex(job.ID, job.LeaseOwner, job.MaterialID, "资料不存在")
 		return
 	}
 	settings, err := s.ensureSearchSettings(ctx)
 	if err != nil {
-		s.failIndex(job.ID, material.ID, "读取搜索设置失败")
+		s.failIndex(job.ID, job.LeaseOwner, material.ID, "读取搜索设置失败")
 		return
 	}
 	_ = db.Model(&model.MaterialIndexState{}).Where("material_id = ?", material.ID).
@@ -177,25 +178,28 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 	}
 	if err != nil {
 		s.logf("index %s: load pages: %v", material.ID, err)
-		s.failIndex(job.ID, material.ID, indexErrorText(err))
+		s.failIndex(job.ID, job.LeaseOwner, material.ID, indexErrorText(err))
 		return
 	}
 	provider, modelName, err := s.segmentationTarget(ctx, settings)
 	if err != nil {
-		s.failIndex(job.ID, material.ID, err.Error())
+		s.failIndex(job.ID, job.LeaseOwner, material.ID, err.Error())
 		return
 	}
 	questions, calls, failedBatches, err := s.segmentQuestions(ctx, provider, modelName, pages, settings)
 	if err != nil {
 		s.logf("index %s: segmentation: %v (calls=%d failed=%d)", material.ID, err, calls, failedBatches)
-		_ = db.Model(&model.MaterialIndexState{}).Where("material_id = ?", material.ID).
-			Updates(map[string]any{"llm_calls": calls, "llm_failed_batches": failedBatches, "updated_at": s.now()}).Error
-		s.failIndex(job.ID, material.ID, indexErrorText(err))
+		s.failIndex(job.ID, job.LeaseOwner, material.ID, indexErrorText(err), map[string]any{
+			"llm_calls": calls, "llm_failed_batches": failedBatches,
+		})
 		return
 	}
 
 	now := s.now()
 	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
+			return err
+		}
 		var oldIDs []string
 		if err := tx.Model(&model.QuestionBlock{}).Where("material_id = ?", material.ID).Pluck("id", &oldIDs).Error; err != nil {
 			return err
@@ -224,18 +228,30 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 			}
 		}
 		indexedAt := now
-		return tx.Model(&model.MaterialIndexState{}).Where("material_id = ?", material.ID).Updates(map[string]any{
-			"status": "succeeded", "page_count": originalPageCount, "question_count": len(questions),
-			"llm_calls": calls, "llm_failed_batches": failedBatches, "error": "",
-			"indexed_at": indexedAt, "updated_at": now,
-		}).Error
+		res := tx.Model(&model.MaterialIndexState{}).
+			Where("material_id = ? AND job_id = ?", material.ID, job.ID).
+			Updates(map[string]any{
+				"status": "succeeded", "page_count": originalPageCount, "question_count": len(questions),
+				"llm_calls": calls, "llm_failed_batches": failedBatches, "error": "",
+				"indexed_at": indexedAt, "updated_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return errLeaseLost
+		}
+		return s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, "")
 	})
 	if err != nil {
+		if errors.Is(err, errLeaseLost) {
+			s.logf("index %s: lease lost before commit", material.ID)
+			return
+		}
 		s.logf("index %s: write: %v", material.ID, err)
-		s.failIndex(job.ID, material.ID, "写入索引失败")
+		s.failIndex(job.ID, job.LeaseOwner, material.ID, "写入索引失败")
 		return
 	}
-	s.succeedJob(job.ID)
 }
 
 func indexErrorText(err error) string {
@@ -254,34 +270,39 @@ func indexErrorText(err error) string {
 	return message
 }
 
-func (s *Service) failIndex(jobID, materialID, message string) {
-	_ = s.db.Model(&model.MaterialIndexState{}).Where("material_id = ?", materialID).
-		Updates(map[string]any{"status": "failed", "error": message, "updated_at": s.now()}).Error
-	s.failJob(jobID, message)
+func (s *Service) failIndex(jobID, owner, materialID, message string, extra ...map[string]any) {
+	updates := map[string]any{"status": "failed", "error": message, "updated_at": s.now()}
+	for _, values := range extra {
+		for key, value := range values {
+			updates[key] = value
+		}
+	}
+	s.failJob(jobID, owner, message, func(tx *gorm.DB) error {
+		return tx.Model(&model.MaterialIndexState{}).
+			Where("material_id = ? AND job_id = ?", materialID, jobID).
+			Updates(updates).Error
+	})
 }
 
-// loadIndexPages reuses cached per-page text or calls MinerU once.
+// loadIndexPages reuses cached per-page text or calls the selected OCR provider once.
 func (s *Service) loadIndexPages(ctx context.Context, material model.Material, settings model.SearchSettings) ([]pageText, error) {
 	db := s.db.WithContext(ctx)
 	aiSettings, err := s.ensureAISettings(ctx)
 	if err != nil {
 		return nil, err
 	}
+	ocrProvider, err := s.selectedOCRProvider(ctx, aiSettings)
+	if err != nil {
+		return nil, err
+	}
 	var cached model.MaterialText
 	if err := db.Where("material_id = ?", material.ID).First(&cached).Error; err == nil {
-		if cached.SourceHash == material.SHA256 && cached.PagesJSON != "" && cached.ParseKey == textParseKey(aiSettings) {
+		if cached.SourceHash == material.SHA256 && cached.PagesJSON != "" && cached.ParseKey == textParseKey(ocrProvider) {
 			var pages []pageText
 			if err := json.Unmarshal([]byte(cached.PagesJSON), &pages); err == nil && len(pages) > 0 {
 				return limitIndexPages(pages, settings.MaxPages), nil
 			}
 		}
-	}
-	token, err := s.openAISecret(aiSettings.MinerUTokenCipher, "ai.settings")
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(token) == "" {
-		return nil, errors.New("未配置 MinerU 令牌")
 	}
 	var document []byte
 	if s.blobs.Exists(material.SHA256) {
@@ -297,7 +318,7 @@ func (s *Service) loadIndexPages(ctx context.Context, material model.Material, s
 	if err != nil {
 		return nil, fmt.Errorf("读取原件失败: %w", err)
 	}
-	parsed, err := s.parseWithMinerU(ctx, aiSettings, material.FileName, document)
+	parsed, ocrProvider, err := s.parseWithOCR(ctx, aiSettings, material.FileName, document)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +330,7 @@ func (s *Service) loadIndexPages(ctx context.Context, material model.Material, s
 	now := s.now()
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		return tx.Save(&model.MaterialText{
-			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(aiSettings),
+			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(ocrProvider),
 			PageCount: parsed.PageCount, PagesJSON: string(raw), Markdown: parsed.Markdown, CreatedAt: now, UpdatedAt: now,
 		}).Error
 	}); err != nil {
@@ -879,12 +900,16 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 			if count > 0 {
 				return nil
 			}
-			if err := tx.Create(&model.MaterialIndexState{
+			state := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.MaterialIndexState{
 				MaterialID: material.ID, Status: "pending", JobID: jobID, UpdatedAt: now,
-			}).Error; err != nil {
-				return err
+			})
+			if state.Error != nil {
+				return state.Error
 			}
-			return tx.Create(&model.Job{
+			if state.RowsAffected == 0 {
+				return nil
+			}
+			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.Job{
 				ID: jobID, Kind: model.JobIndex, Status: model.JobPending,
 				MaterialID: material.ID, CreatedAt: now, UpdatedAt: now,
 			}).Error
@@ -892,7 +917,13 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 		if err != nil {
 			return queued, err
 		}
-		queued++
+		var count int64
+		if err := db.Model(&model.Job{}).Where("id = ?", jobID).Count(&count).Error; err != nil {
+			return queued, err
+		}
+		if count == 1 {
+			queued++
+		}
 	}
 	if queued > 0 {
 		s.notify()

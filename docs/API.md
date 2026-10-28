@@ -1,6 +1,6 @@
 # HTTP API v1 接口合同
 
-版本 1.2.0 · 2026-10-28。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+版本 1.3.0 · 2026-10-28。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
 
 ## 通用规范
 
@@ -23,7 +23,7 @@
 
 `Upload`：`id,title,collection_kind,subject_codes,grade,academic_year,tags,status:pending|processing|completed|failed,collection_id,material_id,job_id,created_at,entries:UploadEntry[]`。`UploadEntry`：`id,relative_path,size_bytes,sha256:string(可空),status:pending|received`。status=received 表示字节数、内容签名和 SHA 已验证。单个普通文件归档后返回 `material_id`，批次返回 `collection_id`；folder 使用 `webkitRelativePath`，不上传操作系统路径。
 
-`Job`：`id,kind:ingest|replicate|analyze|index,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,created_at,updated_at`。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。本期单进程 worker，不宣称多实例领取语义。
+`Job`：`id,kind:ingest|replicate|analyze|index,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,created_at,updated_at`。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。PostgreSQL 支持带租约和心跳的多实例领取；SQLite 仅支持单实例。
 
 `StorageProvider`：`id,name(1..128),kind:local|webdav|lanzou|123pan,role:primary|backup,enabled:boolean,priority:integer(0..1000),weight:integer(1..1000),config:object<string,string>,secret_configured:boolean,created_at,updated_at`。任何 GET 不返回 secret。`Replica`：`id,blob_id,provider_id,status:pending|uploading|ready|failed,size_bytes,verification:uploaded|size|sha256,error,share_status:pending|ready|unsupported|failed,share_url:string,share_password:string,share_expires_at:date-time|null,created_at,updated_at`。远端对象 ID 不开放给普通资料接口。
 
@@ -189,9 +189,9 @@ GET storage:read，200 StoragePolicy；PUT storage:write，JSON 完整 policy，
 
 刷新/补建已有 ready 副本分享；200 Replica。provider 不支持分享时 share_status=unsupported、share_url 为空；远端分享失败返回 share_status=failed、脱敏 error，副本仍 ready。URL 不等于下载校验成功，verification 单独记录。
 
-## 智能识别（LLM + MinerU）
+## 智能识别（LLM + OCR）
 
-AI scope：`ai:read`（读取模型配置与解析设置）、`ai:write`（修改配置、探测、测试）。两者默认只授予 admin；Agent 密钥不得包含。资料分析读取沿用 materials:read，触发与应用沿用 materials:write。密钥只写不读：响应只返回 `api_key_configured` 与 `mineru_configured`；服务端用 MASTER_KEY 加密，AAD 为 provider id 或固定串 `ai:settings`。
+AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（修改配置、探测、测试）。两者默认只授予 admin；Agent 密钥不得包含。资料分析读取沿用 materials:read，触发与应用沿用 materials:write。密钥只写不读：响应只返回 `api_key_configured`、`token_configured`、`mineru_configured` 和 `ocr_configured`；服务端用 MASTER_KEY 加密，AAD 为 provider id（旧 `ai_settings` 字段 使用固定串 `ai:settings`，迁移时重新绑定到新 provider id）。
 
 `AIProvider`：`id,name(1..128),base_url(http/https，OpenAI 兼容根，通常以 /v1 结尾),models:string[](0..200，每项 1..200 字符，自动去重),default_model:string(<=200),vision_model:string(<=200，可空),enabled:boolean,priority:integer(0..1000),api_key_configured:boolean,created_at,updated_at`。`POST /ai/providers` 请求 `{"name":"主模型","base_url":"https://api.example.com/v1","api_key":"sk-...","priority":10,"enabled":true,"default_model":"gpt-4o-mini","vision_model":"gpt-4o","models":["gpt-4o-mini","gpt-4o"]}`；创建时 `api_key` 可省略（表示没有密钥；需要鉴权的端点会失败），PATCH 时省略保留、空串清空。PATCH 部分更新，不允许改 id；不提供物理删除，使用 `enabled=false` 停用。
 
@@ -202,11 +202,20 @@ AI scope：`ai:read`（读取模型配置与解析设置）、`ai:write`（修�
 - `POST /ai/providers/{id}/probe`（ai:write）：使用已存密钥探测，只返回模型列表，**不修改**已保存的 models；需要保存列表时在 PATCH 请求中提交 models，200 `{"models":[],"count":0}`。
 - `POST /ai/providers/{id}/test`（ai:write）：请求 `{"model":""}`，空则用 default_model；发一次最小 chat，200 `{"healthy":true|false,"model":"...","message":"脱敏说明"}`。远端失败返回 healthy=false，不伪造成功。
 
-`AISettings`：`analysis_enabled:boolean`（默认 false）,`mineru_base_url:string`（默认 `https://mineru.net`）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，MinerU 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`mineru_configured:boolean`,`updated_at`。
+`OCRProvider`：`id,name(1..128),kind:mineru|paddleocr,base_url(http/https),model(<=200；PaddleOCR 默认 PP-OCRv6，MinerU 可为空),enabled:boolean,priority:integer(0..1000),token_configured:boolean,created_at,updated_at`。请求字段为 `{"name":"PaddleOCR","kind":"paddleocr","base_url":"https://paddleocr.aistudio-app.com","model":"PP-OCRv6","token":"...","enabled":true,"priority":10}`；`token` 只写不读，PATCH 省略保留、空串清除。kind 创建后不可修改；不提供物理删除，使用 `enabled=false` 停用。PaddleOCR token 从 [AI Studio PaddleOCR 任务页](https://aistudio.baidu.com/paddleocr/task) 获取。
+
+- `GET /ocr/providers`（ai:read）：200 OCRProvider 数组，按 priority 升序。
+- `POST /ocr/providers`（ai:write）：201 OCRProvider。缺少 `kind` 时按 paddleocr；PaddleOCR 缺少 model 时默认 `PP-OCRv6`。
+- `PATCH /ocr/providers/{id}`（ai:write）：200 OCRProvider。
+- `POST /ocr/providers/{id}/test`（ai:write）：用已保存配置探测可达性与令牌；200 `{"healthy":boolean,"message":"脱敏说明"}`，不伪造成功。
+
+`AISettings`：`analysis_enabled:boolean`（默认 false）,`ocr_provider_id:string`（当前选中的 OCRProvider；为空时选择 priority 最小的启用服务商）,`mineru_base_url:string`（旧字段，仅兼容保留）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，OCR 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`mineru_configured:boolean`（旧令牌状态）,`ocr_configured:boolean`（当前服务商令牌状态）,`updated_at`。
 
 - `GET /ai/settings`（ai:read）：200 AISettings。
-- `PUT /ai/settings`（ai:write）：请求完整设置，`mineru_token` 可选：省略=保留，空串=清除；200 AISettings。
-- `POST /ai/mineru/test`（ai:write）：用已保存配置做一次可达性/鉴权探测；200 `{"healthy":boolean,"message":"脱敏说明"}`。不伪造成功。
+- `PUT /ai/settings`（ai:write）：请求完整设置，`ocr_provider_id` 可选：省略=保留，空串=清除选择；`mineru_token` 为旧 MinerU 兼容字段：省略=保留，空串=清除；200 AISettings。旧版仅提交 MinerU 字段的客户端会继续工作，并自动物化/更新 MinerU OCRProvider。
+- `POST /ai/mineru/test`（ai:write）：兼容旧客户端，实际测试当前选中的 OCR 服务商；200 `{"healthy":boolean,"message":"脱敏说明"}`。新客户端应使用 `POST /ocr/providers/{id}/test`。
+
+升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。
 
 `MaterialAnalysis`：`id,material_id,status:pending|running|succeeded|failed,provider_id,provider_name,model,page_count,image_count(恒为 0，页面图不落盘),confidence:number(0..1),suggestions:{title?,subject_codes?,grade?,academic_year?,role?,tags?},markdown_excerpt:string(<=4000),error:string,created_at,updated_at`。
 
@@ -214,7 +223,7 @@ AI scope：`ai:read`（读取模型配置与解析设置）、`ai:write`（修�
 - `GET /materials/{id}/analysis`（materials:read）：200 MaterialAnalysis；尚无分析时返回 404 `not_found`。
 - `POST /materials/{id}/analysis/apply`（materials:write）：请求可覆盖白名单字段 `{"title":"","subject_codes":[],"grade":"","academic_year":0,"role":"","tags":[]}`，省略字段取建议值；显式提供的白名单字段也可覆盖或补充建议。应用前与资料 PATCH 使用同一套校验；200 更新后的 **Material + replicas**，不能修改 blob/状态/路径。写审计 `material.ai_apply`。
 
-分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → MinerU 批量上传并轮询 → 解压 Markdown/页数 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验后写建议。模型输出永不自动应用。provider 按 priority 故障切换；失败错误必须脱敏。MinerU 未配置令牌时任务失败并给出明确原因，不伪造结果。
+分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验后写建议。模型输出永不自动应用。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或令牌时任务失败并给出明确原因，不伪造结果。PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
 
 Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `analyze`、`index`。
 
@@ -222,7 +231,7 @@ Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `anal
 
 `search:read`（读取搜索设置）、`search:write`（修改搜索设置）默认仅管理员；即使 Agent 密钥带有这些 scope，搜索设置接口仍拒绝 Agent。搜索接口本身使用 materials:read。
 
-索引由 `index` 任务完成：默认启用；归档后自动入队，索引启用时启动为关闭期间归档的资料补建。任务复用命中“文件 SHA + 解析器地址 + 缓存版本”的 `material_texts`，未命中时调用 MinerU → LLM 默认每批 10 页/12000 字（可配置）完成 OCR 纠错与切题 → 保存题目和页码 → 建立 CJK unigram+bigram 与连续字母/数字词倒排。不做跨资料同题聚合；同一题出现在多份试卷就是多条结果。索引不保存页面图/bbox；需要视觉图片的分析仍会重新解析。
+索引由 `index` 任务完成：默认启用；归档后自动入队，索引启用时启动为关闭期间归档的资料补建。任务复用命中“文件 SHA + OCR 类型/地址/模型 + 缓存版本”的 `material_texts`，未命中时调用当前 OCRProvider → LLM 默认每批 10 页/12000 字（可配置）完成 OCR 纠错与切题 → 保存题目和页码 → 建立 CJK unigram+bigram 与连续字母/数字词倒排。不做跨资料同题聚合；同一题出现在多份试卷就是多条结果。索引不保存页面图/bbox；需要视觉图片时 MinerU 会重新解析。
 
 - `POST /search/questions`（materials:read）：请求 `{"query":"已知函数...","subject":"math","grade":"grade12","academic_year":0,"limit":20,"offset":0}`。`query` 必填 1..2000 字；`subject`/`grade`/`academic_year` 按字典校验；`limit` 默认 20、最大 50；`offset` >= 0。只返回资料状态为 archived/degraded 且已有题目的记录。200 `{"items":[{"question_id":"...","question_no":"12","text":"完整题干（含选项/小问）","snippet":"...","highlights":[[0,6]],"score":12.3,"page_no":3,"material":{"id":"...","title":"...","file_name":"..."},"subject_codes":["math"],"collection_id":"..."}],"total":1,"took_ms":23}`。`highlights` 是纯文本字符区间，客户端自行渲染，禁止返回 HTML。
 - `GET /search/questions/{id}`（materials:read）：单题详情（同上字段，score 为 0）。
@@ -250,4 +259,4 @@ curl -X POST http://127.0.0.1:8080/mcp -H 'Authorization: Bearer <JWT>' -H 'Cont
 
 ## 版本与扩展约定
 
-不支持物理删除云盘文件、在线文档编辑、宏执行和跨请求断点分块合并。新增 Adapter 只实现 storage.Adapter；新增资料元数据须同时更新本文和前端 DTO；分层、任务和数据流变更同步 [ARCHITECTURE.md](ARCHITECTURE.md)。SQLite 为单进程 WAL；多实例服务部署须先设计带租约的任务领取，不能把当前 worker 直接并行启动。
+不支持物理删除云盘文件、在线文档编辑、宏执行和跨请求断点分块合并。新增 Adapter 只实现 storage.Adapter；新增资料元数据须同时更新本文和前端 DTO；分层、任务和数据流变更同步 [ARCHITECTURE.md](ARCHITECTURE.md)。SQLite 为单实例 WAL；PostgreSQL 多实例必须配置唯一 `WORKER_INSTANCE_ID` 并共享 `DATA_DIR`。

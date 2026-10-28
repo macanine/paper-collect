@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,20 +35,40 @@ type Options struct {
 	Limits archive.Limits
 	// Logf receives server-side diagnostics. Messages are redacted before logging.
 	Logf func(format string, args ...any)
+	// Worker controls task claiming, leases, and per-kind concurrency.
+	Worker WorkerSettings
+	// ResetAllRunningOnStart is enabled for SQLite, where only one service may
+	// use the database. PostgreSQL recovers only expired leases.
+	ResetAllRunningOnStart bool
+}
+
+// WorkerSettings controls the embedded job runners.
+type WorkerSettings struct {
+	InstanceID           string
+	IngestConcurrency    int
+	ReplicateConcurrency int
+	AnalyzeConcurrency   int
+	IndexConcurrency     int
+	LeaseDuration        time.Duration
+	HeartbeatInterval    time.Duration
+	PollInterval         time.Duration
 }
 
 // Service is the application façade. It is safe for concurrent use.
 type Service struct {
-	db      *gorm.DB
-	blobs   *blob.Store
-	box     *cryptobox.Box
-	signer  *auth.Signer
-	limiter *auth.Limiter
-	factory func(storage.Config) (storage.Adapter, error)
-	now     func() time.Time
-	limits  archive.Limits
-	logf    func(format string, args ...any)
-	wake    chan struct{}
+	db                  *gorm.DB
+	blobs               *blob.Store
+	box                 *cryptobox.Box
+	signer              *auth.Signer
+	limiter             *auth.Limiter
+	factory             func(storage.Config) (storage.Adapter, error)
+	now                 func() time.Time
+	limits              archive.Limits
+	logf                func(format string, args ...any)
+	wake                chan struct{}
+	wakeMu              sync.Mutex
+	worker              WorkerSettings
+	resetRunningOnStart bool
 }
 
 // ErrBootstrapNeeded means the database has no user and no admin credentials were supplied.
@@ -72,25 +94,61 @@ func New(opts Options) (*Service, error) {
 	if logf == nil {
 		logf = log.Printf
 	}
+	worker := opts.Worker
+	if strings.TrimSpace(worker.InstanceID) == "" {
+		worker.InstanceID = uuid.NewString()
+	}
+	if worker.IngestConcurrency < 1 {
+		worker.IngestConcurrency = 1
+	}
+	if worker.ReplicateConcurrency < 1 {
+		worker.ReplicateConcurrency = 1
+	}
+	if worker.AnalyzeConcurrency < 1 {
+		worker.AnalyzeConcurrency = 2
+	}
+	if worker.IndexConcurrency < 1 {
+		worker.IndexConcurrency = 2
+	}
+	if worker.LeaseDuration <= 0 {
+		worker.LeaseDuration = 2 * time.Minute
+	}
+	if worker.HeartbeatInterval <= 0 {
+		worker.HeartbeatInterval = 20 * time.Second
+	}
+	if worker.HeartbeatInterval >= worker.LeaseDuration {
+		return nil, errors.New("service: heartbeat interval must be shorter than lease duration")
+	}
+	if worker.PollInterval <= 0 {
+		worker.PollInterval = 2 * time.Second
+	}
 	return &Service{
-		db:      opts.DB,
-		blobs:   opts.Blobs,
-		box:     opts.Box,
-		signer:  opts.Signer,
-		limiter: opts.Limiter,
-		factory: opts.Factory,
-		now:     func() time.Time { return now().UTC() },
-		limits:  limits,
-		logf:    logf,
-		wake:    make(chan struct{}, 1),
+		db:                  opts.DB,
+		blobs:               opts.Blobs,
+		box:                 opts.Box,
+		signer:              opts.Signer,
+		limiter:             opts.Limiter,
+		factory:             opts.Factory,
+		now:                 func() time.Time { return now().UTC() },
+		limits:              limits,
+		logf:                logf,
+		wake:                make(chan struct{}),
+		worker:              worker,
+		resetRunningOnStart: opts.ResetAllRunningOnStart,
 	}, nil
 }
 
 func (s *Service) notify() {
-	select {
-	case s.wake <- struct{}{}:
-	default:
-	}
+	s.wakeMu.Lock()
+	close(s.wake)
+	s.wake = make(chan struct{})
+	s.wakeMu.Unlock()
+}
+
+func (s *Service) wakeSignal() <-chan struct{} {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	return s.wake
 }
 
 func newID() string { return uuid.NewString() }

@@ -391,11 +391,26 @@ type aiProviderDTO struct {
 
 type aiSettingsDTO struct {
 	AnalysisEnabled  bool      `json:"analysis_enabled"`
+	OCRProviderID    string    `json:"ocr_provider_id"`
 	MinerUBaseURL    string    `json:"mineru_base_url"`
 	MaxPages         int       `json:"max_pages"`
 	MaxImages        int       `json:"max_images"`
 	MinerUConfigured bool      `json:"mineru_configured"`
+	OCRConfigured    bool      `json:"ocr_configured"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type ocrProviderDTO struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Kind            string    `json:"kind"`
+	BaseURL         string    `json:"base_url"`
+	Model           string    `json:"model"`
+	Enabled         bool      `json:"enabled"`
+	Priority        int       `json:"priority"`
+	TokenConfigured bool      `json:"token_configured"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type materialAnalysisDTO struct {
@@ -432,8 +447,20 @@ func toAIProvider(v service.AIProviderView) aiProviderDTO {
 func toAISettings(v service.AISettingsView) aiSettingsDTO {
 	return aiSettingsDTO{
 		AnalysisEnabled: v.Settings.AnalysisEnabled, MinerUBaseURL: v.Settings.MinerUBaseURL,
-		MaxPages: v.Settings.MaxPages, MaxImages: v.Settings.MaxImages,
-		MinerUConfigured: v.MinerUConfigured, UpdatedAt: v.Settings.UpdatedAt,
+		OCRProviderID: v.Settings.OCRProviderID,
+		MaxPages:      v.Settings.MaxPages, MaxImages: v.Settings.MaxImages,
+		MinerUConfigured: v.MinerUConfigured, OCRConfigured: v.OCRConfigured,
+		UpdatedAt: v.Settings.UpdatedAt,
+	}
+}
+
+func toOCRProvider(v service.OCRProviderView) ocrProviderDTO {
+	return ocrProviderDTO{
+		ID: v.Provider.ID, Name: v.Provider.Name, Kind: v.Provider.Kind,
+		BaseURL: v.Provider.BaseURL, Model: v.Provider.Model,
+		Enabled: v.Provider.Enabled, Priority: v.Provider.Priority,
+		TokenConfigured: v.Provider.TokenCipher != "",
+		CreatedAt:       v.Provider.CreatedAt, UpdatedAt: v.Provider.UpdatedAt,
 	}
 }
 

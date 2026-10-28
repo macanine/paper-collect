@@ -1,33 +1,113 @@
 name: paper-collect
 
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: paper-collect:local
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+  environment: &app-environment
+    ADDR: ":8080"
+    DATA_DIR: /app/data
+    WEB_DIST: /app/web
+    DATABASE_DRIVER: postgres
+    DATABASE_DSN: "postgres://${POSTGRES_USER:-paper}:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-paper}?sslmode=disable"
+    DB_AUTO_MIGRATE: "false"
+    ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+    ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请在 .env 设置 ADMIN_PASSWORD}"
+    JWT_SECRET: "${JWT_SECRET:?请在 .env 设置 JWT_SECRET}"
+    MASTER_KEY: "${MASTER_KEY:?请在 .env 设置 MASTER_KEY}"
+    WORKER_LEASE_DURATION: "${WORKER_LEASE_DURATION:-2m}"
+    WORKER_HEARTBEAT_INTERVAL: "${WORKER_HEARTBEAT_INTERVAL:-20s}"
+    WORKER_POLL_INTERVAL: "${WORKER_POLL_INTERVAL:-2s}"
+    WORKER_INGEST_CONCURRENCY: "${WORKER_INGEST_CONCURRENCY:-1}"
+    WORKER_REPLICATE_CONCURRENCY: "${WORKER_REPLICATE_CONCURRENCY:-2}"
+    WORKER_ANALYZE_CONCURRENCY: "${WORKER_ANALYZE_CONCURRENCY:-2}"
+    WORKER_INDEX_CONCURRENCY: "${WORKER_INDEX_CONCURRENCY:-2}"
+    TZ: "${TZ:-Asia/Shanghai}"
+  volumes:
+    - paper-data:/app/data
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+    interval: 10s
+    timeout: 3s
+    retries: 6
+    start_period: 20s
+  stop_grace_period: 20s
+
 services:
-  app:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-paper}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB:-paper}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - paper-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  migrate:
     build:
       context: .
       dockerfile: Dockerfile
     image: paper-collect:local
-    restart: unless-stopped
-    ports:
-      - "${APP_PORT:-2033}:8080"
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      ADDR: ":8080"
       DATA_DIR: /app/data
-      WEB_DIST: /app/web
-      DATABASE_DRIVER: sqlite
-      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请在 .env 设置 ADMIN_PASSWORD}"
+      DATABASE_DRIVER: postgres
+      DATABASE_DSN: "postgres://${POSTGRES_USER:-paper}:${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-paper}?sslmode=disable"
       JWT_SECRET: "${JWT_SECRET:?请在 .env 设置 JWT_SECRET}"
       MASTER_KEY: "${MASTER_KEY:?请在 .env 设置 MASTER_KEY}"
-      TZ: "${TZ:-Asia/Shanghai}"
+      MIGRATE_FROM_SQLITE: "${MIGRATE_FROM_SQLITE:-}"
     volumes:
       - paper-data:/app/data
+    entrypoint: ["/app/paper-collect-migrate"]
+    command: ["--from-sqlite", "${MIGRATE_FROM_SQLITE:-}"]
+
+  app-1:
+    <<: *app
+    environment:
+      <<: *app-environment
+      WORKER_INSTANCE_ID: app-1
+
+  app-2:
+    <<: *app
+    environment:
+      <<: *app-environment
+      WORKER_INSTANCE_ID: app-2
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app-1:
+        condition: service_healthy
+      app-2:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-2033}:8080"
+    volumes:
+      - ./deploy/gateway.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 6
-      start_period: 20s
-    stop_grace_period: 15s
+      start_period: 10s
 
 volumes:
   paper-data:
+  paper-postgres:

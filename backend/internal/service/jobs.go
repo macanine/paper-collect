@@ -9,6 +9,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // JobFilter narrows a job list. Empty fields are ignored.
@@ -143,54 +144,90 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 	return result, nil
 }
 
-func (s *Service) succeedJob(jobID string) {
-	if err := s.db.Model(&model.Job{}).Where("id = ?", jobID).
-		Updates(map[string]any{
-			"status": model.JobSucceeded, "error": "", "updated_at": s.now(),
-		}).Error; err != nil {
-		s.logf("complete job: %v", err)
+var errNoJob = errors.New("no pending job")
+
+const claimAttempts = 64
+
+// StartWorker launches one bounded runner per job kind. Each runner claims
+// jobs atomically, so multiple processes can safely share PostgreSQL.
+func (s *Service) StartWorker(ctx context.Context) {
+	go s.reaperLoop(ctx)
+	limits := map[string]int{
+		model.JobIngest:    s.worker.IngestConcurrency,
+		model.JobReplicate: s.worker.ReplicateConcurrency,
+		model.JobAnalyze:   s.worker.AnalyzeConcurrency,
+		model.JobIndex:     s.worker.IndexConcurrency,
+	}
+	for _, kind := range []string{model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex} {
+		for i := 0; i < limits[kind]; i++ {
+			go s.workerLoop(ctx, kind)
+		}
 	}
 }
 
-// workerPollInterval is the fallback wake-up when no in-process notification
-// arrives (for example after a manual database change).
-const workerPollInterval = 2 * time.Second
-
-var errNoJob = errors.New("no pending job")
-
-// StartWorker launches the single-process job worker. It returns immediately.
-func (s *Service) StartWorker(ctx context.Context) {
-	go s.workerLoop(ctx)
+func (s *Service) reaperLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.worker.HeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			recovered, err := s.RecoverExpiredLeases(ctx)
+			if err != nil {
+				s.logf("recover expired leases: %v", err)
+				continue
+			}
+			if recovered > 0 {
+				s.notify()
+			}
+		}
+	}
 }
 
-func (s *Service) workerLoop(ctx context.Context) {
+func (s *Service) workerLoop(ctx context.Context, kind string) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if s.ProcessNext(ctx) {
+		if s.processNextKind(ctx, kind) {
 			continue
 		}
-		timer := time.NewTimer(workerPollInterval)
+		timer := time.NewTimer(s.worker.PollInterval)
+		wake := s.wakeSignal()
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return
-		case <-s.wake:
+		case <-wake:
 			timer.Stop()
 		case <-timer.C:
 		}
 	}
 }
 
-// ProcessNext claims and runs at most one pending job. It reports whether work was done.
+// ProcessNext claims and runs at most one pending job of any kind. It is kept
+// for operational smoke checks and tests.
 func (s *Service) ProcessNext(ctx context.Context) bool {
-	job, err := s.claimJob(ctx)
+	job, err := s.claimJob(ctx, "")
 	if err != nil {
 		if errors.Is(err, errNoJob) || ctx.Err() != nil {
 			return false
 		}
 		s.logf("claim job: %v", err)
+		return false
+	}
+	s.executeJob(ctx, job)
+	return true
+}
+
+func (s *Service) processNextKind(ctx context.Context, kind string) bool {
+	job, err := s.claimJob(ctx, kind)
+	if err != nil {
+		if errors.Is(err, errNoJob) || ctx.Err() != nil {
+			return false
+		}
+		s.logf("claim %s job: %v", kind, err)
 		return false
 	}
 	s.executeJob(ctx, job)
@@ -213,67 +250,319 @@ func (s *Service) ProcessAvailable(ctx context.Context, limit int) int {
 	return done
 }
 
-func (s *Service) claimJob(ctx context.Context) (model.Job, error) {
+func (s *Service) claimJob(ctx context.Context, kind string) (model.Job, error) {
 	db := s.db.WithContext(ctx)
-	var job model.Job
+	var claimed model.Job
 	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("status = ?", model.JobPending).
-			Order("created_at ASC").Order("id ASC").First(&job).Error; err != nil {
+		if s.db.Dialector.Name() == "sqlite" {
+			return s.claimJobSQLite(tx, kind, &claimed)
+		}
+		return s.claimJobPostgres(tx, kind, &claimed)
+	})
+	if err != nil {
+		return model.Job{}, err
+	}
+	return claimed, nil
+}
+
+func (s *Service) claimJobPostgres(tx *gorm.DB, kind string, claimed *model.Job) error {
+	tried := make([]string, 0, claimAttempts)
+	for attempts := 0; attempts < claimAttempts; attempts++ {
+		var job model.Job
+		query := tx.Where("status = ?", model.JobPending)
+		if kind != "" {
+			query = query.Where("kind = ?", kind)
+		}
+		if len(tried) > 0 {
+			query = query.Where("id NOT IN ?", tried)
+		}
+		err := query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Order("created_at ASC").Order("id ASC").First(&job).Error
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errNoJob
 			}
 			return err
 		}
-		res := tx.Model(&model.Job{}).
-			Where("id = ? AND status = ?", job.ID, model.JobPending).
-			Updates(map[string]any{
-				"status":     model.JobRunning,
-				"attempts":   gorm.Expr("attempts + 1"),
-				"updated_at": s.now(),
-			})
-		if res.Error != nil {
-			return res.Error
+		tried = append(tried, job.ID)
+		if err := s.tryClaim(tx, job, claimed); err != nil {
+			if errors.Is(err, errJobLocked) {
+				continue
+			}
+			if errors.Is(err, errJobClaimed) {
+				continue
+			}
+			return err
 		}
-		if res.RowsAffected != 1 {
-			return errNoJob
-		}
-		job.Status = model.JobRunning
-		job.Attempts++
-		job.UpdatedAt = s.now()
 		return nil
-	})
-	if err != nil {
-		return model.Job{}, err
 	}
-	return job, nil
+	return errNoJob
+}
+
+// claimJobSQLite uses the database write lock from BEGIN IMMEDIATE as the
+// cross-process exclusion primitive. A read-then-update would otherwise race
+// between separate server processes.
+func (s *Service) claimJobSQLite(tx *gorm.DB, kind string, claimed *model.Job) error {
+	tried := make([]string, 0, claimAttempts)
+	for attempts := 0; attempts < claimAttempts; attempts++ {
+		var job model.Job
+		query := tx.Where("status = ?", model.JobPending)
+		if kind != "" {
+			query = query.Where("kind = ?", kind)
+		}
+		if len(tried) > 0 {
+			query = query.Where("id NOT IN ?", tried)
+		}
+		if err := query.Order("created_at ASC").Order("id ASC").First(&job).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errNoJob
+			}
+			return err
+		}
+		tried = append(tried, job.ID)
+		if err := s.tryClaim(tx, job, claimed); err != nil {
+			if errors.Is(err, errJobLocked) {
+				continue
+			}
+			if errors.Is(err, errJobClaimed) {
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return errNoJob
+}
+
+func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error {
+	now := s.now()
+	until := now.Add(s.worker.LeaseDuration)
+	if key := jobLockKey(job); key != "" {
+		acquired, err := acquireJobLock(tx, key, job.ID, now, until)
+		if err != nil {
+			return err
+		}
+		if !acquired {
+			return errJobLocked
+		}
+	}
+	res := tx.Model(&model.Job{}).
+		Where("id = ? AND status = ?", job.ID, model.JobPending).
+		Updates(map[string]any{
+			"status":       model.JobRunning,
+			"attempts":     gorm.Expr("attempts + 1"),
+			"lease_owner":  s.worker.InstanceID,
+			"lease_until":  until,
+			"heartbeat_at": now,
+			"updated_at":   now,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected != 1 {
+		return errJobClaimed
+	}
+	job.Status = model.JobRunning
+	job.Attempts++
+	job.LeaseOwner = s.worker.InstanceID
+	job.LeaseUntil = &until
+	job.HeartbeatAt = &now
+	job.UpdatedAt = now
+	*claimed = job
+	return nil
+}
+
+var (
+	errJobLocked  = errors.New("job resource locked")
+	errJobClaimed = errors.New("job claimed by another worker")
+)
+
+func jobLockKey(job model.Job) string {
+	if job.MaterialID == "" || (job.Kind != model.JobAnalyze && job.Kind != model.JobIndex) {
+		return ""
+	}
+	return "material:" + job.MaterialID
+}
+
+func acquireJobLock(tx *gorm.DB, key, jobID string, now, until time.Time) (bool, error) {
+	lock := model.JobLock{Key: key, JobID: jobID, LeaseUntil: until, UpdatedAt: now}
+	insert := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&lock)
+	if insert.Error != nil {
+		return false, insert.Error
+	}
+	if insert.RowsAffected == 1 {
+		return true, nil
+	}
+	res := tx.Model(&model.JobLock{}).
+		Where("key = ? AND lease_until < ?", key, now).
+		Updates(map[string]any{"job_id": jobID, "lease_until": until, "updated_at": now})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 func (s *Service) executeJob(ctx context.Context, job model.Job) {
+	runCtx, cancel := context.WithCancelCause(ctx)
+	stopHeartbeat := s.heartbeat(runCtx, cancel, job)
 	defer func() {
+		stopHeartbeat()
+		cancel(nil)
 		if r := recover(); r != nil {
 			s.logf("job %s panicked", job.ID)
-			s.failJob(job.ID, "任务执行发生内部错误")
+			s.failJob(job.ID, job.LeaseOwner, "任务执行发生内部错误")
 			if job.UploadID != "" {
-				_ = s.db.Model(&model.Upload{}).Where("id = ?", job.UploadID).
+				_ = s.db.Model(&model.Upload{}).Where("id = ? AND job_id = ?", job.UploadID, job.ID).
 					Updates(map[string]any{"status": model.UploadFailed, "updated_at": s.now()}).Error
 			}
 			if job.ReplicaID != "" {
-				_ = s.db.Model(&model.Replica{}).
-					Where("id = ? AND status = ?", job.ReplicaID, model.ReplicaUploading).
+				_ = s.db.Model(&model.Replica{}).Where("id = ? AND status = ?", job.ReplicaID, model.ReplicaUploading).
 					Updates(map[string]any{"status": model.ReplicaFailed, "error": "任务执行发生内部错误", "updated_at": s.now()}).Error
 			}
 		}
 	}()
 	switch job.Kind {
 	case model.JobIngest:
-		s.RunIngest(ctx, job.ID)
+		s.RunIngest(runCtx, job.ID)
 	case model.JobReplicate:
-		s.RunReplicate(ctx, job.ID)
+		s.RunReplicate(runCtx, job.ID)
 	case model.JobAnalyze:
-		s.RunAnalyze(ctx, job.ID)
+		s.RunAnalyze(runCtx, job.ID)
 	case model.JobIndex:
-		s.RunIndex(ctx, job.ID)
+		s.RunIndex(runCtx, job.ID)
 	default:
-		s.failJob(job.ID, "未知任务类型")
+		s.failJob(job.ID, job.LeaseOwner, "未知任务类型")
 	}
+}
+
+func (s *Service) heartbeat(parent context.Context, cancel context.CancelCauseFunc, job model.Job) func() {
+	ctx, stop := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(s.worker.HeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := s.now()
+				until := now.Add(s.worker.LeaseDuration)
+				err := s.db.Transaction(func(tx *gorm.DB) error {
+					res := tx.Model(&model.Job{}).
+						Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",
+							job.ID, model.JobRunning, job.LeaseOwner, now).
+						Updates(map[string]any{"lease_until": until, "heartbeat_at": now, "updated_at": now})
+					if res.Error != nil {
+						return res.Error
+					}
+					if res.RowsAffected != 1 {
+						return errLeaseLost
+					}
+					if key := jobLockKey(job); key != "" {
+						res = tx.Model(&model.JobLock{}).Where("key = ? AND job_id = ?", key, job.ID).
+							Updates(map[string]any{"lease_until": until, "updated_at": now})
+						if res.Error != nil {
+							return res.Error
+						}
+						if res.RowsAffected != 1 {
+							return errLeaseLost
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					if errors.Is(err, errLeaseLost) {
+						s.logf("job %s lost its lease; stopping worker", job.ID)
+						cancel(errLeaseLost)
+						return
+					}
+					s.logf("heartbeat job %s: %v", job.ID, err)
+				}
+			}
+		}
+	}()
+	return func() {
+		stop()
+		<-done
+	}
+}
+
+var errLeaseLost = errors.New("job lease lost")
+
+// lockJobLease takes a row lock and rejects an expired lease before the caller
+// performs business writes. finishJobTx checks the same fence again.
+func (s *Service) lockJobLease(tx *gorm.DB, jobID, owner string) error {
+	now := s.now()
+	query := tx.Model(&model.Job{}).
+		Select("id").
+		Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",
+			jobID, model.JobRunning, owner, now)
+	if tx.Dialector.Name() != "sqlite" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	var row model.Job
+	if err := query.First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errLeaseLost
+		}
+		return err
+	}
+	return nil
+}
+
+// finishJobTx is the lease fence for business writes. Callers put their result
+// rows and this update in one transaction, so a reclaimed worker cannot commit
+// either the result or a stale terminal state.
+func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string) error {
+	now := s.now()
+	res := tx.Model(&model.Job{}).
+		Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",
+			jobID, model.JobRunning, owner, now).
+		Updates(map[string]any{
+			"status": status, "error": message, "lease_owner": "",
+			"lease_until": nil, "heartbeat_at": nil, "updated_at": now,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected != 1 {
+		return errLeaseLost
+	}
+	if err := releaseJobLockTx(tx, jobID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// succeedJob completes a job without a caller-owned projection. Production
+// handlers use finishJobTx directly so their result rows commit atomically.
+func (s *Service) succeedJob(jobID, owner string) bool {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		return s.finishJobTx(tx, jobID, owner, model.JobSucceeded, "")
+	})
+	if errors.Is(err, errLeaseLost) {
+		s.logf("complete job %s ignored: lease lost", jobID)
+		return false
+	}
+	if err != nil {
+		s.logf("complete job: %v", err)
+		return false
+	}
+	return true
+}
+
+func releaseJobLockTx(tx *gorm.DB, jobID string) error {
+	var job model.Job
+	if err := tx.Select("material_id", "kind").Where("id = ?", jobID).First(&job).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if key := jobLockKey(job); key != "" {
+		return tx.Where("key = ? AND job_id = ?", key, jobID).Delete(&model.JobLock{}).Error
+	}
+	return nil
 }

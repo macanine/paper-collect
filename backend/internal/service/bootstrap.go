@@ -2,13 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Bootstrap prepares an empty database: it creates the first administrator from
@@ -16,6 +19,13 @@ import (
 // and a default local provider. It is idempotent.
 func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize first-start initialization across app instances. On
+		// PostgreSQL this advisory lock is released automatically at commit.
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(0x7061706572636f6c)).Error; err != nil {
+				return wrap("lock bootstrap", err)
+			}
+		}
 		var users int64
 		if err := tx.Model(&model.User{}).Count(&users).Error; err != nil {
 			return wrap("count users", err)
@@ -51,7 +61,8 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 			return wrap("count policy", err)
 		}
 		if policies == 0 {
-			if err := tx.Create(&model.Policy{ID: 1, Mode: model.ModeMirrorAll, MinimumReplicas: 1, UpdatedAt: s.now()}).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
+				Create(&model.Policy{ID: 1, Mode: model.ModeMirrorAll, MinimumReplicas: 1, UpdatedAt: s.now()}).Error; err != nil {
 				return wrap("create policy", err)
 			}
 		}
@@ -63,9 +74,17 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 		if aiSettings == 0 {
 			row := defaultAISettings()
 			row.UpdatedAt = s.now()
-			if err := tx.Create(&row).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 				return wrap("create ai settings", err)
 			}
+		}
+		var existingAISettings model.AISettings
+		if err := tx.Where("id = ?", 1).First(&existingAISettings).Error; err == nil {
+			if err := s.migrateLegacyOCRProvider(tx, &existingAISettings); err != nil {
+				return wrap("migrate OCR provider", err)
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return wrap("load ai settings", err)
 		}
 
 		var searchSettings int64
@@ -75,7 +94,7 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 		if searchSettings == 0 {
 			row := defaultSearchSettings()
 			row.UpdatedAt = s.now()
-			if err := tx.Create(&row).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 				return wrap("create search settings", err)
 			}
 		}
@@ -109,29 +128,105 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 	})
 }
 
-// RecoverInterrupted returns work that was running when the process stopped to pending.
-// It must run before the worker starts. Ingest work is idempotent: publication is one transaction.
+// RecoverInterrupted recovers work after a restart. SQLite has a single writer,
+// so all running jobs are local and can be reset. PostgreSQL only resets rows
+// whose lease has expired, preserving work owned by healthy peer instances.
 func (s *Service) RecoverInterrupted(ctx context.Context) error {
+	if s.resetRunningOnStart {
+		return s.recoverJobs(s.db.WithContext(ctx), s.now())
+	}
+	_, err := s.RecoverExpiredLeases(ctx)
+	return err
+}
+
+// RecoverExpiredLeases is a lease reaper shared by all instances. The first
+// transaction locks a bounded batch with SKIP LOCKED and re-checks expiry before
+// resetting it, so a concurrent heartbeat always wins one side of the race.
+func (s *Service) RecoverExpiredLeases(ctx context.Context) (int, error) {
 	now := s.now()
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	recovered := 0
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var ids []string
+		query := tx.Model(&model.Job{}).
+			Where("status = ? AND (lease_until IS NULL OR lease_until < ?)", model.JobRunning, now).
+			Order("created_at ASC").Limit(100)
+		if tx.Dialector.Name() != "sqlite" {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		if err := query.Pluck("id", &ids).Error; err != nil {
+			return wrap("find expired jobs", err)
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		res := tx.Model(&model.Job{}).
+			Where("id IN ? AND status = ? AND (lease_until IS NULL OR lease_until < ?)",
+				ids, model.JobRunning, now).
+			Updates(map[string]any{
+				"status": model.JobPending, "lease_owner": "", "lease_until": nil,
+				"heartbeat_at": nil, "updated_at": now,
+			})
+		if res.Error != nil {
+			return wrap("recover jobs", res.Error)
+		}
+		recovered = int(res.RowsAffected)
+		if recovered == 0 {
+			return nil
+		}
+		return s.resetProjectionTx(tx, ids, now)
+	})
+	return recovered, err
+}
+
+func (s *Service) recoverJobs(db *gorm.DB, now time.Time) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var ids []string
 		if err := tx.Model(&model.Job{}).Where("status = ?", model.JobRunning).
-			Updates(map[string]any{"status": model.JobPending, "updated_at": now}).Error; err != nil {
+			Pluck("id", &ids).Error; err != nil {
+			return wrap("find recoverable jobs", err)
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := tx.Model(&model.Job{}).Where("id IN ?", ids).
+			Updates(map[string]any{
+				"status": model.JobPending, "lease_owner": "", "lease_until": nil,
+				"heartbeat_at": nil, "updated_at": now,
+			}).Error; err != nil {
 			return wrap("recover jobs", err)
 		}
-		if err := tx.Model(&model.Replica{}).Where("status = ?", model.ReplicaUploading).
-			Updates(map[string]any{"status": model.ReplicaPending, "updated_at": now}).Error; err != nil {
-			return wrap("recover replicas", err)
-		}
-		if err := tx.Model(&model.MaterialAnalysis{}).Where("status = ?", model.AnalysisRunning).
-			Updates(map[string]any{"status": model.AnalysisPending, "updated_at": now}).Error; err != nil {
-			return wrap("recover analyses", err)
-		}
-		if err := tx.Model(&model.MaterialIndexState{}).Where("status = ?", "running").
-			Updates(map[string]any{"status": "pending", "updated_at": now}).Error; err != nil {
-			return wrap("recover index states", err)
-		}
-		return nil
+		return s.resetProjectionTx(tx, ids, now)
 	})
+}
+
+// resetProjectionTx resets only projections owned by the reclaimed jobs and
+// releases their material locks. A peer's healthy job is never downgraded.
+func (s *Service) resetProjectionTx(tx *gorm.DB, jobIDs []string, now time.Time) error {
+	if len(jobIDs) == 0 {
+		return nil
+	}
+	if err := tx.Model(&model.Replica{}).
+		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.replica_id = replicas.id)",
+			model.ReplicaUploading, jobIDs, model.JobReplicate, model.JobPending).
+		Updates(map[string]any{"status": model.ReplicaPending, "updated_at": now}).Error; err != nil {
+		return wrap("recover replicas", err)
+	}
+	if err := tx.Model(&model.MaterialAnalysis{}).
+		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.id = material_analyses.job_id)",
+			model.AnalysisRunning, jobIDs, model.JobAnalyze, model.JobPending).
+		Updates(map[string]any{"status": model.AnalysisPending, "updated_at": now}).Error; err != nil {
+		return wrap("recover analyses", err)
+	}
+	if err := tx.Model(&model.MaterialIndexState{}).
+		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.id = material_index_states.job_id)",
+			"running", jobIDs, model.JobIndex, model.JobPending).
+		Updates(map[string]any{"status": "pending", "updated_at": now}).Error; err != nil {
+		return wrap("recover index states", err)
+	}
+	if err := tx.Where("job_id IN ?", jobIDs).Delete(&model.JobLock{}).Error; err != nil {
+		return wrap("release expired job locks", err)
+	}
+	return nil
 }
 
 // localRoot is the fixed directory of a local provider. The API never accepts a path.

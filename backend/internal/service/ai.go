@@ -80,15 +80,17 @@ type AITestResult struct {
 	Message string
 }
 
-// AISettingsView hides the MinerU token.
+// AISettingsView hides OCR provider tokens.
 type AISettingsView struct {
 	Settings         model.AISettings
 	MinerUConfigured bool
+	OCRConfigured    bool
 }
 
 // AISettingsInput is a full settings replacement. Token nil keeps the stored value.
 type AISettingsInput struct {
 	AnalysisEnabled bool
+	OCRProviderID   *string
 	MinerUBaseURL   string
 	MinerUToken     *string
 	MaxPages        int
@@ -381,7 +383,19 @@ func (s *Service) GetAISettings(ctx context.Context) (AISettingsView, error) {
 	if err != nil {
 		return AISettingsView{}, err
 	}
-	return AISettingsView{Settings: row, MinerUConfigured: row.MinerUTokenCipher != ""}, nil
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return s.migrateLegacyOCRProvider(tx, &row)
+	}); err != nil {
+		return AISettingsView{}, apperr.Internal(err)
+	}
+	view := AISettingsView{Settings: row, MinerUConfigured: row.MinerUTokenCipher != ""}
+	if row.OCRProviderID != "" {
+		var provider model.OCRProvider
+		if err := s.db.WithContext(ctx).Where("id = ?", row.OCRProviderID).First(&provider).Error; err == nil {
+			view.OCRConfigured = provider.TokenCipher != ""
+		}
+	}
+	return view, nil
 }
 
 // PutAISettings replaces the complete settings object. Token nil keeps the old one.
@@ -392,16 +406,41 @@ func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISett
 	if in.MaxImages < 0 || in.MaxImages > 4 {
 		return AISettingsView{}, apperr.Validation("max_images 必须在 0 到 4 之间")
 	}
-	base, err := ai.ValidateBaseURL(in.MinerUBaseURL)
-	if err != nil {
-		return AISettingsView{}, apperr.Validation("MinerU Base URL 无效: " + err.Error())
+	base := ""
+	if strings.TrimSpace(in.MinerUBaseURL) != "" {
+		var err error
+		base, err = ai.ValidateBaseURL(in.MinerUBaseURL)
+		if err != nil {
+			return AISettingsView{}, apperr.Validation("MinerU Base URL 无效: " + err.Error())
+		}
 	}
-	if _, err := s.ensureAISettings(ctx); err != nil {
+	current, err := s.ensureAISettings(ctx)
+	if err != nil {
 		return AISettingsView{}, err
 	}
+	providerID := current.OCRProviderID
+	if in.OCRProviderID != nil {
+		providerID = strings.TrimSpace(*in.OCRProviderID)
+	}
+	var selected model.OCRProvider
+	if providerID != "" {
+		if err := s.db.WithContext(ctx).Where("id = ?", providerID).First(&selected).Error; err != nil {
+			return AISettingsView{}, apperr.Validation("所选 OCR 服务商不存在")
+		}
+		if !selected.Enabled {
+			return AISettingsView{}, apperr.Validation("所选 OCR 服务商已停用")
+		}
+	}
+	legacy := current
+	if base != "" {
+		legacy.MinerUBaseURL = base
+	}
 	updates := map[string]any{
-		"analysis_enabled": in.AnalysisEnabled, "mineru_base_url": base,
+		"analysis_enabled": in.AnalysisEnabled, "ocr_provider_id": providerID,
 		"max_pages": in.MaxPages, "max_images": in.MaxImages, "updated_at": s.now(),
+	}
+	if base != "" {
+		updates["mineru_base_url"] = base
 	}
 	if in.MinerUToken != nil {
 		token := strings.TrimSpace(*in.MinerUToken)
@@ -419,6 +458,70 @@ func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISett
 		if err := tx.Model(&model.AISettings{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
 			return err
 		}
+		// Legacy clients used PUT /ai/settings as the only OCR configuration
+		// surface. Keep them working by materializing a MinerU provider.
+		if providerID == "" && current.OCRProviderID == "" &&
+			(base != "" || in.MinerUToken != nil) {
+			id := newID()
+			cipher := ""
+			if in.MinerUToken != nil && strings.TrimSpace(*in.MinerUToken) != "" {
+				var sealErr error
+				cipher, sealErr = s.box.Seal([]byte(strings.TrimSpace(*in.MinerUToken)), []byte(id))
+				if sealErr != nil {
+					return sealErr
+				}
+			} else if legacy.MinerUTokenCipher != "" {
+				legacyToken, openErr := s.box.Open(legacy.MinerUTokenCipher, []byte("ai.settings"))
+				if openErr != nil {
+					return openErr
+				}
+				var sealErr error
+				cipher, sealErr = s.box.Seal(legacyToken, []byte(id))
+				if sealErr != nil {
+					return sealErr
+				}
+			}
+			now := s.now()
+			provider := model.OCRProvider{
+				ID: id, Name: "MinerU", Kind: model.OCRKindMinerU, BaseURL: legacy.MinerUBaseURL,
+				TokenCipher: cipher, Enabled: true, Priority: 100, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := tx.Create(&provider).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.AISettings{}).Where("id = ?", 1).
+				Update("ocr_provider_id", id).Error; err != nil {
+				return err
+			}
+		}
+		// A legacy MinerU client may keep using the old PUT payload after the
+		// provider was migrated. Apply its token/base updates to the selected
+		// MinerU provider as well so credentials remain editable.
+		if selected.ID != "" && selected.Kind == model.OCRKindMinerU {
+			legacyUpdates := map[string]any{}
+			if base != "" {
+				legacyUpdates["base_url"] = base
+			}
+			if in.MinerUToken != nil {
+				token := strings.TrimSpace(*in.MinerUToken)
+				if token == "" {
+					legacyUpdates["token_cipher"] = ""
+				} else {
+					cipher, err := s.box.Seal([]byte(token), []byte(selected.ID))
+					if err != nil {
+						return err
+					}
+					legacyUpdates["token_cipher"] = cipher
+				}
+			}
+			if len(legacyUpdates) > 0 {
+				legacyUpdates["updated_at"] = s.now()
+				if err := tx.Model(&model.OCRProvider{}).Where("id = ?", selected.ID).
+					Updates(legacyUpdates).Error; err != nil {
+					return err
+				}
+			}
+		}
 		return s.audit(tx, p, "ai.settings_update", "1")
 	}); err != nil {
 		s.logf("put ai settings: %v", err)
@@ -427,26 +530,21 @@ func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISett
 	return s.GetAISettings(ctx)
 }
 
-// TestMinerU checks reachability and token acceptance.
+// TestMinerU is the legacy endpoint; it tests the selected OCR provider.
 func (s *Service) TestMinerU(ctx context.Context) (bool, string, error) {
 	row, err := s.ensureAISettings(ctx)
 	if err != nil {
 		return false, "", err
 	}
-	token, err := s.openAISecret(row.MinerUTokenCipher, "ai.settings")
+	provider, err := s.selectedOCRProvider(ctx, row)
 	if err != nil {
-		return false, "", apperr.Internal(err)
+		return false, redact(ai.Sanitize(err.Error())), nil
 	}
-	client, err := ai.NewMinerU(row.MinerUBaseURL, token, nil)
+	result, err := s.TestOCRProvider(ctx, provider.ID)
 	if err != nil {
-		return false, ai.Sanitize(err.Error()), nil
+		return false, redact(ai.Sanitize(err.Error())), nil
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	if err := client.Health(probeCtx); err != nil {
-		return false, ai.Sanitize(err.Error()), nil
-	}
-	return true, "MinerU 服务可达且令牌被接受", nil
+	return result.Healthy, result.Message, nil
 }
 
 func toAnalysisView(row model.MaterialAnalysis, providerName string) AnalysisView {
@@ -640,7 +738,7 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 	}
 	var analysis model.MaterialAnalysis
 	if err := db.Where("material_id = ?", job.MaterialID).First(&analysis).Error; err != nil {
-		s.failJob(job.ID, "分析记录不存在")
+		s.failJob(job.ID, job.LeaseOwner, "分析记录不存在")
 		return
 	}
 	now := s.now()
@@ -651,26 +749,61 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 	result, err := s.analyzeMaterial(ctx, &analysis, job.MaterialID)
 	if err != nil {
 		message := publicMessage(err)
-		_ = db.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).
-			Updates(map[string]any{"status": model.AnalysisFailed, "error": message, "updated_at": s.now()}).Error
 		if ctx.Err() != nil {
-			s.requeueJob(job.ID)
-			_ = db.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).
-				Updates(map[string]any{"status": model.AnalysisPending, "updated_at": s.now()}).Error
+			if !errors.Is(context.Cause(ctx), errLeaseLost) {
+				s.requeueJob(job.ID, job.LeaseOwner, func(tx *gorm.DB) error {
+					return tx.Model(&model.MaterialAnalysis{}).
+						Where("id = ? AND job_id = ?", analysis.ID, job.ID).
+						Updates(map[string]any{"status": model.AnalysisPending, "updated_at": s.now()}).Error
+				})
+			}
 			return
 		}
 		s.logf("analyze job failed: %v", err)
-		s.failJob(job.ID, message)
+		s.failJob(job.ID, job.LeaseOwner, message, func(tx *gorm.DB) error {
+			return tx.Model(&model.MaterialAnalysis{}).
+				Where("id = ? AND job_id = ?", analysis.ID, job.ID).
+				Updates(map[string]any{
+					"status": model.AnalysisFailed, "error": message, "updated_at": s.now(),
+				}).Error
+		})
 		return
 	}
-	_ = db.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).Updates(map[string]any{
-		"status": model.AnalysisSucceeded, "provider_id": result.ProviderID, "model": result.Model,
-		"markdown_path": result.MarkdownPath, "images_json": model.EncodeStrings(result.Images),
-		"page_count": result.PageCount, "image_count": len(result.Images),
-		"suggestions_json": result.SuggestionsJSON, "confidence": result.Confidence,
-		"error": "", "updated_at": s.now(),
-	}).Error
-	s.succeedJob(job.ID)
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
+			return err
+		}
+		res := tx.Model(&model.MaterialAnalysis{}).
+			Where("id = ? AND job_id = ?", analysis.ID, job.ID).
+			Updates(map[string]any{
+				"status": model.AnalysisSucceeded, "provider_id": result.ProviderID, "model": result.Model,
+				"markdown_path": result.MarkdownPath, "images_json": model.EncodeStrings(result.Images),
+				"page_count": result.PageCount, "image_count": len(result.Images),
+				"suggestions_json": result.SuggestionsJSON, "confidence": result.Confidence,
+				"error": "", "updated_at": s.now(),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return errLeaseLost
+		}
+		return s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, "")
+	})
+	if err != nil {
+		if errors.Is(err, errLeaseLost) {
+			return
+		}
+		s.logf("analyze job result: %v", err)
+		s.failJob(job.ID, job.LeaseOwner, "写入识别结果失败", func(tx *gorm.DB) error {
+			return tx.Model(&model.MaterialAnalysis{}).
+				Where("id = ? AND job_id = ?", analysis.ID, job.ID).
+				Updates(map[string]any{
+					"status": model.AnalysisFailed, "error": "写入识别结果失败", "updated_at": s.now(),
+				}).Error
+		})
+		return
+	}
 }
 
 type analyzeResult struct {
@@ -706,9 +839,13 @@ func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialA
 	}
 	var parsed ai.Result
 	if visionProviders == 0 {
+		ocrProvider, providerErr := s.selectedOCRProvider(ctx, settings)
+		if providerErr != nil {
+			return analyzeResult{}, providerErr
+		}
 		var cached model.MaterialText
 		if err := s.db.WithContext(ctx).Where("material_id = ?", material.ID).First(&cached).Error; err == nil &&
-			cached.SourceHash == material.SHA256 && cached.ParseKey == textParseKey(settings) && strings.TrimSpace(cached.Markdown) != "" {
+			cached.SourceHash == material.SHA256 && cached.ParseKey == textParseKey(ocrProvider) && strings.TrimSpace(cached.Markdown) != "" {
 			parsed.Markdown, parsed.PageCount = cached.Markdown, cached.PageCount
 		}
 	}
@@ -731,14 +868,15 @@ func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialA
 		if len(document) == 0 {
 			return analyzeResult{}, errors.New("原件为空")
 		}
-		parsed, err = s.parseWithMinerU(ctx, settings, material.FileName, document)
+		var ocrProvider model.OCRProvider
+		parsed, ocrProvider, err = s.parseWithOCR(ctx, settings, material.FileName, document)
 		if err != nil {
 			return analyzeResult{}, err
 		}
 		pages, _ := json.Marshal(parsedPages(parsed))
 		now := s.now()
 		if err := s.db.WithContext(ctx).Save(&model.MaterialText{
-			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(settings),
+			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(ocrProvider),
 			PageCount: parsed.PageCount, PagesJSON: string(pages), Markdown: parsed.Markdown, CreatedAt: now, UpdatedAt: now,
 		}).Error; err != nil {
 			s.logf("analysis text cache unavailable")
@@ -774,25 +912,6 @@ func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialA
 		PageCount: parsed.PageCount, ImageCount: 0,
 		SuggestionsJSON: string(raw), Confidence: confidence,
 	}, nil
-}
-
-// parseWithMinerU runs the hosted parser with a bounded timeout.
-func (s *Service) parseWithMinerU(ctx context.Context, settings model.AISettings, filename string, data []byte) (ai.Result, error) {
-	token, err := s.openAISecret(settings.MinerUTokenCipher, "ai.settings")
-	if err != nil {
-		return ai.Result{}, err
-	}
-	if strings.TrimSpace(token) == "" {
-		return ai.Result{}, errors.New("未配置 MinerU 令牌")
-	}
-	mineru, err := ai.NewMinerU(settings.MinerUBaseURL, token, nil)
-	if err != nil {
-		return ai.Result{}, err
-	}
-	mineru.Timeout = 15 * time.Minute
-	parseCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
-	defer cancel()
-	return mineru.Extract(parseCtx, filename, data)
 }
 
 // generateSuggestions tries enabled providers in priority order. Vision-capable

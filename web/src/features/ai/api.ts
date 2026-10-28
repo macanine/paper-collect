@@ -9,6 +9,8 @@ import type {
   MaterialDetail,
   MaterialAnalysis,
   MinerUTestResult,
+  OCRProvider,
+  OCRProviderKind,
   Role,
   SubjectCode,
   Grade,
@@ -57,6 +59,7 @@ export function getAISettings(): Promise<AISettings> {
 
 export function putAISettings(input: {
   analysis_enabled: boolean;
+  ocr_provider_id: string;
   mineru_base_url: string;
   mineru_token?: string;
   max_pages: number;
@@ -67,6 +70,34 @@ export function putAISettings(input: {
 
 export function testMinerU(): Promise<MinerUTestResult> {
   return apiRequest<MinerUTestResult>('/ai/mineru/test', { method: 'POST' });
+}
+
+export interface OCRProviderDraft {
+  name: string;
+  kind: OCRProviderKind;
+  base_url: string;
+  model: string;
+  token?: string;
+  enabled: boolean;
+  priority: number;
+}
+
+export type OCRProviderPatch = Partial<Omit<OCRProviderDraft, 'kind'>>;
+
+export function listOCRProviders(): Promise<OCRProvider[]> {
+  return apiRequest<OCRProvider[]>('/ocr/providers');
+}
+
+export function createOCRProvider(draft: OCRProviderDraft): Promise<OCRProvider> {
+  return apiRequest<OCRProvider>('/ocr/providers', { method: 'POST', body: draft });
+}
+
+export function updateOCRProvider(id: string, patch: OCRProviderPatch): Promise<OCRProvider> {
+  return apiRequest<OCRProvider>(`/ocr/providers/${segment(id)}`, { method: 'PATCH', body: patch });
+}
+
+export function testOCRProvider(id: string): Promise<MinerUTestResult> {
+  return apiRequest<MinerUTestResult>(`/ocr/providers/${segment(id)}/test`, { method: 'POST', body: {} });
 }
 
 export function getMaterialAnalysis(materialId: string): Promise<MaterialAnalysis> {

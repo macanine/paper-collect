@@ -9,8 +9,10 @@ import (
 	"github.com/nic/paper-collect/backend/internal/model"
 )
 
-func textParseKey(settings model.AISettings) string {
-	sum := sha256.Sum256([]byte("mineru-text-v1:" + strings.TrimSpace(settings.MinerUBaseURL)))
+func textParseKey(provider model.OCRProvider) string {
+	value := "ocr-text-v2:" + strings.TrimSpace(provider.Kind) + ":" +
+		strings.TrimSpace(provider.BaseURL) + ":" + strings.TrimSpace(provider.Model)
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 

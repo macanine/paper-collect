@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/nic/paper-collect/backend/internal/ai"
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/archive"
 	"github.com/nic/paper-collect/backend/internal/storage"
@@ -64,6 +65,13 @@ func publicMessage(err error) string {
 	var rej *archive.Rejected
 	if errors.As(err, &rej) {
 		return rej.Reason
+	}
+	var apiErr *ai.APIError
+	if errors.As(err, &apiErr) {
+		message := redact(apiErr.Error())
+		if message != "" {
+			return message
+		}
 	}
 	return "归档处理失败，请稍后重试"
 }

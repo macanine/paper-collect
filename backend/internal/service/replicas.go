@@ -294,12 +294,20 @@ func (s *Service) RunReplicate(ctx context.Context, jobID string) {
 	}
 	if err := s.replicate(ctx, job); err != nil {
 		if ctx.Err() != nil {
-			s.requeueReplica(job.ReplicaID)
-			s.requeueJob(job.ID)
+			if !errors.Is(context.Cause(ctx), errLeaseLost) {
+				s.requeueJob(job.ID, job.LeaseOwner, func(tx *gorm.DB) error {
+					return tx.Model(&model.Replica{}).
+						Where("id = ? AND status = ?", job.ReplicaID, model.ReplicaUploading).
+						Updates(map[string]any{"status": model.ReplicaPending, "updated_at": s.now()}).Error
+				})
+			}
+			return
+		}
+		if errors.Is(err, errLeaseLost) {
 			return
 		}
 		s.logf("replicate job failed: %s", storageErrorText(err))
-		s.failReplicaJob(job.ID, job.ReplicaID, storageErrorText(err))
+		s.failReplicaJob(job.ID, job.LeaseOwner, job.ReplicaID, storageErrorText(err))
 	}
 }
 
@@ -319,8 +327,7 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 	}
 
 	if replica.Status == model.ReplicaReady {
-		s.completeReplicateJob(job.ID, blob.ID)
-		return nil
+		return s.completeReplicateInTx(job, replica, nil)
 	}
 	if !provider.Enabled {
 		return errors.New("storage provider is disabled")
@@ -334,8 +341,21 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 	}
 
 	now := s.now()
-	if err := db.Model(&model.Replica{}).Where("id = ?", replica.ID).
-		Updates(map[string]any{"status": model.ReplicaUploading, "error": "", "updated_at": now}).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
+			return err
+		}
+		res := tx.Model(&model.Replica{}).
+			Where("id = ? AND status IN ?", replica.ID, []string{model.ReplicaPending, model.ReplicaFailed, model.ReplicaUploading}).
+			Updates(map[string]any{"status": model.ReplicaUploading, "error": "", "updated_at": now})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return errLeaseLost
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("mark replica uploading: %w", err)
 	}
 
@@ -373,11 +393,32 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 	if shareErr != "" {
 		updates["error"] = shareErr
 	}
-	if err := db.Model(&model.Replica{}).Where("id = ?", replica.ID).Updates(updates).Error; err != nil {
-		return fmt.Errorf("mark replica ready: %w", err)
-	}
-	s.completeReplicateJob(job.ID, blob.ID)
-	return nil
+	return s.completeReplicateInTx(job, replica, updates)
+}
+
+func (s *Service) completeReplicateInTx(job model.Job, replica model.Replica, replicaUpdates map[string]any) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
+			return err
+		}
+		if replicaUpdates != nil {
+			res := tx.Model(&model.Replica{}).Where("id = ?", replica.ID).Updates(replicaUpdates)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return errLeaseLost
+			}
+		}
+		if err := s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, ""); err != nil {
+			return err
+		}
+		pol, err := s.loadPolicy(tx)
+		if err != nil {
+			pol = model.Policy{Mode: model.ModeMirrorAll, MinimumReplicas: 1}
+		}
+		return s.refreshBlobStatus(tx, replica.BlobID, pol.MinimumReplicas)
+	})
 }
 
 // shareReplica asks the adapter for a share link and classifies the outcome.
@@ -545,43 +586,27 @@ func providerReadRank(role string) int {
 	return 1
 }
 
-func (s *Service) completeReplicateJob(jobID, blobID string) {
-	db := s.db.WithContext(context.Background())
-	pol, err := s.loadPolicy(db)
-	if err != nil {
-		pol = model.Policy{Mode: model.ModeMirrorAll, MinimumReplicas: 1}
-	}
-	if err := s.refreshBlobStatus(db, blobID, pol.MinimumReplicas); err != nil {
-		s.logf("refresh blob status: %v", err)
-	}
-	s.succeedJob(jobID)
-}
-
-func (s *Service) failReplicaJob(jobID, replicaID, message string) {
-	db := s.db.WithContext(context.Background())
-	if err := db.Model(&model.Replica{}).Where("id = ?", replicaID).
-		Updates(map[string]any{"status": model.ReplicaFailed, "error": message, "updated_at": s.now()}).Error; err != nil {
-		s.logf("mark replica failed: %v", err)
-	}
-	if replicaID != "" {
-		var replica model.Replica
-		if err := db.Where("id = ?", replicaID).First(&replica).Error; err == nil {
-			pol, _ := s.loadPolicy(db)
-			if err := s.refreshBlobStatus(db, replica.BlobID, pol.MinimumReplicas); err != nil {
-				s.logf("refresh blob status: %v", err)
-			}
+func (s *Service) failReplicaJob(jobID, owner, replicaID, message string) {
+	s.failJob(jobID, owner, message, func(tx *gorm.DB) error {
+		if replicaID == "" {
+			return nil
 		}
-	}
-	s.failJob(jobID, message)
-}
-
-func (s *Service) requeueReplica(replicaID string) {
-	if replicaID == "" {
-		return
-	}
-	_ = s.db.Model(&model.Replica{}).
-		Where("id = ? AND status = ?", replicaID, model.ReplicaUploading).
-		Updates(map[string]any{"status": model.ReplicaPending, "updated_at": s.now()}).Error
+		if err := tx.Model(&model.Replica{}).Where("id = ?", replicaID).
+			Updates(map[string]any{
+				"status": model.ReplicaFailed, "error": message, "updated_at": s.now(),
+			}).Error; err != nil {
+			return err
+		}
+		var replica model.Replica
+		if err := tx.Where("id = ?", replicaID).First(&replica).Error; err != nil {
+			return err
+		}
+		pol, err := s.loadPolicy(tx)
+		if err != nil {
+			return err
+		}
+		return s.refreshBlobStatus(tx, replica.BlobID, pol.MinimumReplicas)
+	})
 }
 
 // adapterFor builds a storage adapter from a provider row. Local roots are always

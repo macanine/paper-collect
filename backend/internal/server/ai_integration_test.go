@@ -23,6 +23,7 @@ type fakeAI struct {
 	visionHit   bool
 	visionSeen  bool
 	minerUCalls int
+	paddleCalls int
 }
 
 func newFakeAI(t *testing.T) *fakeAI {
@@ -59,6 +60,36 @@ func newFakeAI(t *testing.T) *fakeAI {
 	mux.HandleFunc("/result.zip", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = w.Write(zipBytes)
+	})
+	mux.HandleFunc("/api/v2/ocr/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer paddle-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":401,"msg":"bad token"}`))
+			return
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("paddle multipart: %v", err)
+		}
+		f.mu.Lock()
+		f.paddleCalls++
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0, "data": map[string]any{"jobId": "ocr-job-1"},
+		})
+	})
+	mux.HandleFunc("/api/v2/ocr/jobs/ocr-job-1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{
+				"state": "done", "resultUrl": map[string]string{"jsonUrl": f.server.URL + "/result.jsonl"},
+			},
+		})
+	})
+	mux.HandleFunc("/result.jsonl", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["1. 已知函数 f(x)=x^2+2x，求最小值。"]}}]}}`,
+			`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["2. 求函数 f(x)=x^2 的导数。"]}}]}}`,
+		}, "\n")))
 	})
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer sk-test" {
@@ -110,6 +141,12 @@ func (f *fakeAI) parseCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.minerUCalls
+}
+
+func (f *fakeAI) paddleParseCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paddleCalls
 }
 
 func buildMineruZip(t *testing.T) []byte {
@@ -299,6 +336,88 @@ func TestAIProviderRejectsBadKeyWithoutLeaking(t *testing.T) {
 	}
 	if strings.Contains(string(body), "wrong-key") {
 		t.Fatalf("key leaked: %s", body)
+	}
+}
+
+func TestOCRProviderSelectionAndMigration(t *testing.T) {
+	fake := newFakeAI(t)
+	env := newEnv(t)
+
+	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
+		"name": "文本模型", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
+		"models": []string{"text-model"}, "default_model": "text-model", "enabled": true, "priority": 1,
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("model provider %d: %s", status, body)
+	}
+
+	// Legacy settings still work and materialize the old MinerU configuration.
+	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
+		"analysis_enabled": false, "mineru_base_url": fake.server.URL,
+		"mineru_token": "mineru-token", "max_pages": 3, "max_images": 0,
+	}, nil)
+	if status != http.StatusOK || strings.Contains(string(body), "mineru-token") {
+		t.Fatalf("legacy settings %d: %s", status, body)
+	}
+	var settings struct {
+		Data struct {
+			OCRProviderID string `json:"ocr_provider_id"`
+			OCRConfigured bool   `json:"ocr_configured"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &settings); err != nil || settings.Data.OCRProviderID == "" || !settings.Data.OCRConfigured {
+		t.Fatalf("legacy OCR migration missing: %s", body)
+	}
+
+	status, body = env.do(t, http.MethodPost, "/api/v1/ocr/providers", map[string]any{
+		"name": "PaddleOCR v6", "kind": "paddleocr", "base_url": fake.server.URL,
+		"model": "PP-OCRv6", "token": "paddle-token", "enabled": true, "priority": 1,
+	}, nil)
+	if status != http.StatusCreated || strings.Contains(string(body), "paddle-token") {
+		t.Fatalf("paddle provider %d: %s", status, body)
+	}
+	var paddle struct {
+		Data struct {
+			ID              string `json:"id"`
+			TokenConfigured bool   `json:"token_configured"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &paddle); err != nil || paddle.Data.ID == "" || !paddle.Data.TokenConfigured {
+		t.Fatalf("paddle response: %s", body)
+	}
+
+	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
+		"analysis_enabled": true, "ocr_provider_id": paddle.Data.ID,
+		"mineru_base_url": fake.server.URL, "max_pages": 3, "max_images": 0,
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("select paddle %d: %s", status, body)
+	}
+	// An older client may omit ocr_provider_id. It must not silently clear the
+	// selected PaddleOCR provider.
+	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
+		"analysis_enabled": true, "mineru_base_url": fake.server.URL,
+		"max_pages": 3, "max_images": 0,
+	}, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), paddle.Data.ID) {
+		t.Fatalf("legacy update cleared OCR provider %d: %s", status, body)
+	}
+
+	uploadID, _ := env.upload(t, "Paddle 识别", map[string][]byte{"试题.pdf": minimalPDF()})
+	env.finalizeAndWait(t, uploadID)
+	env.processJobs(t)
+	if fake.paddleParseCalls() != 1 || fake.parseCalls() != 0 {
+		t.Fatalf("expected PaddleOCR only, paddle=%d mineru=%d", fake.paddleParseCalls(), fake.parseCalls())
+	}
+
+	status, body = env.do(t, http.MethodGet, "/api/v1/ai/settings", nil, nil)
+	if status != http.StatusOK || strings.Contains(string(body), "paddle-token") || strings.Contains(string(body), "mineru-token") {
+		t.Fatalf("token leaked: %d %s", status, body)
+	}
+
+	status, body = env.do(t, http.MethodPost, "/api/v1/ocr/providers/"+paddle.Data.ID+"/test", nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"healthy":true`) {
+		t.Fatalf("paddle health %d: %s", status, body)
 	}
 }
 
