@@ -36,7 +36,7 @@
 | `ai_providers` | `AIProvider` | OpenAI 兼容端点；`enabled`、`priority` 索引；加密 API Key、`models_json`、默认/视觉模型 |
 | `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 默认 `PP-OCRv5`），启停与优先级 |
 | `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限；旧 MinerU 字段仅用于兼容迁移 |
-| `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、Markdown 路径、脱敏错误 |
+| `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、应用时间、Markdown 路径、脱敏错误 |
 | `search_settings` | `SearchSettings` | 单例 `id=1`；索引开关、页数/批次上限、指定 provider/model |
 | `material_texts` | `MaterialText` | 每资料一行；`source_hash`、`parse_key`、页数、逐页文本 JSON、完整 Markdown；供分析与索引复用 |
 | `question_blocks` | `QuestionBlock` | 题目；`material_id`、`page_no` 索引；`seq`、题号、纠错后文本、归一化文本、置信度、model/prompt_version |

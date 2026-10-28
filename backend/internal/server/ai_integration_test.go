@@ -258,6 +258,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 			ProviderName string  `json:"provider_name"`
 			ImageCount   int     `json:"image_count"`
 			Confidence   float64 `json:"confidence"`
+			AppliedAt    *string `json:"applied_at"`
 			Suggestions  struct {
 				Title    string   `json:"title"`
 				Subjects []string `json:"subject_codes"`
@@ -281,6 +282,31 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	if !fake.visionSeen {
 		t.Fatalf("vision model did not receive image_url parts")
 	}
+	if analysis.Data.AppliedAt == nil {
+		t.Fatalf("successful suggestions were not auto-applied: %s", body)
+	}
+
+	// Automatic application is part of job completion; no manual apply is needed.
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+materialID, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("material %d: %s", status, body)
+	}
+	var automatic struct {
+		Data struct {
+			Title    string   `json:"title"`
+			FileName string   `json:"file_name"`
+			Subjects []string `json:"subject_codes"`
+			Year     int      `json:"academic_year"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &automatic); err != nil {
+		t.Fatalf("automatic apply body: %s", body)
+	}
+	if automatic.Data.Title != "2026 高三数学一轮练习" ||
+		automatic.Data.FileName != "2026 高三数学一轮练习.pdf" ||
+		automatic.Data.Year != 2026 {
+		t.Fatalf("automatic AI metadata not applied: %s", body)
+	}
 
 	status, body = env.do(t, http.MethodPost, "/api/v1/materials/"+materialID+"/analysis/apply", map[string]any{}, nil)
 	if status != http.StatusOK {
@@ -297,7 +323,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 		t.Fatalf("apply body: %s", body)
 	}
 	if applied.Data.Title != "2026 高三数学一轮练习" || applied.Data.Year != 2026 {
-		t.Fatalf("suggestions not applied: %s", body)
+		t.Fatalf("suggestions could not be reapplied: %s", body)
 	}
 
 	// Idempotent second enqueue returns the existing analysis, not a new job.

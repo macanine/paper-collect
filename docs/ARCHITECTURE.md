@@ -11,7 +11,7 @@
 - **归档**：PDF、DOC、DOCX、PPTX、文件夹和 ZIP；资料是一份逻辑文件，原件按 SHA-256 去重。
 - **存储**：本地、WebDAV、蓝奏云、123 云盘适配器；一个 Blob 可在多个端点各保存一份副本。
 - **编目**：学科、年级、学年、标签、角色和合集摆放；角色来自资料本身，不来自合集条目。
-- **AI**：可切换的自建 RapidOCR、MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；建议必须人工应用。
+- **AI**：可切换的自建 RapidOCR、MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；通过白名单校验后自动应用并更新文件名，人工可覆盖。
 - **搜题**：索引任务把试卷切成题目并建立可移植倒排表，按题干文本检索并返回页码。
 - **Agent**：用受限 API Key 换取短期 JWT，再以单一 Bearer JWT 访问 REST 和 `/mcp` 只读工具。
 
@@ -150,7 +150,7 @@ web/src/
 | Replica | `replicas` | `(blob_id, provider_id)` 唯一；目标在规划时冻结；上传与分享状态分离 |
 | StoragePolicy | `storage_policies` | 单例 `id=1`；模式与 `minimum_replicas(1..20)` |
 | AIProvider / OCRProvider / AISettings | `ai_providers`、`ocr_providers`、`ai_settings` | API Key/OCR 令牌加密；端点没有物理删除，只能停用；设置保存当前 OCR provider |
-| MaterialAnalysis | `material_analyses` | 每资料一行；建议永不自动应用；图片不落盘 |
+| MaterialAnalysis | `material_analyses` | 每资料一行；`applied_at` 记录自动/手动应用时间；图片不落盘 |
 | SearchSettings | `search_settings` | 单例；默认启用、500 页、10 页/批、12000 字/批 |
 | MaterialText | `material_texts` | 每资料一行；按文件 SHA + 解析器地址/缓存版本校验 |
 | QuestionBlock / QuestionTerm | `question_blocks`、`question_terms` | 题目带页码和文档顺序；倒排主键 `(term, question_id)` |
@@ -310,7 +310,8 @@ worker RunAnalyze
   → 按 max_pages/max_images 限制图片；图片只在内存中传给视觉模型
   → 按 priority 尝试启用的模型端点；有视觉模型时发 image_url，否则纯文本
   → 严格解析 JSON、校验字段枚举/长度/置信度，写 suggestions_json
-  → 人工 POST /materials/{id}/analysis/apply 才修改资料并写审计
+  → 同一数据库事务自动应用白名单字段、同步 file_name、写 applied_at 和审计
+  → 事务提交后同步本地副本文件名；人工可 PATCH 或 POST analysis/apply 纠偏
 ```
 
 - 自动分析只对非 ZIP 容器入队；ZIP 展开成员各自入队，避免对容器重复付费。
@@ -318,7 +319,7 @@ worker RunAnalyze
 - `analysis_enabled` 只控制归档后的自动入队；手动触发不依赖它。
 - 图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。
 - 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。
-- 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃；建议永不自动应用。
+- 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
 - 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
 - 关键超时：OCR 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
 
@@ -481,7 +482,7 @@ DATA_DIR/
 - **秘密**：存储/AI/OCR 凭据加密；API Key/refresh 只存哈希；日志和审计不写秘密、Cookie、分享链接或完整 URL；`redact` 处理存储与上游错误。
 - **请求**：严格 JSON、1 MiB 限制、未知字段/非法 null 拒绝；MCP 无任意 URL/路径工具。
 - **文件**：相对路径校验；ZIP 先全量检查再提取；拒绝遍历/符号链接/加密/炸弹/格式伪装；本地端点根目录由服务端固定，适配器再次校验路径不逃逸。
-- **AI 输入**：文档内容按不可信数据处理；提示要求忽略其中指令；模型输出只作建议，人工应用才改资料。
+- **AI 输入**：文档内容按不可信数据处理；提示要求忽略其中指令；模型输出经白名单校验后自动写入编目字段，人工可覆盖。
 - **浏览器**：同源部署，未实现 CORS；access token 只在内存，refresh 存 localStorage；浏览器不保存 Agent 密钥。
 - **限流**：登录按用户名/IP 内存节流；API Key 与上传没有全局限流，依赖部署层或反向代理。
 

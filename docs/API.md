@@ -217,13 +217,13 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
 
-`MaterialAnalysis`：`id,material_id,status:pending|running|succeeded|failed,provider_id,provider_name,model,page_count,image_count(恒为 0，页面图不落盘),confidence:number(0..1),suggestions:{title?,subject_codes?,grade?,academic_year?,role?,tags?},markdown_excerpt:string(<=4000),error:string,created_at,updated_at`。
+`MaterialAnalysis`：`id,material_id,status:pending|running|succeeded|failed,provider_id,provider_name,model,page_count,image_count(恒为 0，页面图不落盘),confidence:number(0..1),suggestions:{title?,subject_codes?,grade?,academic_year?,role?,tags?},markdown_excerpt:string(<=4000),error:string,applied_at:date-time|null,created_at,updated_at`。`applied_at` 表示最近一次自动或手动应用建议的时间。
 
 - `POST /materials/{id}/analysis`（materials:write）：请求可空或 `{"force":false}`；pending/running 返回 202 现有分析；succeeded 且 force=false 返回现有；failed 或 force=true 重新入队。202 data=`{"job_id":"uuid","analysis":MaterialAnalysis}`。
 - `GET /materials/{id}/analysis`（materials:read）：200 MaterialAnalysis；尚无分析时返回 404 `not_found`。
-- `POST /materials/{id}/analysis/apply`（materials:write）：请求可覆盖白名单字段 `{"title":"","subject_codes":[],"grade":"","academic_year":0,"role":"","tags":[]}`，省略字段取建议值；显式提供的白名单字段也可覆盖或补充建议。应用前与资料 PATCH 使用同一套校验；200 更新后的 **Material + replicas**，不能修改 blob/状态/路径。写审计 `material.ai_apply`。
+- `POST /materials/{id}/analysis/apply`（materials:write）：重新应用已成功完成的建议。请求可覆盖白名单字段 `{"title":"","subject_codes":[],"grade":"","academic_year":0,"role":"","tags":[]}`，省略字段取建议值；显式提供的白名单字段也可覆盖或补充建议。应用前与资料 PATCH 使用同一套校验；200 更新后的 **Material + replicas**，不能修改 blob/状态/路径。写审计 `material.ai_apply`。
 
-分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验后写建议。模型输出永不自动应用。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
+分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验建议 → **在同一事务中自动应用白名单字段、同步文件名和分析已应用标记**。自动应用只接受 `parseSuggestions` 校验后的字段，标题会同步为下载名和本地副本名；模型原文、未知字段和非法值不会写入。自动应用写审计 `material.ai_auto_apply`，人工重应用写 `material.ai_apply`。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
 
 Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `analyze`、`index`。
 

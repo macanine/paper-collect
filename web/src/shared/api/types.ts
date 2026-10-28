@@ -360,6 +360,7 @@ export interface MaterialAnalysis {
   suggestions: AISuggestions;
   markdown_excerpt: string;
   error: string;
+  applied_at: string | null;
   created_at: string;
   updated_at: string;
 }

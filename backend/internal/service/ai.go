@@ -633,10 +633,11 @@ func (s *Service) EnqueueMaterialAnalysis(ctx context.Context, p auth.Principal,
 		analysis.Error = ""
 		analysis.SuggestionsJSON = "{}"
 		analysis.Confidence = 0
+		analysis.AppliedAt = nil
 		analysis.UpdatedAt = now
 		if err := tx.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).Updates(map[string]any{
 			"status": analysis.Status, "job_id": jobID, "error": "", "suggestions_json": "{}",
-			"confidence": 0, "updated_at": now,
+			"confidence": 0, "applied_at": nil, "updated_at": now,
 		}).Error; err != nil {
 			return err
 		}
@@ -666,9 +667,39 @@ func (s *Service) ApplyMaterialAnalysis(ctx context.Context, p auth.Principal, m
 	if err := json.Unmarshal([]byte(row.SuggestionsJSON), &suggestions); err != nil {
 		return MaterialView{}, apperr.Internal(err)
 	}
+	patch := suggestionsToPatch(suggestions)
+	if override != nil {
+		mergeMaterialPatch(&patch, *override)
+	}
+	var oldFileName, newFileName string
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var applyErr error
+		oldFileName, newFileName, applyErr = s.applyMaterialPatchTx(tx, materialID, patch, s.now())
+		if applyErr != nil {
+			return applyErr
+		}
+		if err := tx.Model(&model.MaterialAnalysis{}).Where("id = ?", row.ID).
+			Update("applied_at", s.now()).Error; err != nil {
+			return err
+		}
+		return s.audit(tx, p, "material.ai_apply", materialID)
+	})
+	if err != nil {
+		return MaterialView{}, err
+	}
+	if newFileName != "" && newFileName != oldFileName {
+		s.renameLocalReplicaFiles(ctx, materialID, newFileName)
+	}
+	return s.GetMaterial(ctx, materialID)
+}
+
+// suggestionsToPatch maps only validated, non-empty model fields onto the same
+// whitelist accepted by the material PATCH endpoint.
+func suggestionsToPatch(suggestions Suggestions) MaterialPatch {
 	patch := MaterialPatch{}
 	if suggestions.Title != "" {
-		patch.Title = &suggestions.Title
+		title := suggestions.Title
+		patch.Title = &title
 	}
 	if len(suggestions.SubjectCodes) > 0 {
 		codes := append([]string{}, suggestions.SubjectCodes...)
@@ -690,19 +721,7 @@ func (s *Service) ApplyMaterialAnalysis(ctx context.Context, p auth.Principal, m
 		tags := append([]string{}, suggestions.Tags...)
 		patch.Tags = &tags
 	}
-	if override != nil {
-		mergeMaterialPatch(&patch, *override)
-	}
-	view, err := s.UpdateMaterial(ctx, p, materialID, patch)
-	if err != nil {
-		return MaterialView{}, err
-	}
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return s.audit(tx, p, "material.ai_apply", materialID)
-	}); err != nil {
-		return MaterialView{}, apperr.Internal(err)
-	}
-	return view, nil
+	return patch
 }
 
 func mergeMaterialPatch(dst *MaterialPatch, src MaterialPatch) {
@@ -773,6 +792,7 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
 			return err
 		}
+		now := s.now()
 		res := tx.Model(&model.MaterialAnalysis{}).
 			Where("id = ? AND job_id = ?", analysis.ID, job.ID).
 			Updates(map[string]any{
@@ -780,13 +800,34 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 				"markdown_path": result.MarkdownPath, "images_json": model.EncodeStrings(result.Images),
 				"page_count": result.PageCount, "image_count": len(result.Images),
 				"suggestions_json": result.SuggestionsJSON, "confidence": result.Confidence,
-				"error": "", "updated_at": s.now(),
+				"error": "", "applied_at": nil, "updated_at": now,
 			})
 		if res.Error != nil {
 			return res.Error
 		}
 		if res.RowsAffected != 1 {
 			return errLeaseLost
+		}
+		var suggestions Suggestions
+		if err := json.Unmarshal([]byte(result.SuggestionsJSON), &suggestions); err != nil {
+			return err
+		}
+		patch := suggestionsToPatch(suggestions)
+		if !patch.empty() {
+			if _, fileName, err := s.applyMaterialPatchTx(tx, job.MaterialID, patch, now); err != nil {
+				return err
+			} else if fileName != "" {
+				// The filesystem rename happens after this transaction commits.
+				result.AutoFileName = fileName
+			}
+			if err := tx.Model(&model.MaterialAnalysis{}).
+				Where("id = ? AND job_id = ?", analysis.ID, job.ID).
+				Update("applied_at", now).Error; err != nil {
+				return err
+			}
+		}
+		if err := s.auditSystem(tx, "material.ai_auto_apply", job.MaterialID); err != nil {
+			return err
 		}
 		return s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, "")
 	})
@@ -804,6 +845,9 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 		})
 		return
 	}
+	if result.AutoFileName != "" {
+		s.renameLocalReplicaFiles(context.WithoutCancel(ctx), job.MaterialID, result.AutoFileName)
+	}
 }
 
 type analyzeResult struct {
@@ -815,6 +859,7 @@ type analyzeResult struct {
 	ImageCount      int
 	SuggestionsJSON string
 	Confidence      float64
+	AutoFileName    string
 }
 
 func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialAnalysis, materialID string) (analyzeResult, error) {

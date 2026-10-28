@@ -279,7 +279,12 @@ export function AiSettingsPage() {
       {settings.isSuccess ? (
         <Card title="解析设置" className="max-w-[760px]">
           <Form form={form} layout="vertical">
-            <Form.Item name="analysis_enabled" label="自动识别" valuePropName="checked">
+            <Form.Item
+              name="analysis_enabled"
+              label="自动识别并应用"
+              valuePropName="checked"
+              extra="识别成功后自动更新标题、文件名和编目字段；仍可人工修改。"
+            >
               <Switch />
             </Form.Item>
             <Form.Item

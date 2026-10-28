@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
@@ -119,94 +120,12 @@ func (s *Service) UpdateMaterial(ctx context.Context, p auth.Principal, id strin
 	if pt.empty() {
 		return MaterialView{}, apperr.Validation("至少需要提供一个可修改字段")
 	}
-	updates := map[string]any{}
-	var newSubjects []string
-	var newTitle string
-	if pt.Title != nil {
-		t, err := validateTitle(*pt.Title)
-		if err != nil {
-			return MaterialView{}, err
-		}
-		newTitle = t
-		updates["title"] = t
-	}
-	if pt.Description != nil {
-		d, err := validateDescription(*pt.Description)
-		if err != nil {
-			return MaterialView{}, err
-		}
-		updates["description"] = d
-	}
-	if pt.SubjectCodes != nil {
-		codes, err := validateOptionalSubjects(*pt.SubjectCodes)
-		if err != nil {
-			return MaterialView{}, err
-		}
-		newSubjects = codes
-	}
-	if pt.Grade != nil {
-		if err := validateGrade(*pt.Grade); err != nil {
-			return MaterialView{}, err
-		}
-		updates["grade"] = *pt.Grade
-	}
-	if pt.AcademicYear != nil {
-		if err := validateYear(*pt.AcademicYear); err != nil {
-			return MaterialView{}, err
-		}
-		updates["academic_year"] = *pt.AcademicYear
-	}
-	if pt.Tags != nil {
-		tags, err := validateTags(*pt.Tags)
-		if err != nil {
-			return MaterialView{}, err
-		}
-		updates["tags_json"] = model.EncodeStrings(tags)
-	}
-	var newRole string
-	if pt.Role != nil {
-		if err := validateRole(*pt.Role); err != nil {
-			return MaterialView{}, err
-		}
-		newRole = *pt.Role
-		updates["role"] = newRole
-	}
-	updates["updated_at"] = s.now()
-
 	var oldFileName, newFileName string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var m model.Material
-		if err := tx.Where("id = ?", id).First(&m).Error; err != nil {
-			return apperr.NotFound("资料不存在")
-		}
-		oldFileName = m.FileName
-		if newTitle != "" {
-			newFileName = fileNameFromTitle(newTitle, m.FileName)
-			if newFileName != m.FileName {
-				updates["file_name"] = newFileName
-			}
-		}
-		oldRole := m.Role
-		if err := tx.Model(&model.Material{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return wrap("update material", err)
-		}
-		// Collection-item roles default to the material role at ingest. When the
-		// material role changes, follow only those items still on the old default;
-		// explicitly customised item roles are left untouched.
-		if newRole != "" && oldRole != "" && newRole != oldRole {
-			if err := tx.Model(&model.CollectionItem{}).
-				Where("material_id = ? AND role = ?", id, oldRole).
-				Update("role", newRole).Error; err != nil {
-				return wrap("sync collection item roles", err)
-			}
-		}
-		if newSubjects != nil {
-			if err := tx.Where("material_id = ?", id).Delete(&model.MaterialSubject{}).Error; err != nil {
-				return wrap("clear subjects", err)
-			}
-			if err := insertMaterialSubjects(tx, id, newSubjects); err != nil {
-				return err
-			}
+		var err error
+		oldFileName, newFileName, err = s.applyMaterialPatchTx(tx, id, pt, s.now())
+		if err != nil {
+			return err
 		}
 		return s.audit(tx, p, "material.update", id)
 	})
@@ -217,6 +136,104 @@ func (s *Service) UpdateMaterial(ctx context.Context, p auth.Principal, id strin
 		s.renameLocalReplicaFiles(ctx, id, newFileName)
 	}
 	return s.GetMaterial(ctx, id)
+}
+
+// applyMaterialPatchTx validates and writes the same whitelisted fields as the
+// public material PATCH endpoint. It is shared by manual edits and automatic
+// application of trusted-after-validation AI suggestions.
+func (s *Service) applyMaterialPatchTx(tx *gorm.DB, id string, pt MaterialPatch, now time.Time) (string, string, error) {
+	if pt.empty() {
+		return "", "", apperr.Validation("至少需要提供一个可修改字段")
+	}
+	updates := map[string]any{}
+	var newSubjects []string
+	var newTitle string
+	if pt.Title != nil {
+		t, err := validateTitle(*pt.Title)
+		if err != nil {
+			return "", "", err
+		}
+		newTitle = t
+		updates["title"] = t
+	}
+	if pt.Description != nil {
+		d, err := validateDescription(*pt.Description)
+		if err != nil {
+			return "", "", err
+		}
+		updates["description"] = d
+	}
+	if pt.SubjectCodes != nil {
+		codes, err := validateOptionalSubjects(*pt.SubjectCodes)
+		if err != nil {
+			return "", "", err
+		}
+		newSubjects = codes
+	}
+	if pt.Grade != nil {
+		if err := validateGrade(*pt.Grade); err != nil {
+			return "", "", err
+		}
+		updates["grade"] = *pt.Grade
+	}
+	if pt.AcademicYear != nil {
+		if err := validateYear(*pt.AcademicYear); err != nil {
+			return "", "", err
+		}
+		updates["academic_year"] = *pt.AcademicYear
+	}
+	if pt.Tags != nil {
+		tags, err := validateTags(*pt.Tags)
+		if err != nil {
+			return "", "", err
+		}
+		updates["tags_json"] = model.EncodeStrings(tags)
+	}
+	var newRole string
+	if pt.Role != nil {
+		if err := validateRole(*pt.Role); err != nil {
+			return "", "", err
+		}
+		newRole = *pt.Role
+		updates["role"] = newRole
+	}
+	updates["updated_at"] = now
+
+	var m model.Material
+	if err := tx.Where("id = ?", id).First(&m).Error; err != nil {
+		return "", "", apperr.NotFound("资料不存在")
+	}
+	oldFileName := m.FileName
+	newFileName := ""
+	if newTitle != "" {
+		newFileName = fileNameFromTitle(newTitle, m.FileName)
+		if newFileName != m.FileName {
+			updates["file_name"] = newFileName
+		}
+	}
+	oldRole := m.Role
+	if err := tx.Model(&model.Material{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return "", "", wrap("update material", err)
+	}
+	// Collection-item roles default to the material role at ingest. When the
+	// material role changes, follow only those items still on the old default;
+	// explicitly customised item roles are left untouched.
+	if newRole != "" && oldRole != "" && newRole != oldRole {
+		if err := tx.Model(&model.CollectionItem{}).
+			Where("material_id = ? AND role = ?", id, oldRole).
+			Update("role", newRole).Error; err != nil {
+			return "", "", wrap("sync collection item roles", err)
+		}
+	}
+	if newSubjects != nil {
+		if err := tx.Where("material_id = ?", id).Delete(&model.MaterialSubject{}).Error; err != nil {
+			return "", "", wrap("clear subjects", err)
+		}
+		if err := insertMaterialSubjects(tx, id, newSubjects); err != nil {
+			return "", "", err
+		}
+	}
+	return oldFileName, newFileName, nil
 }
 
 // fileNameFromTitle keeps one canonical name: the download/storage filename

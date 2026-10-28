@@ -1,10 +1,13 @@
+import { useEffect } from 'react';
 import { Alert, App, Button, Card, Collapse, Descriptions, Popconfirm, Progress, Space, Tag, Typography } from 'antd';
 import { RobotOutlined } from '@ant-design/icons';
+import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, describeError } from '../../shared/api/errors';
 import type { AISuggestions, MaterialAnalysis } from '../../shared/api/types';
 import { GRADE_LABELS, ROLE_LABELS, SUBJECT_LABELS } from '../../shared/lib/labels';
 import { formatDateTime } from '../../shared/lib/format';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
+import { materialKeys } from '../materials/queries';
 import { analysisStatusCopy, confidencePercent, suggestionFieldCount } from './format';
 import { useApplyAnalysis, useEnqueueAnalysis, useMaterialAnalysis } from './queries';
 
@@ -15,10 +18,19 @@ interface AnalysisPanelProps {
 
 export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
   const { message } = App.useApp();
+  const queryClient = useQueryClient();
   const query = useMaterialAnalysis(materialId);
   const enqueue = useEnqueueAnalysis(materialId);
   const apply = useApplyAnalysis(materialId);
   const notFound = query.error instanceof ApiError && query.error.status === 404;
+
+  // The worker applies AI fields when analysis finishes. Refresh the parent
+  // material so its title, filename and metadata change without a page reload.
+  useEffect(() => {
+    if (query.data?.status !== 'succeeded') return;
+    void queryClient.invalidateQueries({ queryKey: materialKeys.detail(materialId) });
+    void queryClient.invalidateQueries({ queryKey: materialKeys.all });
+  }, [materialId, query.data?.status, queryClient]);
 
   const handleRun = (force: boolean) => {
     enqueue.mutate(force, {
@@ -29,7 +41,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
 
   const handleApply = () => {
     apply.mutate(undefined, {
-      onSuccess: () => message.success('建议已应用到资料并写入审计'),
+      onSuccess: () => message.success('建议已重新应用到资料并写入审计'),
       onError: (error) => {
         const { title, detail } = describeError(error);
         message.error(detail ? `${title}：${detail}` : title);
@@ -101,9 +113,12 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
       {analysis.status === 'succeeded' ? (
         <div className="mt-4 flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Typography.Text strong>建议字段（{suggestionFieldCount(analysis.suggestions)} 项）</Typography.Text>
-            <Button type="primary" size="small" loading={apply.isPending} disabled={!canWrite} onClick={handleApply}>
-              应用全部建议
+            <Typography.Text strong>
+              建议字段（{suggestionFieldCount(analysis.suggestions)} 项）
+              {analysis.applied_at ? <Tag color="green" className="ml-2">已应用</Tag> : <Tag color="orange" className="ml-2">未应用</Tag>}
+            </Typography.Text>
+            <Button size="small" loading={apply.isPending} disabled={!canWrite} onClick={handleApply}>
+              重新应用建议
             </Button>
           </div>
           <SuggestionList suggestions={analysis.suggestions} />

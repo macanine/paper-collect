@@ -426,6 +426,7 @@ type materialAnalysisDTO struct {
 	Suggestions     service.Suggestions `json:"suggestions"`
 	MarkdownExcerpt string              `json:"markdown_excerpt"`
 	Error           string              `json:"error"`
+	AppliedAt       *time.Time          `json:"applied_at"`
 	CreatedAt       time.Time           `json:"created_at"`
 	UpdatedAt       time.Time           `json:"updated_at"`
 }
@@ -470,7 +471,8 @@ func toMaterialAnalysis(v service.AnalysisView) materialAnalysisDTO {
 		ProviderID: v.Analysis.ProviderID, ProviderName: v.ProviderName, Model: v.Analysis.Model,
 		PageCount: v.Analysis.PageCount, ImageCount: v.Analysis.ImageCount,
 		Confidence: v.Confidence, Suggestions: v.Suggestions, MarkdownExcerpt: v.MarkdownExcerpt,
-		Error: v.Analysis.Error, CreatedAt: v.Analysis.CreatedAt, UpdatedAt: v.Analysis.UpdatedAt,
+		Error: v.Analysis.Error, AppliedAt: v.Analysis.AppliedAt,
+		CreatedAt: v.Analysis.CreatedAt, UpdatedAt: v.Analysis.UpdatedAt,
 	}
 }
 

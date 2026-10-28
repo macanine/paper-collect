@@ -430,7 +430,8 @@ type AISettings struct {
 // TableName pins the singleton settings table name.
 func (AISettings) TableName() string { return "ai_settings" }
 
-// MaterialAnalysis is the latest AI result for one material. Suggestions are never auto-applied.
+// MaterialAnalysis is the latest AI result for one material. Successful
+// suggestions are applied automatically; AppliedAt records that write.
 type MaterialAnalysis struct {
 	ID              string  `gorm:"primaryKey;size:36"`
 	MaterialID      string  `gorm:"size:36;not null;uniqueIndex"`
@@ -445,6 +446,7 @@ type MaterialAnalysis struct {
 	SuggestionsJSON string  `gorm:"type:text;not null"`
 	Confidence      float64 `gorm:"not null"`
 	Error           string  `gorm:"type:text;not null"`
+	AppliedAt       *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

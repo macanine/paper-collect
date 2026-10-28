@@ -359,7 +359,7 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		return fmt.Errorf("mark replica uploading: %w", err)
 	}
 
-	name := safeRemoteName(blob.FileName)
+	name := safeRemoteName(s.replicaFileName(ctx, blob.ID, blob.FileName))
 	obj := storage.Object{
 		Key:    objectKey(blob.SHA256, name),
 		Name:   name,
@@ -394,6 +394,22 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		updates["error"] = shareErr
 	}
 	return s.completeReplicateInTx(job, replica, updates)
+}
+
+// replicaFileName follows the catalogue's current display name so a replica
+// created after AI renaming (or a manual rename) uses the polished filename.
+// Blob.FileName remains the fallback for legacy/shared blobs without materials.
+func (s *Service) replicaFileName(ctx context.Context, blobID, fallback string) string {
+	var name string
+	err := s.db.WithContext(ctx).Model(&model.Material{}).
+		Where("blob_id = ?", blobID).
+		Order("updated_at DESC").
+		Limit(1).
+		Pluck("file_name", &name).Error
+	if err == nil && strings.TrimSpace(name) != "" {
+		return name
+	}
+	return fallback
 }
 
 func (s *Service) completeReplicateInTx(job model.Job, replica model.Replica, replicaUpdates map[string]any) error {
