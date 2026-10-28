@@ -29,6 +29,8 @@ const (
 	searchLLMTimeout      = 10 * time.Minute
 	searchMaxOutputTokens = 128_000
 	indexBatchConcurrency = 3
+	indexTransientRetries = 1
+	indexRetryDelay       = 3 * time.Second
 )
 
 func defaultSearchSettings() model.SearchSettings {
@@ -605,8 +607,22 @@ func buildIndexBatches(pages []pageText, batchPages, batchChars int) [][]pageTex
 // responses. Transport, auth and timeout failures abort immediately instead of
 // multiplying expensive upstream calls.
 func (s *Service) segmentBatchWithFallback(ctx context.Context, client *ai.OpenAI, modelName string, part []pageText, calls, failed *atomic.Int64) ([]segmentedQuestion, error) {
-	questions, err := s.segmentBatch(ctx, client, modelName, part)
-	calls.Add(1)
+	var err error
+	var questions []segmentedQuestion
+	for attempt := 0; attempt <= indexTransientRetries; attempt++ {
+		questions, err = s.segmentBatch(ctx, client, modelName, part)
+		calls.Add(1)
+		if err == nil || !shouldRetryIndexTransient(err) || attempt == indexTransientRetries {
+			break
+		}
+		timer := time.NewTimer(indexRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if err == nil {
 		return questions, nil
 	}
@@ -636,6 +652,16 @@ func shouldSplitIndexError(err error) bool {
 		return apiErr.Class == "invalid_response"
 	}
 	return err != nil && strings.Contains(err.Error(), "切题模型输出不是合法 JSON")
+}
+
+// shouldRetryIndexTransient retries only short-lived upstream failures. The
+// attempt count is capped so an overloaded provider cannot stall a job forever.
+func shouldRetryIndexTransient(err error) bool {
+	var apiErr *ai.APIError
+	if !errors.As(err, &apiErr) || !apiErr.Retryable {
+		return false
+	}
+	return apiErr.Class == "unavailable" || apiErr.Class == "rate_limited"
 }
 
 // splitIndexBatchForRetry first splits by page. Once only one dense text

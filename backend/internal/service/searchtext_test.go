@@ -100,6 +100,21 @@ func TestShouldSplitIndexErrorOnlyForMalformedOutput(t *testing.T) {
 	}
 }
 
+func TestShouldRetryIndexTransientOnlyForShortLivedFailures(t *testing.T) {
+	if !shouldRetryIndexTransient(&ai.APIError{Class: "unavailable", Detail: "上游返回 HTTP 504", Retryable: true}) {
+		t.Fatal("HTTP 504 should get one bounded retry")
+	}
+	if !shouldRetryIndexTransient(&ai.APIError{Class: "rate_limited", Detail: "上游限流", Retryable: true}) {
+		t.Fatal("rate limiting should get one bounded retry")
+	}
+	if shouldRetryIndexTransient(&ai.APIError{Class: "timeout", Detail: "上游请求超时", Retryable: true}) {
+		t.Fatal("timeout should not multiply a long-running request")
+	}
+	if shouldRetryIndexTransient(&ai.APIError{Class: "auth", Detail: "鉴权失败"}) {
+		t.Fatal("auth errors are not transient")
+	}
+}
+
 func TestSearchLLMTimeoutCoversDeepReasoning(t *testing.T) {
 	if searchLLMTimeout < 5*time.Minute {
 		t.Fatalf("search timeout = %s, want at least 5m", searchLLMTimeout)
