@@ -39,6 +39,14 @@ x-app: &app
   stop_grace_period: 20s
 
 services:
+  app-network-proxy:
+    image: alpine/socat:1.8.0.0
+    restart: unless-stopped
+    command: ["TCP-LISTEN:3000,fork,reuseaddr", "TCP:new-api:3000"]
+    networks:
+      - default
+      - new-api
+
   rapidocr:
     build:
       context: ./services/rapidocr
@@ -108,6 +116,8 @@ services:
         condition: service_completed_successfully
       rapidocr:
         condition: service_healthy
+      app-network-proxy:
+        condition: service_started
     environment:
       <<: *app-environment
       WORKER_INSTANCE_ID: app-1
@@ -119,6 +129,8 @@ services:
         condition: service_completed_successfully
       rapidocr:
         condition: service_healthy
+      app-network-proxy:
+        condition: service_started
     environment:
       <<: *app-environment
       WORKER_INSTANCE_ID: app-2
@@ -146,3 +158,8 @@ volumes:
   paper-data:
   paper-postgres:
   rapidocr-jobs:
+
+networks:
+  new-api:
+    external: true
+    name: new-api_new-api-network
