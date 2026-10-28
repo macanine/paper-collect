@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeAndTerms(t *testing.T) {
@@ -65,6 +66,12 @@ func TestSplitIndexBatchForRetrySplitsDenseSinglePage(t *testing.T) {
 func TestSplitIndexBatchForRetryKeepsSmallSinglePage(t *testing.T) {
 	if _, ok := splitIndexBatchForRetry([]pageText{{PageNo: 1, Text: "短题目"}}); ok {
 		t.Fatal("small single page should be retried without splitting")
+	}
+}
+
+func TestSearchLLMTimeoutCoversDeepReasoning(t *testing.T) {
+	if searchLLMTimeout < 5*time.Minute {
+		t.Fatalf("search timeout = %s, want at least 5m", searchLLMTimeout)
 	}
 }
 

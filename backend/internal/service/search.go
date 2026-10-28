@@ -24,7 +24,7 @@ const (
 	maxQuestionRunes      = 8000
 	minQuestionRunes      = 5
 	maxSearchCandidates   = 2000
-	searchLLMTimeout      = 180 * time.Second
+	searchLLMTimeout      = 10 * time.Minute
 	searchMaxOutputTokens = 128_000
 )
 
@@ -483,6 +483,9 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	// Deep reasoning with a large output can legitimately exceed the client's
+	// short default timeout. The per-call context is the single deadline.
+	client.HTTP.Timeout = 0
 	client.MaxTokens = searchMaxOutputTokens
 	client.ReasoningEffort = "high"
 	batchPages := settings.BatchPages
