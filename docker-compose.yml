@@ -39,6 +39,30 @@ x-app: &app
   stop_grace_period: 20s
 
 services:
+  rapidocr:
+    build:
+      context: ./services/rapidocr
+      dockerfile: Dockerfile
+    image: paper-collect-rapidocr:local
+    restart: unless-stopped
+    cpus: "${RAPIDOCR_CPUS:-1.0}"
+    environment:
+      RAPIDOCR_WORKERS: "${RAPIDOCR_WORKERS:-1}"
+      OMP_NUM_THREADS: "${RAPIDOCR_THREADS:-1}"
+      OPENBLAS_NUM_THREADS: "${RAPIDOCR_THREADS:-1}"
+      MKL_NUM_THREADS: "${RAPIDOCR_THREADS:-1}"
+      NUMEXPR_NUM_THREADS: "${RAPIDOCR_THREADS:-1}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - rapidocr-jobs:/var/lib/rapidocr/jobs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9003/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    stop_grace_period: 20s
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -79,12 +103,22 @@ services:
 
   app-1:
     <<: *app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rapidocr:
+        condition: service_healthy
     environment:
       <<: *app-environment
       WORKER_INSTANCE_ID: app-1
 
   app-2:
     <<: *app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rapidocr:
+        condition: service_healthy
     environment:
       <<: *app-environment
       WORKER_INSTANCE_ID: app-2
@@ -111,3 +145,4 @@ services:
 volumes:
   paper-data:
   paper-postgres:
+  rapidocr-jobs:

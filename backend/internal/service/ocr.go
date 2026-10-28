@@ -55,12 +55,18 @@ func defaultOCRModel(kind string) string {
 	if kind == model.OCRKindPaddleOCR {
 		return "PP-OCRv6"
 	}
+	if kind == model.OCRKindRapidOCR {
+		return "PP-OCRv5"
+	}
 	return ""
 }
 
 func defaultOCRBaseURL(kind string) string {
 	if kind == model.OCRKindPaddleOCR {
 		return "https://paddleocr.aistudio-app.com"
+	}
+	if kind == model.OCRKindRapidOCR {
+		return "http://rapidocr:9003"
 	}
 	return "https://mineru.net"
 }
@@ -69,8 +75,8 @@ func validateOCRProvider(name, kind, baseURL, modelName string, priority int) (s
 	if n := runeLen(strings.TrimSpace(name)); n < 1 || n > maxOCRProviderName {
 		return "", apperr.Validation("OCR 服务商名称长度必须为 1 到 128 个字符")
 	}
-	if !isOneOf(kind, model.OCRKindMinerU, model.OCRKindPaddleOCR) {
-		return "", apperr.Validation("OCR 服务商类型只能是 mineru 或 paddleocr")
+	if !isOneOf(kind, model.OCRKindMinerU, model.OCRKindPaddleOCR, model.OCRKindRapidOCR) {
+		return "", apperr.Validation("OCR 服务商类型只能是 mineru、paddleocr 或 rapidocr")
 	}
 	normalized, err := ai.ValidateBaseURL(baseURL)
 	if err != nil {
@@ -215,12 +221,18 @@ func (s *Service) TestOCRProvider(ctx context.Context, id string) (OCRTestResult
 	if err := client.Health(probeCtx); err != nil {
 		return OCRTestResult{Healthy: false, Message: redact(ai.Sanitize(err.Error()))}, nil
 	}
+	if row.Kind == model.OCRKindRapidOCR {
+		return OCRTestResult{Healthy: true, Message: "RapidOCR 服务可达且模型已加载"}, nil
+	}
 	return OCRTestResult{Healthy: true, Message: ocrProviderLabel(row.Kind) + " 服务可达且令牌被接受"}, nil
 }
 
 func ocrProviderLabel(kind string) string {
 	if kind == model.OCRKindPaddleOCR {
 		return "PaddleOCR"
+	}
+	if kind == model.OCRKindRapidOCR {
+		return "RapidOCR"
 	}
 	return "MinerU"
 }
@@ -280,10 +292,10 @@ func (s *Service) ocrClient(ctx context.Context, row model.OCRProvider) (ocrClie
 		return nil, errors.New(ocrProviderLabel(row.Kind) + " 服务商已停用")
 	}
 	token, err := s.openAISecret(row.TokenCipher, row.ID)
-	if err != nil {
+	if err != nil && row.Kind != model.OCRKindRapidOCR {
 		return nil, err
 	}
-	if strings.TrimSpace(token) == "" {
+	if row.Kind != model.OCRKindRapidOCR && strings.TrimSpace(token) == "" {
 		return nil, errors.New("未配置 " + ocrProviderLabel(row.Kind) + " 令牌")
 	}
 	switch row.Kind {
@@ -296,6 +308,13 @@ func (s *Service) ocrClient(ctx context.Context, row model.OCRProvider) (ocrClie
 		return client, nil
 	case model.OCRKindMinerU:
 		client, err := ai.NewMinerU(row.BaseURL, token, nil)
+		if err != nil {
+			return nil, err
+		}
+		client.Timeout = 15 * time.Minute
+		return client, nil
+	case model.OCRKindRapidOCR:
+		client, err := ai.NewRapidOCR(row.BaseURL, row.Model, nil)
 		if err != nil {
 			return nil, err
 		}

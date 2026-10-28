@@ -332,7 +332,7 @@ export interface MinerUTestResult {
   message: string;
 }
 
-export type OCRProviderKind = 'mineru' | 'paddleocr';
+export type OCRProviderKind = 'mineru' | 'paddleocr' | 'rapidocr';
 
 export interface OCRProvider {
   id: string;

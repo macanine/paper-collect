@@ -383,6 +383,7 @@ const (
 const (
 	OCRKindMinerU    = "mineru"
 	OCRKindPaddleOCR = "paddleocr"
+	OCRKindRapidOCR  = "rapidocr"
 )
 
 // OCRProvider is one hosted document parser. The token is stored encrypted and never returned.

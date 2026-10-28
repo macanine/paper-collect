@@ -34,7 +34,7 @@
 | `replicas` | `Replica` | Blob×Provider 副本；唯一索引 `(blob_id, provider_id)`；`status` 索引；verification、分享字段、远端标识、`plan_mode` |
 | `storage_policies` | `Policy` | 单例 `id=1`；mode 与 `minimum_replicas` |
 | `ai_providers` | `AIProvider` | OpenAI 兼容端点；`enabled`、`priority` 索引；加密 API Key、`models_json`、默认/视觉模型 |
-| `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`，加密令牌，模型（PaddleOCR 默认 `PP-OCRv6`），启停与优先级 |
+| `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 默认 `PP-OCRv5`），启停与优先级 |
 | `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限；旧 MinerU 字段仅用于兼容迁移 |
 | `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、Markdown 路径、脱敏错误 |
 | `search_settings` | `SearchSettings` | 单例 `id=1`；索引开关、页数/批次上限、指定 provider/model |
@@ -74,7 +74,7 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 - `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；启动时把遗留 running 改回 pending。
 - `Replica.status`：pending → uploading → ready/failed；failed 可重试回 pending；分享状态独立为 pending/ready/unsupported/failed。
 - `MaterialAnalysis.status` 与 `MaterialIndexState.status`：pending/running/succeeded/failed。
-- `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 PaddleOCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
+- `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
 
 ## 3. 数据目录
 
@@ -89,6 +89,8 @@ DATA_DIR/
   analysis/<materialID>/document.md    识别用 Markdown（数据库存绝对路径）
   providers/<providerID>/...           本地存储端点的副本（按对象 key 分层）
 ```
+
+Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL 中间结果；它不保存页面图片，也不属于业务 `DATA_DIR`。OCR 成功写入 `material_texts` 后，业务侧不再依赖这些中间文件。
 
 - `DATABASE_DSN` 若指向 `DATA_DIR` 外的 SQLite 文件或 PostgreSQL，数据库不在上述默认位置；CAS/临时文件/分析 Markdown/本地副本仍在 `DATA_DIR`。
 - CAS 以内容 SHA-256 寻址；相同内容只存一份。`Publish` 用原子 rename 落盘，重复内容丢弃临时文件。

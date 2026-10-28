@@ -2,7 +2,7 @@
 
 版本 1.3.0 · 2026-10-28。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
 
-本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。
+本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。自建 RapidOCR 已在远端 Compose 用真实扫描 PDF 验证。
 
 ## 1. 系统定位
 
@@ -11,11 +11,11 @@
 - **归档**：PDF、DOC、DOCX、PPTX、文件夹和 ZIP；资料是一份逻辑文件，原件按 SHA-256 去重。
 - **存储**：本地、WebDAV、蓝奏云、123 云盘适配器；一个 Blob 可在多个端点各保存一份副本。
 - **编目**：学科、年级、学年、标签、角色和合集摆放；角色来自资料本身，不来自合集条目。
-- **AI**：可切换的 MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；建议必须人工应用。
+- **AI**：可切换的自建 RapidOCR、MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；建议必须人工应用。
 - **搜题**：索引任务把试卷切成题目并建立可移植倒排表，按题干文本检索并返回页码。
 - **Agent**：用受限 API Key 换取短期 JWT，再以单一 Bearer JWT 访问 REST 和 `/mcp` 只读工具。
 
-非目标：在线编辑文档、执行宏、病毒扫描、跨请求分片续传、云盘物理删除、本地 OCR、通用全文检索、跨资料同题聚合。
+非目标：在线编辑文档、执行宏、病毒扫描、跨请求分片续传、云盘物理删除、通用全文检索、跨资料同题聚合。
 
 ## 2. 技术栈
 
@@ -27,7 +27,7 @@
 | 前端 | React 19、Ant Design 6、React Router 8、TanStack Query 5、Vite 8 |
 | 前端语言/样式/测试 | TypeScript 7 strict、UnoCSS 66（Tailwind v4 兼容 preset）、Vitest 5 |
 | 运行形态 | 每实例一个 Go 进程：HTTP/MCP + 后台 worker；PostgreSQL 支持多实例；前端构建为 `web/dist` 静态文件，由同一进程从磁盘托管 |
-| 外部依赖 | OpenAI 兼容端点、MinerU v4/PaddleOCR 异步解析 API、各存储端点 |
+| 外部依赖 | OpenAI 兼容端点、MinerU v4/PaddleOCR 异步解析 API、各存储端点；RapidOCR 为 Compose 内自建依赖 |
 
 前端只使用 HTTP API，不直接访问数据库、本地文件或存储凭据。
 
@@ -47,7 +47,7 @@
 │                ├─ GORM ─────────── SQLite / PostgreSQL             │
 │                ├─ blob Store ───── DATA_DIR/blobs（CAS）           │
 │                ├─ storage ──────── local / webdav / lanzou / 123pan │
-│                └─ ai ─────── OpenAI 兼容 / MinerU / PaddleOCR        │
+│                └─ ai ─────── OpenAI / MinerU / PaddleOCR / RapidOCR  │
 │                                                                    │
 │ 按类型的有界 worker 池 ← jobs 表（pending + lease）                 │
 │   ├─ ingest / replicate / analyze / index                          │
@@ -56,7 +56,7 @@
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-没有消息队列、Redis 或独立 worker 服务。任务状态、重试、租约和启动恢复全部在数据库中完成。PostgreSQL 支持多实例领取；SQLite 仍是单实例。
+没有消息队列、Redis 或独立 worker 服务。任务状态、重试、租约和启动恢复全部在数据库中完成。PostgreSQL 支持多实例领取；SQLite 仍是单实例。Compose 额外运行一个 RapidOCR 内网服务，它只负责文件 OCR，不参与业务任务租约。
 
 ## 4. 代码分层
 
@@ -71,7 +71,7 @@
 | `internal/service` | 业务用例、事务、任务状态机、存储规划、AI 和检索 | 事务内使用传入的 `tx`；网络调用不放在数据库事务里 |
 | `internal/server` | Gin 路由、JSON envelope、鉴权/scope、DTO、MCP | 薄适配层；字段以 API.md 为准 |
 | `internal/storage` | 存储适配器和稳定错误分类 | 不依赖 GORM/HTTP 路由；远端对象只通过 `Adapter` 端口访问 |
-| `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU/PaddleOCR 解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
+| `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU/PaddleOCR/RapidOCR 解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
 | `internal/blob` | 本地 CAS、临时文件、文件签名嗅探 | 扩展名不是格式判定的唯一依据 |
 | `internal/archive` | ZIP 全量校验、编码还原、成员提取 | 先 `Inspect` 后 `Extract`；拒绝不安全包 |
 | `internal/auth` | JWT、密码哈希、refresh/API Key 原语、登录节流、角色 scope | 不在日志或响应中输出秘密 |
@@ -302,6 +302,9 @@ worker RunAnalyze
        PaddleOCR：multipart POST /api/v2/ocr/jobs（model=PP-OCRv6）
          → 轮询 /api/v2/ocr/jobs/{jobId}（默认 15 分钟）
          → 下载 resultUrl.jsonUrl JSONL，提取 rec_texts
+       RapidOCR：multipart POST /api/v1/ocr/jobs
+         → 轮询 /api/v1/ocr/jobs/{id}（默认 15 分钟）
+         → 下载 result_url JSONL，按页提取 texts
   → 写 material_texts（Markdown + 逐页文本）
   → 写 DATA_DIR/analysis/<materialID>/document.md（截断 2 MiB）
   → 按 max_pages/max_images 限制图片；图片只在内存中传给视觉模型
@@ -311,7 +314,7 @@ worker RunAnalyze
 ```
 
 - 自动分析只对非 ZIP 容器入队；ZIP 展开成员各自入队，避免对容器重复付费。
-- 分页/图片限制：`max_pages` 1..10，`max_images` 0..4；`max_pages` 限制送入视觉模型的页面图片数，OCR 仍解析全文；文本提示另有 12000 字符级别上限。PaddleOCR 不返回持久化页面图，因此视觉模型只收到文本。
+- 分页/图片限制：`max_pages` 1..10，`max_images` 0..4；`max_pages` 限制送入视觉模型的页面图片数，OCR 仍解析全文；文本提示另有 12000 字符级别上限。RapidOCR/PaddleOCR 不返回持久化页面图，因此视觉模型只收到文本。
 - `analysis_enabled` 只控制归档后的自动入队；手动触发不依赖它。
 - 图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。
 - 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。
@@ -490,7 +493,7 @@ DATA_DIR/
 - **恢复与领取**：SQLite 启动时将遗留 `running` 改回 `pending`；PostgreSQL 仅回收过期租约。worker 按类型领取 pending Job，`attempts` 递增。
 - **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index 由 `job_locks` 串行化，不同资料可并行。
 - **取消**：ingest/replicate/analyze 在进程 context 取消时回到 pending；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
-- **部署边界**：SQLite 单连接、单 writer、WAL，只支持单实例。PostgreSQL 支持多实例；内置 Compose 运行两个应用实例，并共享 `DATA_DIR`（CAS 与本地存储）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。
+- **部署边界**：SQLite 单连接、单 writer、WAL，只支持单实例。PostgreSQL 支持多实例；内置 Compose 运行两个应用实例，并共享 `DATA_DIR`（CAS 与本地存储）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。RapidOCR 容器与 PostgreSQL 一样只在 Compose 内网监听，不直接暴露公网；其默认 CPU 上限为 1 核，推理线程数为 1，避免 OCR 长时间挤占应用和数据库资源。
 - **增长**：`material_texts`、`question_terms`、`material_analyses`、`audits`、`jobs` 和孤儿 CAS 会持续增长；没有保留期/清理任务。`AutoMigrate` 不会删除旧表/旧列。
 - **迁移**：没有版本化 migration；升级前先备份，启动时由 `AutoMigrate` 增量建表/加列。已删除功能留下的表和列不会自动清理。
 
@@ -512,7 +515,7 @@ docker compose up -d
 
 覆盖范围：
 
-- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU/PaddleOCR 协议、搜索文本/高亮、迁移幂等。
+- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU/PaddleOCR/RapidOCR 协议、搜索文本/高亮、迁移幂等。
 - 后端集成测试（临时 SQLite + httptest 模拟上游）：上传→归档→ZIP 展开→合集→本地副本；恶意 ZIP 拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；Agent 单一 Bearer/MCP/撤销；未鉴权 401；删除级联。
 - 前端：typecheck、10 个测试文件 32 个用例、生产构建。
 - PostgreSQL 部署：`postgres:16-alpine` 一次性迁移、两个应用实例、Nginx 单端口网关均健康；旧 SQLite 的账号、资料、Blob、任务与设置已复制，登录、`/auth/me` 和资料列表实测成功。租约竞争自动化测试仍以临时 SQLite 执行，未在生产库注入合成任务。
@@ -520,7 +523,7 @@ docker compose up -d
 未验证（不得写成已通过）：
 
 - 真实蓝奏云、123 云盘、WebDAV 的联网上传/下载/分享；
-- 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；
+- 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；RapidOCR 已用真实扫描 PDF 验证，但尚未覆盖 Word/PPT 和大规模并发；
 - 浏览器逐页人工操作、真实 Agent 客户端、真实大文件/长文档；
 - 任务运行指标、租约告警与按上游配额动态限流。
 
@@ -529,10 +532,10 @@ docker compose up -d
 1. **多实例运维**：为各实例设置唯一 `WORKER_INSTANCE_ID`，共享 `DATA_DIR`，监控过期租约和任务失败率。
 2. **真实存储**：WebDAV/蓝奏需要真实端点联调；123 云盘在官方接口可核对前保持 unsupported，不应作为可上传端点启用。
 3. **远端删除/改名**：适配器没有删除接口；改名只同步本地副本。需要远端生命周期管理时另设能力与审计。
-4. **AI/索引质量**：真实试卷的 OCR 纠错、切题、页码准确率和大文件成本未系统验证；分析与索引可继续共享解析缓存。
+4. **AI/索引质量**：RapidOCR 已对真实 6 页扫描试卷完成识别，但 OCR 纠错、切题、页码准确率和大文件成本仍未系统验证；分析与索引可继续共享解析缓存。
 5. **数据治理**：缺少孤儿 CAS 清理、过期任务/缓存保留期和版本化迁移。
 6. **安全加固**：管理员可配置任意 http(s) 上游地址；未实现出站 SSRF 允许列表、全局 API 限流或密钥轮换流程。
-7. **产品能力**：不提供独立本地 OCR、通用全文检索、Office 转换、病毒扫描、跨请求分片断点续传、Range 下载、跨资料同题聚合。
+7. **产品能力**：不提供通用全文检索、Office 转换、病毒扫描、跨请求分片断点续传、Range 下载、跨资料同题聚合。
 8. **搜索设置**：目前只有 HTTP 接口，没有独立管理台页面；索引状态只使用 pending/running/succeeded/failed。
 
 ## 18. 文档关系

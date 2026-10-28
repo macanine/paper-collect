@@ -108,3 +108,16 @@ func TestPaddleOCRExtractProtocol(t *testing.T) {
 		t.Fatalf("submitted=%v polled=%v result=%+v", submitted, polled, result)
 	}
 }
+
+func TestPaddleOCRDefaultClientDoesNotOverrideJobDeadline(t *testing.T) {
+	client, err := NewPaddleOCR("https://paddleocr.example.com", "paddle-token", "PP-OCRv6", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.HTTP.Timeout != 0 {
+		t.Fatalf("default HTTP timeout=%s, want no client-wide timeout", client.HTTP.Timeout)
+	}
+	if client.Timeout != 15*time.Minute {
+		t.Fatalf("job timeout=%s, want 15m", client.Timeout)
+	}
+}

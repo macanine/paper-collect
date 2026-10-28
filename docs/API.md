@@ -202,10 +202,10 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `POST /ai/providers/{id}/probe`（ai:write）：使用已存密钥探测，只返回模型列表，**不修改**已保存的 models；需要保存列表时在 PATCH 请求中提交 models，200 `{"models":[],"count":0}`。
 - `POST /ai/providers/{id}/test`（ai:write）：请求 `{"model":""}`，空则用 default_model；发一次最小 chat，200 `{"healthy":true|false,"model":"...","message":"脱敏说明"}`。远端失败返回 healthy=false，不伪造成功。
 
-`OCRProvider`：`id,name(1..128),kind:mineru|paddleocr,base_url(http/https),model(<=200；PaddleOCR 默认 PP-OCRv6，MinerU 可为空),enabled:boolean,priority:integer(0..1000),token_configured:boolean,created_at,updated_at`。请求字段为 `{"name":"PaddleOCR","kind":"paddleocr","base_url":"https://paddleocr.aistudio-app.com","model":"PP-OCRv6","token":"...","enabled":true,"priority":10}`；`token` 只写不读，PATCH 省略保留、空串清除。kind 创建后不可修改；不提供物理删除，使用 `enabled=false` 停用。PaddleOCR token 从 [AI Studio PaddleOCR 任务页](https://aistudio.baidu.com/paddleocr/task) 获取。
+`OCRProvider`：`id,name(1..128),kind:mineru|paddleocr|rapidocr,base_url(http/https),model(<=200；PaddleOCR 默认 PP-OCRv6，RapidOCR 默认 PP-OCRv5，MinerU 可为空),enabled:boolean,priority:integer(0..1000),token_configured:boolean,created_at,updated_at`。请求字段为 `{"name":"RapidOCR（自建）","kind":"rapidocr","base_url":"http://rapidocr:9003","model":"PP-OCRv5","enabled":true,"priority":10}`；自建 RapidOCR 可以省略 `token`。外部 PaddleOCR/MinerU 的 `token` 只写不读，PATCH 省略保留、空串清除。kind 创建后不可修改；不提供物理删除，使用 `enabled=false` 停用。PaddleOCR token 从 [AI Studio PaddleOCR 任务页](https://aistudio.baidu.com/paddleocr/task) 获取。
 
 - `GET /ocr/providers`（ai:read）：200 OCRProvider 数组，按 priority 升序。
-- `POST /ocr/providers`（ai:write）：201 OCRProvider。缺少 `kind` 时按 paddleocr；PaddleOCR 缺少 model 时默认 `PP-OCRv6`。
+- `POST /ocr/providers`（ai:write）：201 OCRProvider。缺少 `kind` 时按 paddleocr；PaddleOCR 缺少 model 时默认 `PP-OCRv6`，RapidOCR 缺少 model 时默认 `PP-OCRv5`。
 - `PATCH /ocr/providers/{id}`（ai:write）：200 OCRProvider。
 - `POST /ocr/providers/{id}/test`（ai:write）：用已保存配置探测可达性与令牌；200 `{"healthy":boolean,"message":"脱敏说明"}`，不伪造成功。
 
@@ -215,7 +215,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `PUT /ai/settings`（ai:write）：请求完整设置，`ocr_provider_id` 可选：省略=保留，空串=清除选择；`mineru_token` 为旧 MinerU 兼容字段：省略=保留，空串=清除；200 AISettings。旧版仅提交 MinerU 字段的客户端会继续工作，并自动物化/更新 MinerU OCRProvider。
 - `POST /ai/mineru/test`（ai:write）：兼容旧客户端，实际测试当前选中的 OCR 服务商；200 `{"healthy":boolean,"message":"脱敏说明"}`。新客户端应使用 `POST /ocr/providers/{id}/test`。
 
-升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。
+升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
 
 `MaterialAnalysis`：`id,material_id,status:pending|running|succeeded|failed,provider_id,provider_name,model,page_count,image_count(恒为 0，页面图不落盘),confidence:number(0..1),suggestions:{title?,subject_codes?,grade?,academic_year?,role?,tags?},markdown_excerpt:string(<=4000),error:string,created_at,updated_at`。
 
@@ -223,7 +223,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `GET /materials/{id}/analysis`（materials:read）：200 MaterialAnalysis；尚无分析时返回 404 `not_found`。
 - `POST /materials/{id}/analysis/apply`（materials:write）：请求可覆盖白名单字段 `{"title":"","subject_codes":[],"grade":"","academic_year":0,"role":"","tags":[]}`，省略字段取建议值；显式提供的白名单字段也可覆盖或补充建议。应用前与资料 PATCH 使用同一套校验；200 更新后的 **Material + replicas**，不能修改 blob/状态/路径。写审计 `material.ai_apply`。
 
-分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验后写建议。模型输出永不自动应用。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或令牌时任务失败并给出明确原因，不伪造结果。PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
+分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验后写建议。模型输出永不自动应用。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
 
 Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `analyze`、`index`。
 

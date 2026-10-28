@@ -47,6 +47,11 @@ interface OCRFormValues {
 }
 
 const PROVIDER_PRESETS: Record<OCRProviderKind, Pick<OCRFormValues, 'name' | 'base_url' | 'model'>> = {
+  rapidocr: {
+    name: 'RapidOCR（自建）',
+    base_url: 'http://rapidocr:9003',
+    model: 'PP-OCRv5',
+  },
   paddleocr: {
     name: 'PaddleOCR',
     base_url: 'https://paddleocr.aistudio-app.com',
@@ -70,6 +75,7 @@ const EMPTY_PROVIDER: OCRFormValues = {
 const KIND_LABELS: Record<OCRProviderKind, string> = {
   paddleocr: 'PaddleOCR',
   mineru: 'MinerU',
+  rapidocr: 'RapidOCR',
 };
 
 export function AiSettingsPage() {
@@ -328,6 +334,7 @@ export function AiSettingsPage() {
             <Select
               disabled={Boolean(editingProvider)}
               options={[
+                { value: 'rapidocr', label: 'RapidOCR（自建）' },
                 { value: 'paddleocr', label: 'PaddleOCR' },
                 { value: 'mineru', label: 'MinerU' },
               ]}
@@ -357,12 +364,32 @@ export function AiSettingsPage() {
             <Input />
           </Form.Item>
           <Form.Item name="model" label="模型">
-            <Input placeholder={providerKind === 'paddleocr' ? 'PP-OCRv6' : 'MinerU 不需要模型名'} />
+            <Input
+              placeholder={
+                providerKind === 'paddleocr'
+                  ? 'PP-OCRv6'
+                  : providerKind === 'rapidocr'
+                    ? 'PP-OCRv5'
+                    : 'MinerU 不需要模型名'
+              }
+            />
           </Form.Item>
           <Form.Item
             name="token"
-            label={editingProvider?.token_configured ? '令牌（留空保留原令牌）' : '令牌'}
-            extra={providerKind === 'paddleocr' ? '在 AI Studio 的 PaddleOCR 任务页获取 access token。' : undefined}
+            label={
+              providerKind === 'rapidocr'
+                ? '令牌（自建服务可留空）'
+                : editingProvider?.token_configured
+                  ? '令牌（留空保留原令牌）'
+                  : '令牌'
+            }
+            extra={
+              providerKind === 'paddleocr'
+                ? '在 AI Studio 的 PaddleOCR 任务页获取 access token。'
+                : providerKind === 'rapidocr'
+                  ? '自建 RapidOCR 默认不校验令牌。'
+                  : undefined
+            }
           >
             <Input.Password autoComplete="new-password" />
           </Form.Item>

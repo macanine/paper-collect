@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -40,7 +41,9 @@ func NewPaddleOCR(baseURL, token, model string, client *http.Client) (*PaddleOCR
 		model = "PP-OCRv6"
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 120 * time.Second}
+		// Extract and Health impose operation-wide context deadlines. A client
+		// timeout here would also abort large uploads before the job deadline.
+		client = &http.Client{}
 	}
 	return &PaddleOCR{
 		BaseURL: normalized, Token: strings.TrimSpace(token), Model: model,
@@ -172,7 +175,7 @@ func (p *PaddleOCR) submit(ctx context.Context, filename string, data []byte) (s
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	res, err := p.HTTP.Do(req)
 	if err != nil {
-		return "", transportError(err)
+		return "", paddleTransportError(err, "上传")
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
@@ -207,7 +210,7 @@ func (p *PaddleOCR) poll(ctx context.Context, jobID string) (state, jsonURL, err
 	req.Header.Set("Authorization", "Bearer "+p.Token)
 	res, doErr := p.HTTP.Do(req)
 	if doErr != nil {
-		return "", "", "", transportError(doErr)
+		return "", "", "", paddleTransportError(doErr, "轮询")
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
@@ -242,7 +245,7 @@ func (p *PaddleOCR) downloadResult(ctx context.Context, jsonURL string) (Result,
 	}
 	res, err := p.HTTP.Do(req)
 	if err != nil {
-		return Result{}, transportError(err)
+		return Result{}, paddleTransportError(err, "下载结果")
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -371,6 +374,13 @@ func paddleStatusError(status int, body []byte, context string) error {
 		return paddleAPIError(payload.Code, payload.Msg)
 	}
 	return statusError(status, body, context)
+}
+
+func paddleTransportError(err error, action string) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return &APIError{Class: "timeout", Detail: "PaddleOCR " + action + "请求超时", Retryable: true}
+	}
+	return &APIError{Class: "unavailable", Detail: "无法连接 PaddleOCR 服务", Retryable: true}
 }
 
 func paddleAPIError(code int, message string) error {

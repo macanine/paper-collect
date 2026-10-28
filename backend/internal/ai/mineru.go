@@ -40,7 +40,9 @@ func NewMinerU(baseURL, token string, client *http.Client) (*MinerU, error) {
 		return nil, err
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 120 * time.Second}
+		// Extract and Health impose operation-wide context deadlines. A client
+		// timeout here would also abort large uploads before the job deadline.
+		client = &http.Client{}
 	}
 	return &MinerU{BaseURL: normalized, Token: strings.TrimSpace(token), HTTP: client, PollInterval: 3 * time.Second, Timeout: 15 * time.Minute}, nil
 }
