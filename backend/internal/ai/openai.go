@@ -59,10 +59,11 @@ func detectImageMIME(raw []byte) string {
 // OpenAI is a minimal OpenAI-compatible client. The base URL is the root that
 // contains /models and /chat/completions (usually ending in /v1).
 type OpenAI struct {
-	BaseURL   string
-	APIKey    string
-	HTTP      *http.Client
-	MaxTokens int // 0 leaves the upstream default
+	BaseURL         string
+	APIKey          string
+	HTTP            *http.Client
+	MaxTokens       int // 0 leaves the upstream default
+	ReasoningEffort string
 }
 
 // NewOpenAI validates the endpoint and returns a client with sane timeouts.
@@ -147,6 +148,9 @@ func (c *OpenAI) Chat(ctx context.Context, model string, messages []ChatMessage)
 	}
 	if c.MaxTokens > 0 {
 		payload["max_tokens"] = c.MaxTokens
+	}
+	if c.ReasoningEffort != "" {
+		payload["reasoning_effort"] = c.ReasoningEffort
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

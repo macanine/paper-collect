@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	searchPromptVersion = "qseg-v1"
-	maxQuestionRunes    = 8000
-	minQuestionRunes    = 5
-	maxSearchCandidates = 2000
-	searchLLMTimeout    = 180 * time.Second
+	searchPromptVersion   = "qseg-v1"
+	maxQuestionRunes      = 8000
+	minQuestionRunes      = 5
+	maxSearchCandidates   = 2000
+	searchLLMTimeout      = 180 * time.Second
+	searchMaxOutputTokens = 128_000
 )
 
 func defaultSearchSettings() model.SearchSettings {
@@ -482,7 +483,8 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	client.MaxTokens = 8192
+	client.MaxTokens = searchMaxOutputTokens
+	client.ReasoningEffort = "high"
 	batchPages := settings.BatchPages
 	if batchPages <= 0 {
 		batchPages = 10
