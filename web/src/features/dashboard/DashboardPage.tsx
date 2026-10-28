@@ -1,0 +1,377 @@
+import { useMemo, type ReactNode } from 'react';
+import { Alert, Button, Card, Space, Statistic, Table } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  AppstoreOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloudServerOutlined,
+  CloudUploadOutlined,
+  ExclamationCircleOutlined,
+  FileTextOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
+import { Link } from 'react-router';
+import type { Job, Material } from '../../shared/api/types';
+import { formatDateTime, shortId } from '../../shared/lib/format';
+import { STORAGE_MODE_LABELS } from '../../shared/lib/labels';
+import { usePolicy, useProviders } from '../storage/queries';
+import { InlineError } from '../../shared/ui/States';
+import { JobKindTag, JobStatusTag, MaterialStatusTag } from '../../shared/ui/StatusTags';
+import { useAuth } from '../auth/AuthContext';
+import {
+  useJobStatusCount,
+  useMaterialStatusCount,
+  useRecentJobs,
+  useRecentMaterials,
+} from './queries';
+
+const MATERIAL_COUNT_ITEMS = [
+  { key: 'archived', title: '已归档' },
+  { key: 'pending_storage', title: '待存储' },
+  { key: 'degraded', title: '降级' },
+] as const;
+
+export function DashboardPage() {
+  const { can } = useAuth();
+  const canMaterials = can('materials:read');
+  const canJobs = can('jobs:read');
+  const canStorage = can('storage:read');
+
+  const archived = useMaterialStatusCount('archived', canMaterials);
+  const pending = useMaterialStatusCount('pending_storage', canMaterials);
+  const degraded = useMaterialStatusCount('degraded', canMaterials);
+  const recentMaterials = useRecentMaterials(canMaterials);
+
+  const jobsPending = useJobStatusCount('pending', canJobs);
+  const jobsRunning = useJobStatusCount('running', canJobs);
+  const jobsFailed = useJobStatusCount('failed', canJobs);
+  const jobsSucceeded = useJobStatusCount('succeeded', canJobs);
+  const recentJobs = useRecentJobs(canJobs);
+
+  const providers = useProviders(canStorage);
+  const policy = usePolicy(canStorage);
+
+  const materialCounts = {
+    archived: archived.data?.total,
+    pending_storage: pending.data?.total,
+    degraded: degraded.data?.total,
+  };
+  const materialTotal = useMemo(() => {
+    const values = Object.values(materialCounts);
+    if (values.some((value) => value === undefined)) return undefined;
+    return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  }, [materialCounts]);
+
+  const problems: { label: string; error: unknown; retry: () => void }[] = [];
+  if (canMaterials) {
+    if (archived.error) problems.push({ label: '资料状态汇总', error: archived.error, retry: () => void archived.refetch() });
+    if (pending.error) problems.push({ label: '资料状态汇总', error: pending.error, retry: () => void pending.refetch() });
+    if (degraded.error) problems.push({ label: '资料状态汇总', error: degraded.error, retry: () => void degraded.refetch() });
+  }
+  if (canJobs) {
+    if (jobsPending.error) problems.push({ label: '任务汇总', error: jobsPending.error, retry: () => void jobsPending.refetch() });
+    if (jobsRunning.error) problems.push({ label: '任务汇总', error: jobsRunning.error, retry: () => void jobsRunning.refetch() });
+    if (jobsFailed.error) problems.push({ label: '任务汇总', error: jobsFailed.error, retry: () => void jobsFailed.refetch() });
+    if (jobsSucceeded.error) problems.push({ label: '任务汇总', error: jobsSucceeded.error, retry: () => void jobsSucceeded.refetch() });
+  }
+  if (canStorage) {
+    if (providers.error) problems.push({ label: '存储端点', error: providers.error, retry: () => void providers.refetch() });
+    if (policy.error) problems.push({ label: '存储策略', error: policy.error, retry: () => void policy.refetch() });
+  }
+
+  const providerStats = useMemo(() => {
+    const list = providers.data ?? [];
+    return {
+      enabled: list.filter((provider) => provider.enabled).length,
+      primary: list.filter((provider) => provider.enabled && provider.role === 'primary').length,
+      backup: list.filter((provider) => provider.enabled && provider.role === 'backup').length,
+      total: list.length,
+    };
+  }, [providers.data]);
+
+  const refreshAll = () => {
+    for (const problem of problems) problem.retry();
+    void recentMaterials.refetch();
+    void recentJobs.refetch();
+  };
+
+  const materialColumns: ColumnsType<Material> = [
+    {
+      title: '资料',
+      key: 'title',
+      render: (_: unknown, record) => (
+        <Link to={`/materials/${record.id}`} className="truncate font-medium">
+          {record.title}
+        </Link>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (status: Material['status']) => <MaterialStatusTag status={status} />,
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 160,
+      render: (value: string) => formatDateTime(value),
+    },
+  ];
+
+  const jobColumns: ColumnsType<Job> = [
+    {
+      title: '任务',
+      key: 'job',
+      render: (_: unknown, record) => (
+        <div className="flex items-center gap-2">
+          <Link to={`/jobs/${record.id}`} className="font-mono text-xs">
+            {shortId(record.id)}
+          </Link>
+          <JobKindTag kind={record.kind} />
+        </div>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 110,
+      render: (status: Job['status']) => <JobStatusTag status={status} />,
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 160,
+      render: (value: string) => formatDateTime(value),
+    },
+  ];
+
+  return (
+    <div className="page-stack">
+      <section className="dashboard-hero">
+        <div className="dashboard-hero__copy">
+          <span className="dashboard-hero__eyebrow">
+            <ClockCircleOutlined />
+            资料归档工作台
+          </span>
+          <h1>仪表盘</h1>
+          <p>集中查看资料归档、后台任务与存储端点的实时状态。</p>
+        </div>
+        <div className="dashboard-hero__actions">
+            {can('uploads:write') ? (
+              <Link to="/uploads/new">
+                <Button type="primary" icon={<CloudUploadOutlined />}>
+                  上传资料
+                </Button>
+              </Link>
+            ) : null}
+            {can('collections:write') ? (
+              <Link to="/collections">
+                <Button icon={<AppstoreOutlined />}>管理合集</Button>
+              </Link>
+            ) : null}
+            <Button icon={<ReloadOutlined />} onClick={refreshAll}>
+              刷新
+            </Button>
+        </div>
+      </section>
+
+      {problems.length > 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="部分数据加载失败"
+          action={
+            <Button size="small" onClick={refreshAll}>
+              重试
+            </Button>
+          }
+        />
+      ) : null}
+
+      {canMaterials ? (
+        <section>
+          <div className="section-heading">
+            <span className="section-heading__title">资料概览</span>
+            <span className="section-heading__meta">按归档状态统计</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <CountCard
+              title="资料总数"
+              value={materialTotal}
+              loading={archived.isPending || pending.isPending || degraded.isPending}
+              icon={<FileTextOutlined />}
+              footer="全部逻辑文件"
+            />
+            {MATERIAL_COUNT_ITEMS.map((item) => (
+              <CountCard
+                key={item.key}
+                title={item.title}
+                value={materialCounts[item.key]}
+                icon={
+                  item.key === 'archived' ? (
+                    <CheckCircleOutlined />
+                  ) : item.key === 'pending_storage' ? (
+                    <ClockCircleOutlined />
+                  ) : (
+                    <ExclamationCircleOutlined />
+                  )
+                }
+                tone={item.key === 'archived' ? 'success' : item.key === 'pending_storage' ? 'warning' : 'error'}
+                footer={
+                  item.key === 'archived'
+                    ? '已完成副本写入'
+                    : item.key === 'pending_storage'
+                      ? '等待存储任务处理'
+                      : '部分副本不可用'
+                }
+                loading={
+                  item.key === 'archived' ? archived.isPending : item.key === 'pending_storage' ? pending.isPending : degraded.isPending
+                }
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {canJobs ? (
+        <section>
+          <div className="section-heading">
+            <span className="section-heading__title">任务队列</span>
+            <span className="section-heading__meta">后台 worker 运行状态</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <CountCard title="排队中" value={jobsPending.data?.total} icon={<ClockCircleOutlined />} footer="等待 worker 领取" loading={jobsPending.isPending} />
+            <CountCard title="执行中" value={jobsRunning.data?.total} icon={<ReloadOutlined />} footer="正在处理" loading={jobsRunning.isPending} />
+            <CountCard title="失败" value={jobsFailed.data?.total} icon={<ExclamationCircleOutlined />} tone="error" footer="需要人工检查" loading={jobsFailed.isPending} />
+            <CountCard title="已完成" value={jobsSucceeded.data?.total} icon={<CheckCircleOutlined />} tone="success" footer="累计成功任务" loading={jobsSucceeded.isPending} />
+          </div>
+        </section>
+      ) : null}
+
+      {canStorage ? (
+        <section>
+          <div className="section-heading">
+            <span className="section-heading__title">存储运行状态</span>
+            <span className="section-heading__meta">端点与副本策略</span>
+          </div>
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <Space size={32} wrap>
+                <Statistic title="启用的端点" value={providerStats.enabled} suffix={`/ ${providerStats.total}`} />
+                <Statistic title="主端" value={providerStats.primary} />
+                <Statistic title="备端" value={providerStats.backup} />
+                <Statistic
+                  title="副本策略"
+                  value={policy.data ? STORAGE_MODE_LABELS[policy.data.mode] : policy.isPending ? '加载中…' : '—'}
+                  suffix={policy.data ? `（最低 ${policy.data.minimum_replicas} 份）` : undefined}
+                />
+              </Space>
+              <Link to="/storage">
+                <Button icon={<CloudServerOutlined />}>存储设置</Button>
+              </Link>
+            </div>
+          </Card>
+        </section>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {canMaterials ? (
+          <Card
+            title="最近资料"
+            extra={
+              <Link to="/materials">
+                <Button size="small" type="link">
+                  全部资料
+                </Button>
+              </Link>
+            }
+          >
+            {recentMaterials.error ? (
+              <div className="flex flex-col gap-2">
+                <InlineError error={recentMaterials.error} />
+                <Button size="small" onClick={() => void recentMaterials.refetch()}>
+                  重试
+                </Button>
+              </div>
+            ) : (
+              <Table<Material>
+                rowKey="id"
+                size="small"
+                columns={materialColumns}
+                dataSource={recentMaterials.data?.items ?? []}
+                loading={recentMaterials.isPending}
+                pagination={false}
+                locale={{ emptyText: '暂无资料' }}
+              />
+            )}
+          </Card>
+        ) : null}
+
+        {canJobs ? (
+          <Card
+            title="最近任务"
+            extra={
+              <Link to="/jobs">
+                <Button size="small" type="link">
+                  全部任务
+                </Button>
+              </Link>
+            }
+          >
+            {recentJobs.error ? (
+              <div className="flex flex-col gap-2">
+                <InlineError error={recentJobs.error} />
+                <Button size="small" onClick={() => void recentJobs.refetch()}>
+                  重试
+                </Button>
+              </div>
+            ) : (
+              <Table<Job>
+                rowKey="id"
+                size="small"
+                columns={jobColumns}
+                dataSource={recentJobs.data?.items ?? []}
+                loading={recentJobs.isPending}
+                pagination={false}
+                locale={{ emptyText: '暂无任务' }}
+              />
+            )}
+          </Card>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function CountCard({
+  title,
+  value,
+  loading = false,
+  icon,
+  tone = 'primary',
+  footer,
+}: {
+  title: string;
+  value: number | string | undefined;
+  loading?: boolean;
+  icon?: ReactNode;
+  tone?: 'primary' | 'success' | 'warning' | 'error';
+  footer?: string;
+}) {
+  return (
+    <Card className="metric-card" loading={loading}>
+      <div className="metric-card__top">
+        <span className="metric-card__label">{title}</span>
+        {icon ? <span className={`metric-card__icon is-${tone}`}>{icon}</span> : null}
+      </div>
+      <div className="metric-card__value">{value ?? '—'}</div>
+      {footer ? <div className="metric-card__footer">{footer}</div> : null}
+    </Card>
+  );
+}
