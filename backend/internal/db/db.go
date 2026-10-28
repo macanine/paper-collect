@@ -105,6 +105,9 @@ func CopyModels(source, target *gorm.DB) error {
 	return target.Transaction(func(tx *gorm.DB) error {
 		for _, value := range model.Models() {
 			typ := reflect.TypeOf(value).Elem()
+			if !source.Migrator().HasTable(value) {
+				continue
+			}
 			rows := reflect.New(reflect.SliceOf(typ)).Interface()
 			if err := source.Find(rows).Error; err != nil {
 				return fmt.Errorf("读取 %s: %w", typ.Name(), err)

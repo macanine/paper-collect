@@ -141,7 +141,7 @@ export function AiSettingsPage() {
       kind,
       base_url: preset.base_url,
       model: preset.model,
-      ...(kind === 'paddleocr' ? { name: preset.name } : {}),
+      name: preset.name,
     });
   };
 
