@@ -1,6 +1,6 @@
 # 高中资料归档系统技术架构
 
-版本 1.1.0 · 2026-10-28。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
+版本 1.2.0 · 2026-10-28。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
 
 本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、模型网关或 PostgreSQL 的联调结论。
 
@@ -13,7 +13,7 @@
 - **编目**：学科、年级、学年、标签、角色和合集摆放；角色来自资料本身，不来自合集条目。
 - **AI**：MinerU 解析文档，OpenAI 兼容模型生成编目建议；建议必须人工应用。
 - **搜题**：索引任务把试卷切成题目并建立可移植倒排表，按题干文本检索并返回页码。
-- **Agent**：受限 API Key + JWT 双凭据访问 REST 和 `/mcp` 只读工具。
+- **Agent**：用受限 API Key 换取短期 JWT，再以单一 Bearer JWT 访问 REST 和 `/mcp` 只读工具。
 
 非目标：在线编辑文档、执行宏、病毒扫描、跨请求分片续传、云盘物理删除、本地 OCR、通用全文检索、跨资料同题聚合。
 
@@ -39,7 +39,7 @@
   ▼
 ┌──────────────── 单个 Go 进程 ─────────────────────────────────────┐
 │ Gin Router                                                         │
-│  ├─ 认证 / scope / Agent 双凭据                                    │
+│  ├─ 认证 / scope / Agent JWT                                      │
 │  ├─ REST handlers ──┐                                              │
 │  └─ MCP JSON-RPC ───┤                                              │
 │                     ▼                                              │
@@ -105,7 +105,7 @@ web/src/
 请求
  → request_id 中间件（UUID，写响应头 X-Request-ID）
  → panic 恢复（500 envelope）
- → auth 中间件（Bearer；Agent 还需 X-API-Key）
+ → auth 中间件（Bearer JWT）
  → requireScope / rejectAgent / agentOnly
  → handler（严格 JSON 解码、参数校验）
  → service（业务/事务）
@@ -116,15 +116,15 @@ web/src/
 - JSON 请求体上限 1 MiB；未知字段、非对象根、尾随数据、非声明字段的 `null` 会被拒绝。
 - `NoRoute` 对非 API 的 GET/HEAD 从 `WEB_DIST` 提供 SPA，找不到文件时回退 `index.html`；API 路径返回 JSON 404。
 - HTTP 服务器设置 `ReadHeaderTimeout=10s`、`IdleTimeout=120s`，没有设置全局 Read/WriteTimeout；长文件通过流式接口和适配器超时控制，而不是整体写超时。
-- MCP 走同一个 auth 中间件，但 `agentOnly` 要求 API Key 代理双凭据；`GET/PUT/DELETE /mcp` 返回 405。
+- MCP 走同一个 auth 中间件，但 `agentOnly` 只接受代理 JWT；`GET/PUT/DELETE /mcp` 返回 405。
 
 ### 5.2 凭据
 
 | 调用方 | 凭据 | 校验 |
 | --- | --- | --- |
 | 浏览器 | 用户名/口令 → 15 分钟 access JWT + 7 天 refresh token | JWT HS256，固定 issuer/audience；每次请求查 Session/User |
-| Agent | `X-API-Key: pc_<id>.<secret>` → 15 分钟 JWT（`key_id`） | 调 REST/MCP 时同时提交 Bearer JWT 与同一 `X-API-Key`；每次请求查 Key/User |
-| MCP | 只接受 Agent 双凭据 | 无浏览器会话、无 SSE、无 session id |
+| Agent | `X-API-Key: pc_<id>.<secret>` → 15 分钟 JWT（`key_id`），后续只用 Bearer JWT | JWT HS256；每次请求按 `key_id` 查 Key/User 状态，撤销/过期立即失效 |
+| MCP | 只接受代理 Bearer JWT | 无浏览器会话、无 SSE、无 session id |
 
 - 角色：`admin`（全部 scope）、`editor`（资料/合集写、上传、任务读）、`viewer`（资料/合集/任务读）。
 - Agent scope 是“用户角色 scope ∩ 密钥 scope”，且永远不能包含 `keys:manage`、`users:manage`、`ai:read`、`ai:write`；AI 与搜索设置接口另行拒绝 Agent。
@@ -354,7 +354,7 @@ RunIndex
 
 `POST /mcp` 是无状态 Streamable HTTP 的 JSON 子集：
 
-- 必须 API Key 代理双凭据；`Content-Type: application/json`；服务端不强制校验 Accept，成功响应为 `application/json`，不提供 SSE。
+- 只接受代理 Bearer JWT；`Content-Type: application/json`；服务端不强制校验 Accept，成功响应为 `application/json`，不提供 SSE。
 - 单条 JSON-RPC 2.0；不支持 batch、SSE、session id。
 - `initialize` 协商 2025-03-26 / 2025-06-18 / 2025-11-25；`notifications/initialized` 返回 202；`ping` 返回 `{}`；`tools/list` 按当前 scope 过滤；`tools/call` 再次检查权限。
 - 工具：
@@ -504,7 +504,7 @@ DATA_DIR/
 覆盖范围：
 
 - 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU 协议、搜索文本/高亮、迁移幂等。
-- 后端集成测试（临时 SQLite + httptest 模拟上游）：上传→归档→ZIP 展开→合集→本地副本；恶意 ZIP 拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；MCP 双凭据/撤销；未鉴权 401；删除级联。
+- 后端集成测试（临时 SQLite + httptest 模拟上游）：上传→归档→ZIP 展开→合集→本地副本；恶意 ZIP 拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；Agent 单一 Bearer/MCP/撤销；未鉴权 401；删除级联。
 - 前端：typecheck、10 个测试文件 32 个用例、生产构建。
 
 未验证（不得写成已通过）：

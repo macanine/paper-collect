@@ -1,6 +1,6 @@
 # HTTP API v1 接口合同
 
-版本 1.1.0 · 2026-10-28。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+版本 1.2.0 · 2026-10-28。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
 
 ## 通用规范
 
@@ -10,7 +10,7 @@
 - 写接口拒绝非法 JSON、未知字段、不支持的枚举、越界值。PATCH 是部分更新：省略=不改，空数组=清空，禁止 null（允许 null 的字段另写）。请求 JSON 默认 1 MiB。
 - HTTP：200 读取/更新；201 创建；202 任务已入队；204 删除/通知；400 格式错误；401 凭据无效；403 权限不足；404 不存在；409 状态冲突/重复路径；413 超尺寸；415 不支持类型；422 文件内容与声明不一致；429 登录频率限制；503 暂不可用。
 - GET /healthz 无鉴权返回 `{"status":"ok"}`。所有业务接口强制鉴权，仅 auth/login、auth/refresh、auth/agent-token 例外。
-- 浏览器：`Authorization: Bearer <access_token>`。Agent：相同 Authorization **且** `X-API-Key: pc_<id>.<secret>`。浏览器无需全局共享密钥。MCP 必须为 Agent 双凭据。
+- 浏览器与 Agent 的后续 REST/MCP 请求统一使用 `Authorization: Bearer <access_token>`，不需要再提交 API Key。Agent 仅在换取 JWT 时提交一次 `X-API-Key: pc_<id>.<secret>`。MCP 仅接受代理 JWT。
 - 角色：admin（全部）、editor（资料/合集写、上传、任务读）、viewer（资料/合集/任务读）。scope 包括 materials、collections、uploads、jobs、storage、keys、users、audit、ai 和 search 对应的读写或管理权限。Agent scopes 必须为用户权限子集，禁止 keys:manage、users:manage、ai:read、ai:write；搜索设置接口也拒绝 Agent。每次请求重新检查用户和密钥是否有效。
 
 ## 数据字典
@@ -47,11 +47,11 @@ JSON `{"refresh_token":"opaque"}`。204；注销关联会话，同时使其 acce
 
 ### POST /auth/agent-token（X-API-Key）
 
-无需请求体。200 data=`{"access_token":"JWT","expires_in":900}`。JWT 带 key_id；该令牌访问 REST/MCP 时仍必须附带同一密钥。过期/撤销/禁用用户均 401。
+无需请求体。200 data=`{"access_token":"JWT","expires_in":900}`。JWT 带 key_id；后续 REST/MCP 只提交该 Bearer JWT，不再提交 `X-API-Key`。每次请求会按 key_id 重查密钥撤销/过期状态与用户启用状态，因此密钥撤销或禁用用户后，已签发 JWT 立即 401。JWT 最长 15 分钟。
 
 ### GET /auth/me（JWT）
 
-200 data=User。Agent 同样要求双凭据。
+200 data=User。Agent 同样只使用 Bearer JWT。
 
 ### GET /users · POST /users（users:manage，禁止 Agent）
 
@@ -236,7 +236,7 @@ Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `anal
 
 ## MCP
 
-`POST /mcp`：必须双凭据；`Content-Type: application/json`。服务端不强制校验 `Accept`；成功响应为 `application/json`，不提供 SSE。JSON-RPC 2.0 单条消息，batch 不支持。`initialize` 请求 protocolVersion 支持 2025-03-26、2025-06-18、2025-11-25，响应回协商版本、serverInfo、capabilities.tools；`notifications/initialized` 返回 202，无响应体；`ping` result={}；tools/list 根据当前 scope 过滤；tools/call 必须二次检查权限。GET /mcp=405，不发 session id，属于无状态 Streamable HTTP 的 JSON 子集。
+`POST /mcp`：仅接受代理 Bearer JWT；`Content-Type: application/json`。服务端不强制校验 `Accept`；成功响应为 `application/json`，不提供 SSE。JSON-RPC 2.0 单条消息，batch 不支持。`initialize` 请求 protocolVersion 支持 2025-03-26、2025-06-18、2025-11-25，响应回协商版本、serverInfo、capabilities.tools；`notifications/initialized` 返回 202，无响应体；`ping` result={}；tools/list 根据当前 scope 过滤；tools/call 必须二次检查权限。GET /mcp=405，不发 session id，属于无状态 Streamable HTTP 的 JSON 子集。
 
 工具与入参：`materials_search{q?:string,subject?:string,page?:integer,page_size?:integer}`、`materials_get{id:string}`、`questions_search{query:string,subject?:string,grade?:string,limit?:integer}`、`collections_list{q?:string,page?:integer,page_size?:integer}`、`collections_get{id:string}`、`jobs_get{id:string}`。工具 schema additionalProperties=false；缺少/未知/类型错误参数和校验错误返回 -32602。`questions_search` 使用 materials:read，limit 1..50，返回题目文本、页码和原资料，不返回高亮/合集字段。JSON-RPC 错误 -32700 解析失败、-32600 请求非法、-32601 方法未知、-32602 参数非法；领域失败返回 content=[{type:"text",text:"错误说明"}]、isError=true。成功 content 是 JSON 序列化文本。不得接受任意 HTTP URL/文件路径来代替资料 ID，不允许工具绕过 HTTP 授权。
 
@@ -244,8 +244,8 @@ Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `anal
 
 ```sh
 curl -X POST http://127.0.0.1:8080/api/v1/auth/agent-token -H 'X-API-Key: pc_<id>.<secret>'
-curl http://127.0.0.1:8080/api/v1/materials -H 'Authorization: Bearer <JWT>' -H 'X-API-Key: pc_<id>.<secret>'
-curl -X POST http://127.0.0.1:8080/mcp -H 'Authorization: Bearer <JWT>' -H 'X-API-Key: pc_<id>.<secret>' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"materials_search","arguments":{"subject":"math"}}}'
+curl http://127.0.0.1:8080/api/v1/materials -H 'Authorization: Bearer <JWT>'
+curl -X POST http://127.0.0.1:8080/mcp -H 'Authorization: Bearer <JWT>' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"materials_search","arguments":{"subject":"math"}}}'
 ```
 
 ## 版本与扩展约定

@@ -22,7 +22,8 @@ const (
 )
 
 // AccessClaims are the claims of access tokens. SessionID is set for browser
-// tokens; KeyID is set for agent tokens and must match the X-API-Key presented with them.
+// tokens; KeyID identifies the API key backing an agent token and is rechecked
+// against its current revocation, expiry and user state on every request.
 type AccessClaims struct {
 	SessionID string `json:"sid,omitempty"`
 	KeyID     string `json:"key_id,omitempty"`

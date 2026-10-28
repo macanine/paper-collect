@@ -171,10 +171,9 @@ func (s *Service) AgentToken(ctx context.Context, apiKey string) (string, error)
 	return token, nil
 }
 
-// Authenticate resolves the caller of a request from its bearer token and optional API key.
-// Agent tokens require the matching X-API-Key; browser tokens reject any X-API-Key.
+// Authenticate resolves the caller from an access JWT.
 // Every call re-checks user, session and key state, so revocation is immediate.
-func (s *Service) Authenticate(ctx context.Context, bearer, apiKey string) (auth.Principal, error) {
+func (s *Service) Authenticate(ctx context.Context, bearer string) (auth.Principal, error) {
 	unauth := apperr.Unauthorized("凭据无效或已过期")
 	claims, err := s.signer.Parse(bearer)
 	if err != nil {
@@ -183,15 +182,12 @@ func (s *Service) Authenticate(ctx context.Context, bearer, apiKey string) (auth
 	db := s.db.WithContext(ctx)
 
 	if claims.KeyID != "" {
-		if apiKey == "" {
-			return auth.Principal{}, apperr.Unauthorized("代理令牌必须同时提供 X-API-Key")
-		}
-		id, secret, err := auth.ParseAPIKey(apiKey)
-		if err != nil || id != claims.KeyID {
+		key, err := s.activeAPIKey(ctx, claims.KeyID)
+		if err != nil || key.UserID != claims.Subject {
 			return auth.Principal{}, unauth
 		}
-		key, user, err := s.resolveAPIKey(ctx, id, secret)
-		if err != nil || user.ID != claims.Subject {
+		user, err := s.enabledUser(ctx, key.UserID)
+		if err != nil {
 			return auth.Principal{}, unauth
 		}
 		return auth.Principal{
@@ -203,7 +199,7 @@ func (s *Service) Authenticate(ctx context.Context, bearer, apiKey string) (auth
 		}, nil
 	}
 
-	if apiKey != "" || claims.SessionID == "" {
+	if claims.SessionID == "" {
 		return auth.Principal{}, unauth
 	}
 	var sess model.Session
@@ -213,8 +209,8 @@ func (s *Service) Authenticate(ctx context.Context, bearer, apiKey string) (auth
 	if sess.Revoked || !s.now().Before(sess.ExpiresAt) || sess.UserID != claims.Subject {
 		return auth.Principal{}, unauth
 	}
-	var user model.User
-	if err := db.Where("id = ?", sess.UserID).First(&user).Error; err != nil || !user.Enabled {
+	user, err := s.enabledUser(ctx, sess.UserID)
+	if err != nil {
 		return auth.Principal{}, unauth
 	}
 	return auth.Principal{
@@ -238,25 +234,42 @@ func (s *Service) Me(ctx context.Context, p auth.Principal) (model.User, error) 
 // resolveAPIKey checks revocation, expiry, the secret hash and the owner's state.
 func (s *Service) resolveAPIKey(ctx context.Context, id, secret string) (model.APIKey, model.User, error) {
 	unauth := apperr.Unauthorized("API Key 无效")
-	db := s.db.WithContext(ctx)
-	var key model.APIKey
-	if err := db.Where("id = ?", id).First(&key).Error; err != nil {
-		return model.APIKey{}, model.User{}, unauth
-	}
-	if key.Revoked {
-		return model.APIKey{}, model.User{}, unauth
-	}
-	if key.ExpiresAt != nil && !s.now().Before(*key.ExpiresAt) {
+	key, err := s.activeAPIKey(ctx, id)
+	if err != nil {
 		return model.APIKey{}, model.User{}, unauth
 	}
 	if subtle.ConstantTimeCompare([]byte(auth.HashToken(secret)), []byte(key.SecretHash)) != 1 {
 		return model.APIKey{}, model.User{}, unauth
 	}
-	var user model.User
-	if err := db.Where("id = ?", key.UserID).First(&user).Error; err != nil || !user.Enabled {
+	user, err := s.enabledUser(ctx, key.UserID)
+	if err != nil {
 		return model.APIKey{}, model.User{}, unauth
 	}
 	return key, user, nil
+}
+
+func (s *Service) activeAPIKey(ctx context.Context, id string) (model.APIKey, error) {
+	unauth := apperr.Unauthorized("API Key 无效")
+	db := s.db.WithContext(ctx)
+	var key model.APIKey
+	if err := db.Where("id = ?", id).First(&key).Error; err != nil {
+		return model.APIKey{}, unauth
+	}
+	if key.Revoked {
+		return model.APIKey{}, unauth
+	}
+	if key.ExpiresAt != nil && !s.now().Before(*key.ExpiresAt) {
+		return model.APIKey{}, unauth
+	}
+	return key, nil
+}
+
+func (s *Service) enabledUser(ctx context.Context, id string) (model.User, error) {
+	var user model.User
+	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&user).Error; err != nil || !user.Enabled {
+		return model.User{}, apperr.Unauthorized("凭据无效或已过期")
+	}
+	return user, nil
 }
 
 func (s *Service) browserPair(user model.User, sessionID, refresh string) (TokenPair, error) {

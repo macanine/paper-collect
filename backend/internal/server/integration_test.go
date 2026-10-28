@@ -295,7 +295,7 @@ func TestMaliciousZipFailsJobWithoutPublishing(t *testing.T) {
 	}
 }
 
-func TestAgentDoubleCredentialAndRevocation(t *testing.T) {
+func TestAgentBearerAndRevocation(t *testing.T) {
 	env := newEnv(t)
 
 	status, body := env.do(t, http.MethodPost, "/mcp", map[string]any{
@@ -338,16 +338,15 @@ func TestAgentDoubleCredentialAndRevocation(t *testing.T) {
 	}
 
 	rpc := map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
-	status, body = env.do(t, http.MethodPost, "/mcp", rpc, map[string]string{
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials", nil, map[string]string{
 		"Authorization": "Bearer " + agentBody.Data.AccessToken,
 	})
-	if status != http.StatusUnauthorized {
-		t.Fatalf("missing X-API-Key must be rejected: %d %s", status, body)
+	if status != http.StatusOK {
+		t.Fatalf("agent JWT must authenticate REST without X-API-Key: %d %s", status, body)
 	}
 
 	status, body = env.do(t, http.MethodPost, "/mcp", rpc, map[string]string{
 		"Authorization": "Bearer " + agentBody.Data.AccessToken,
-		"X-API-Key":     apiKey,
 	})
 	if status != http.StatusOK || !strings.Contains(string(body), "materials_search") {
 		t.Fatalf("MCP tools/list failed: %d %s", status, body)
@@ -359,7 +358,6 @@ func TestAgentDoubleCredentialAndRevocation(t *testing.T) {
 	}
 	status, _ = env.do(t, http.MethodPost, "/mcp", rpc, map[string]string{
 		"Authorization": "Bearer " + agentBody.Data.AccessToken,
-		"X-API-Key":     apiKey,
 	})
 	if status != http.StatusUnauthorized {
 		t.Fatalf("revoked key must be rejected immediately, got %d", status)

@@ -95,7 +95,7 @@ ZIP 会保留原件并展开支持的成员；文件夹保留相对路径；文�
 ## 鉴权
 
 - 浏览器：用户名口令登录，得到 15 分钟 JWT 与可轮换 refresh token。
-- Agent：管理员创建 API Key（仅创建时显示一次），用 `X-API-Key` 换取绑定该密钥的 JWT；调用 REST 或 `/mcp` 时必须同时提交 `Authorization: Bearer <JWT>` 与 `X-API-Key`。撤销密钥或用户后立即失效。
+- Agent：管理员创建 API Key（仅创建时显示一次），用 `X-API-Key` 换取绑定该密钥的 15 分钟 JWT；后续调用 REST 或 `/mcp` 只提交 `Authorization: Bearer <JWT>`，无需重复提交 API Key。每次请求会回查密钥和用户状态，撤销密钥或禁用用户后立即失效。
 - MCP：`POST /mcp`，无状态 JSON-RPC（initialize / tools/list / tools/call），提供资料、合集、任务与搜题只读工具（`materials_search`、`materials_get`、`questions_search`、`collections_list`、`collections_get`、`jobs_get`）。
 
 ## 测试
@@ -105,7 +105,7 @@ ZIP 会保留原件并展开支持的成员；文件夹保留相对路径；文�
 (cd web && npm run typecheck && npm test && npm run build)
 ```
 
-后端集成测试使用临时 SQLite 与模拟上游，覆盖直传单文件/文件夹/ZIP、恶意 ZIP 拒绝、上传→归档→ZIP 展开→合集→本地副本、AI 分析与索引共享解析、MCP 双凭据/撤销、未鉴权 401。前端测试覆盖清单路径/大小/格式、上传默认值与直传载荷、搜题高亮、AI 格式/权限、存储字段表与 API envelope。
+后端集成测试使用临时 SQLite 与模拟上游，覆盖直传单文件/文件夹/ZIP、恶意 ZIP 拒绝、上传→归档→ZIP 展开→合集→本地副本、AI 分析与索引共享解析、Agent 单一 Bearer/MCP/撤销、未鉴权 401。前端测试覆盖清单路径/大小/格式、上传默认值与直传载荷、搜题高亮、AI 格式/权限、存储字段表与 API envelope。
 
 ## 当前能力边界
 

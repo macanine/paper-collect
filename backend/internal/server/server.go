@@ -153,12 +153,11 @@ func methodNotAllowed(c *gin.Context) {
 func (s *Server) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bearer := bearerToken(c)
-		apiKey := strings.TrimSpace(c.GetHeader("X-API-Key"))
 		if bearer == "" {
 			respondError(c, apperr.Unauthorized("凭据无效或已过期"))
 			return
 		}
-		p, err := s.svc.Authenticate(c.Request.Context(), bearer, apiKey)
+		p, err := s.svc.Authenticate(c.Request.Context(), bearer)
 		if err != nil {
 			respondError(c, err)
 			return
@@ -194,7 +193,7 @@ func (s *Server) requireScope(scope string) gin.HandlerFunc {
 func (s *Server) agentOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !principal(c).IsAgent() {
-			respondError(c, apperr.Forbidden("MCP 仅支持 API Key 代理双凭据"))
+			respondError(c, apperr.Forbidden("MCP 仅支持代理令牌"))
 			return
 		}
 		c.Next()
