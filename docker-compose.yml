@@ -1,0 +1,33 @@
+name: paper-collect
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: paper-collect:local
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-2033}:8080"
+    environment:
+      ADDR: ":8080"
+      DATA_DIR: /app/data
+      WEB_DIST: /app/web
+      DATABASE_DRIVER: sqlite
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请在 .env 设置 ADMIN_PASSWORD}"
+      JWT_SECRET: "${JWT_SECRET:?请在 .env 设置 JWT_SECRET}"
+      MASTER_KEY: "${MASTER_KEY:?请在 .env 设置 MASTER_KEY}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - paper-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 15s
+
+volumes:
+  paper-data:

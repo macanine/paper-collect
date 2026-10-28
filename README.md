@@ -40,6 +40,21 @@ export MASTER_KEY='<替换为已保存的 MASTER_KEY>'
 
 后端终端先按上面设置环境变量，再从项目根目录执行 `(cd backend && go run ./cmd/server)`。另一个终端执行 `cd web && npm run dev`，打开 <http://127.0.0.1:5173>；Vite 将 `/api` 与 `/mcp` 代理到 `127.0.0.1:8080`。
 
+### Docker Compose（单容器、单端口）
+
+Docker 镜像会先构建前端，再由 Go 服务同时托管页面、REST API 和 MCP，只暴露一个端口。数据保存在 `paper-data` 命名卷中。
+
+```bash
+cp .env.example .env
+# 编辑 .env，设置 ADMIN_PASSWORD、JWT_SECRET 和 MASTER_KEY
+docker compose up -d --build
+curl http://127.0.0.1:2033/healthz
+```
+
+默认访问 <http://127.0.0.1:2033>。可用 `APP_PORT` 修改宿主机端口；容器内部始终监听 `8080`。查看日志使用 `docker compose logs -f app`。
+
+首次保存的 `JWT_SECRET` 与 `MASTER_KEY` 必须保留；更换 `MASTER_KEY` 会导致已保存的云盘、模型和 MinerU 凭据无法解密。
+
 ## 配置
 
 | 变量 | 默认 | 说明 |
