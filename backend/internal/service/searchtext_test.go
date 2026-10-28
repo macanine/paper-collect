@@ -2,9 +2,12 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nic/paper-collect/backend/internal/ai"
 )
 
 func TestNormalizeAndTerms(t *testing.T) {
@@ -66,6 +69,34 @@ func TestSplitIndexBatchForRetrySplitsDenseSinglePage(t *testing.T) {
 func TestSplitIndexBatchForRetryKeepsSmallSinglePage(t *testing.T) {
 	if _, ok := splitIndexBatchForRetry([]pageText{{PageNo: 1, Text: "短题目"}}); ok {
 		t.Fatal("small single page should be retried without splitting")
+	}
+}
+
+func TestBuildIndexBatchesUsesLimitsAndOverlap(t *testing.T) {
+	pages := []pageText{
+		{PageNo: 1, Text: "one"},
+		{PageNo: 2, Text: "two"},
+		{PageNo: 3, Text: "three"},
+		{PageNo: 4, Text: "four"},
+	}
+	batches := buildIndexBatches(pages, 2, 100)
+	if len(batches) != 3 {
+		t.Fatalf("batches = %d, want 3", len(batches))
+	}
+	if len(batches[0]) != 2 || batches[1][0].PageNo != 2 || batches[2][0].PageNo != 3 {
+		t.Fatalf("unexpected overlap: %#v", batches)
+	}
+}
+
+func TestShouldSplitIndexErrorOnlyForMalformedOutput(t *testing.T) {
+	if !shouldSplitIndexError(&ai.APIError{Class: "invalid_response", Detail: "模型返回空内容"}) {
+		t.Fatal("empty response should be retried with a smaller batch")
+	}
+	if !shouldSplitIndexError(errors.New("切题模型输出不是合法 JSON")) {
+		t.Fatal("malformed JSON should be retried with a smaller batch")
+	}
+	if shouldSplitIndexError(&ai.APIError{Class: "timeout", Detail: "上游请求超时"}) {
+		t.Fatal("timeout should abort instead of multiplying calls")
 	}
 }
 

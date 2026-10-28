@@ -225,6 +225,8 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验建议 → **在同一事务中自动应用白名单字段、同步文件名和分析已应用标记**。归类以正文（或页面图像）为依据，文件名和来源路径只作辅助；提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准。长文档最多发送 12000 字符，保留开头约 2/3 与末尾约 1/3，并标注中间省略，以免漏掉卷末答案区；未解析出任何正文或页面图像时任务失败，不退回文件名猜测。自动应用只接受 `parseSuggestions` 校验后的字段，标题会同步为下载名和本地副本名；模型原文、未知字段和非法值不会写入。自动应用写审计 `material.ai_auto_apply`，人工重应用写 `material.ai_apply`。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
 
+题目索引链路：解析文本按 `batch_pages`（默认 10）与 `batch_chars`（默认 12000）分组，最多 3 个批次并发切题；模型输出上限 128000 token，并请求 `reasoning_effort=high`。单批发生空响应或非法 JSON 时按页、再按正文二分重试；超时、鉴权、限流等错误直接失败，不通过递归重试放大调用量。批次结果按原顺序合并去重后在同一事务写入题目与检索词。
+
 Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `analyze`、`index`。
 
 ## 搜题（纯文本）

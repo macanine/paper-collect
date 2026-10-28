@@ -9,12 +9,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/ai"
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -26,6 +28,7 @@ const (
 	maxSearchCandidates   = 2000
 	searchLLMTimeout      = 10 * time.Minute
 	searchMaxOutputTokens = 128_000
+	indexBatchConcurrency = 3
 )
 
 func defaultSearchSettings() model.SearchSettings {
@@ -496,57 +499,31 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 	if batchChars <= 0 {
 		batchChars = 12000
 	}
+	batches := buildIndexBatches(pages, batchPages, batchChars)
+	results := make([][]segmentedQuestion, len(batches))
+	var calls, failed atomic.Int64
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(indexBatchConcurrency)
+	for index, batch := range batches {
+		index, batch := index, batch
+		group.Go(func() error {
+			questions, err := s.segmentBatchWithFallback(groupCtx, client, modelName, batch, &calls, &failed)
+			if err != nil {
+				return err
+			}
+			results[index] = questions
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, int(calls.Load()), int(failed.Load()), err
+	}
+
 	var all []segmentedQuestion
 	seen := map[string]bool{}
 	byNumber := map[string]int{}
-	calls, failed := 0, 0
-	for start := 0; start < len(pages); {
-		end := start
-		chars := 0
-		for end < len(pages) && end-start < batchPages {
-			chars += len([]rune(pages[end].Text))
-			if end > start && chars > batchChars {
-				break
-			}
-			end++
-		}
-		batch := pages[start:end]
-		// A 10-page batch can exceed the model's output window, producing
-		// truncated JSON. On failure, split the batch in half (keeping one page
-		// of overlap) and retry recursively; this also preserves long questions.
-		var process func([]pageText) ([]segmentedQuestion, error)
-		process = func(part []pageText) ([]segmentedQuestion, error) {
-			questions, err := s.segmentBatch(ctx, client, modelName, part)
-			calls++
-			if err == nil {
-				return questions, nil
-			}
-			if split, ok := splitIndexBatchForRetry(part); ok {
-				left, err := process(split[0])
-				if err != nil {
-					return nil, err
-				}
-				right, err := process(split[1])
-				if err != nil {
-					return nil, err
-				}
-				return append(left, right...), nil
-			}
-			if len(part) <= 1 {
-				failed++
-				questions, err = s.segmentBatch(ctx, client, modelName, part)
-				calls++
-				if err != nil {
-					return nil, err
-				}
-				return questions, nil
-			}
-			return nil, err
-		}
-		questions, err := process(batch)
-		if err != nil {
-			return nil, calls, failed, err
-		}
+	for index, questions := range results {
+		batch := batches[index]
 		allowed := map[int]bool{}
 		for _, page := range batch {
 			allowed[page.PageNo] = true
@@ -579,6 +556,39 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 			}
 			all = append(all, q)
 		}
+	}
+	callsCount, failedCount := int(calls.Load()), int(failed.Load())
+	if len(all) == 0 {
+		s.logf("segmentation produced no valid questions (pages=%d calls=%d)", len(pages), callsCount)
+		return nil, callsCount, failedCount, errors.New("LLM 未返回有效题目")
+	}
+	return all, callsCount, failedCount, nil
+}
+
+const (
+	indexRetryOverlapRunes = 200
+	indexRetryMinRunes     = 1200
+)
+
+func buildIndexBatches(pages []pageText, batchPages, batchChars int) [][]pageText {
+	if batchPages <= 0 {
+		batchPages = 10
+	}
+	if batchChars <= 0 {
+		batchChars = 12000
+	}
+	var batches [][]pageText
+	for start := 0; start < len(pages); {
+		end := start
+		chars := 0
+		for end < len(pages) && end-start < batchPages {
+			chars += len([]rune(pages[end].Text))
+			if end > start && chars > batchChars {
+				break
+			}
+			end++
+		}
+		batches = append(batches, pages[start:end])
 		if end == len(pages) {
 			break
 		}
@@ -588,17 +598,45 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 		}
 		start = overlap
 	}
-	if len(all) == 0 {
-		s.logf("segmentation produced no valid questions (pages=%d calls=%d)", len(pages), calls)
-		return nil, calls, failed, errors.New("LLM 未返回有效题目")
-	}
-	return all, calls, failed, nil
+	return batches
 }
 
-const (
-	indexRetryOverlapRunes = 200
-	indexRetryMinRunes     = 1200
-)
+// segmentBatchWithFallback recursively splits only malformed/empty model
+// responses. Transport, auth and timeout failures abort immediately instead of
+// multiplying expensive upstream calls.
+func (s *Service) segmentBatchWithFallback(ctx context.Context, client *ai.OpenAI, modelName string, part []pageText, calls, failed *atomic.Int64) ([]segmentedQuestion, error) {
+	questions, err := s.segmentBatch(ctx, client, modelName, part)
+	calls.Add(1)
+	if err == nil {
+		return questions, nil
+	}
+	if !shouldSplitIndexError(err) {
+		return nil, err
+	}
+	if split, ok := splitIndexBatchForRetry(part); ok {
+		left, err := s.segmentBatchWithFallback(ctx, client, modelName, split[0], calls, failed)
+		if err != nil {
+			return nil, err
+		}
+		right, err := s.segmentBatchWithFallback(ctx, client, modelName, split[1], calls, failed)
+		if err != nil {
+			return nil, err
+		}
+		return append(left, right...), nil
+	}
+	failed.Add(1)
+	questions, err = s.segmentBatch(ctx, client, modelName, part)
+	calls.Add(1)
+	return questions, err
+}
+
+func shouldSplitIndexError(err error) bool {
+	var apiErr *ai.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Class == "invalid_response"
+	}
+	return err != nil && strings.Contains(err.Error(), "切题模型输出不是合法 JSON")
+}
 
 // splitIndexBatchForRetry first splits by page. Once only one dense text
 // chunk remains, it splits the text itself. This is necessary because a single
