@@ -48,6 +48,26 @@ func TestSplitLongPagesKeepsPageNumber(t *testing.T) {
 	}
 }
 
+func TestSplitIndexBatchForRetrySplitsDenseSinglePage(t *testing.T) {
+	page := pageText{PageNo: 9, Text: strings.Repeat("题目正文。\n", 400)}
+	split, ok := splitIndexBatchForRetry([]pageText{page})
+	if !ok || len(split[0]) != 1 || len(split[1]) != 1 {
+		t.Fatalf("split = %#v, ok = %v", split, ok)
+	}
+	if split[0][0].PageNo != page.PageNo || split[1][0].PageNo != page.PageNo {
+		t.Fatalf("page number changed: %#v", split)
+	}
+	if split[0][0].Text == "" || split[1][0].Text == "" {
+		t.Fatalf("empty split text: %#v", split)
+	}
+}
+
+func TestSplitIndexBatchForRetryKeepsSmallSinglePage(t *testing.T) {
+	if _, ok := splitIndexBatchForRetry([]pageText{{PageNo: 1, Text: "短题目"}}); ok {
+		t.Fatal("small single page should be retried without splitting")
+	}
+}
+
 func TestRepairJSONStrings(t *testing.T) {
 	raw := "{\"questions\":[{\"text\":\"第一行\n第二行\",\"page_no\":1}]}"
 	var parsed struct {

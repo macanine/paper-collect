@@ -516,6 +516,17 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 			if err == nil {
 				return questions, nil
 			}
+			if split, ok := splitIndexBatchForRetry(part); ok {
+				left, err := process(split[0])
+				if err != nil {
+					return nil, err
+				}
+				right, err := process(split[1])
+				if err != nil {
+					return nil, err
+				}
+				return append(left, right...), nil
+			}
 			if len(part) <= 1 {
 				failed++
 				questions, err = s.segmentBatch(ctx, client, modelName, part)
@@ -525,20 +536,7 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 				}
 				return questions, nil
 			}
-			mid := len(part) / 2
-			left, err := process(part[:mid])
-			if err != nil {
-				return nil, err
-			}
-			rightStart := mid
-			if mid > 0 {
-				rightStart = mid - 1
-			}
-			right, err := process(part[rightStart:])
-			if err != nil {
-				return nil, err
-			}
-			return append(left, right...), nil
+			return nil, err
 		}
 		questions, err := process(batch)
 		if err != nil {
@@ -590,6 +588,51 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 		return nil, calls, failed, errors.New("LLM 未返回有效题目")
 	}
 	return all, calls, failed, nil
+}
+
+const (
+	indexRetryOverlapRunes = 200
+	indexRetryMinRunes     = 1200
+)
+
+// splitIndexBatchForRetry first splits by page. Once only one dense text
+// chunk remains, it splits the text itself. This is necessary because a single
+// OCR chunk can still produce more JSON than the model's output window.
+func splitIndexBatchForRetry(part []pageText) ([2][]pageText, bool) {
+	if len(part) > 1 {
+		mid := len(part) / 2
+		rightStart := mid
+		if mid > 0 {
+			rightStart = mid - 1
+		}
+		return [2][]pageText{part[:mid], part[rightStart:]}, true
+	}
+	if len(part) != 1 {
+		return [2][]pageText{}, false
+	}
+	page := part[0]
+	runes := []rune(page.Text)
+	if len(runes) < indexRetryMinRunes*2 {
+		return [2][]pageText{}, false
+	}
+	mid := len(runes) / 2
+	for cut := mid; cut > mid-400 && cut > 0; cut-- {
+		if runes[cut-1] == '\n' {
+			mid = cut
+			break
+		}
+	}
+	if mid <= 0 || mid >= len(runes) {
+		return [2][]pageText{}, false
+	}
+	rightStart := mid - indexRetryOverlapRunes
+	if rightStart < 1 {
+		rightStart = 1
+	}
+	return [2][]pageText{
+		{{PageNo: page.PageNo, Text: string(runes[:mid])}},
+		{{PageNo: page.PageNo, Text: string(runes[rightStart:])}},
+	}, true
 }
 
 func (s *Service) segmentBatch(ctx context.Context, client *ai.OpenAI, modelName string, pages []pageText) ([]segmentedQuestion, error) {

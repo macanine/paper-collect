@@ -171,7 +171,8 @@ func (c *OpenAI) Chat(ctx context.Context, model string, messages []ChatMessage)
 	}
 	var completion struct {
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
@@ -187,7 +188,11 @@ func (c *OpenAI) Chat(ctx context.Context, model string, messages []ChatMessage)
 		}
 	}
 	if content == "" {
-		return "", &APIError{Class: "invalid_response", Detail: "模型返回空内容"}
+		detail := "模型返回空内容"
+		if completion.Choices[0].FinishReason == "length" {
+			detail += "（输出达到上限）"
+		}
+		return "", &APIError{Class: "invalid_response", Detail: detail}
 	}
 	return content, nil
 }

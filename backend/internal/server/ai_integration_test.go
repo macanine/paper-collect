@@ -22,6 +22,7 @@ type fakeAI struct {
 	lastChat    map[string]any
 	visionHit   bool
 	visionSeen  bool
+	bodySeen    bool
 	minerUCalls int
 	paddleCalls int
 }
@@ -109,6 +110,9 @@ func newFakeAI(t *testing.T) *fakeAI {
 		if f.visionHit {
 			f.visionSeen = true
 		}
+		if bytes.Contains(raw, []byte("学生版，函数与导数。")) {
+			f.bodySeen = true
+		}
 		f.mu.Unlock()
 		content := `{"title":"2026 高三数学一轮练习","subject_codes":["math"],"grade":"grade12","academic_year":2026,"role":"exam","tags":["一轮复习","函数"],"confidence":0.87}`
 		if bytes.Contains(raw, []byte("[PAGE")) {
@@ -149,11 +153,10 @@ func (f *fakeAI) paddleParseCalls() int {
 	return f.paddleCalls
 }
 
-func (f *fakeAI) chatContains(text string) bool {
+func (f *fakeAI) classificationSawBody() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	raw, _ := json.Marshal(f.lastChat)
-	return bytes.Contains(raw, []byte(text))
+	return f.bodySeen
 }
 
 func buildMineruZip(t *testing.T) []byte {
@@ -289,7 +292,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	if !fake.visionSeen {
 		t.Fatalf("vision model did not receive image_url parts")
 	}
-	if !fake.chatContains("学生版，函数与导数。") {
+	if !fake.classificationSawBody() {
 		t.Fatalf("document body was not sent to the classification model")
 	}
 	if analysis.Data.AppliedAt == nil {
