@@ -31,6 +31,7 @@ const (
 	indexBatchConcurrency = 3
 	indexTransientRetries = 1
 	indexRetryDelay       = 3 * time.Second
+	maxIndexSplitDepth    = 12
 )
 
 func defaultSearchSettings() model.SearchSettings {
@@ -607,6 +608,10 @@ func buildIndexBatches(pages []pageText, batchPages, batchChars int) [][]pageTex
 // responses. Transport, auth and timeout failures abort immediately instead of
 // multiplying expensive upstream calls.
 func (s *Service) segmentBatchWithFallback(ctx context.Context, client *ai.OpenAI, modelName string, part []pageText, calls, failed *atomic.Int64) ([]segmentedQuestion, error) {
+	return s.segmentBatchWithFallbackDepth(ctx, client, modelName, part, calls, failed, 0)
+}
+
+func (s *Service) segmentBatchWithFallbackDepth(ctx context.Context, client *ai.OpenAI, modelName string, part []pageText, calls, failed *atomic.Int64, depth int) ([]segmentedQuestion, error) {
 	var err error
 	var questions []segmentedQuestion
 	for attempt := 0; attempt <= indexTransientRetries; attempt++ {
@@ -629,12 +634,12 @@ func (s *Service) segmentBatchWithFallback(ctx context.Context, client *ai.OpenA
 	if !shouldSplitIndexError(err) {
 		return nil, err
 	}
-	if split, ok := splitIndexBatchForRetry(part); ok {
-		left, err := s.segmentBatchWithFallback(ctx, client, modelName, split[0], calls, failed)
+	if split, ok := splitIndexBatchForRetry(part); ok && depth < maxIndexSplitDepth {
+		left, err := s.segmentBatchWithFallbackDepth(ctx, client, modelName, split[0], calls, failed, depth+1)
 		if err != nil {
 			return nil, err
 		}
-		right, err := s.segmentBatchWithFallback(ctx, client, modelName, split[1], calls, failed)
+		right, err := s.segmentBatchWithFallbackDepth(ctx, client, modelName, split[1], calls, failed, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -668,12 +673,13 @@ func shouldRetryIndexTransient(err error) bool {
 // chunk remains, it splits the text itself. This is necessary because a single
 // OCR chunk can still produce more JSON than the model's output window.
 func splitIndexBatchForRetry(part []pageText) ([2][]pageText, bool) {
-	if len(part) > 1 {
-		mid := len(part) / 2
+	if len(part) == 2 {
+		return [2][]pageText{{part[0]}, {part[1]}}, true
+	}
+	if len(part) > 2 {
+		mid := (len(part) + 1) / 2
 		rightStart := mid
-		if mid > 0 {
-			rightStart = mid - 1
-		}
+		rightStart--
 		return [2][]pageText{part[:mid], part[rightStart:]}, true
 	}
 	if len(part) != 1 {

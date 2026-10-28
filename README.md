@@ -54,6 +54,15 @@ curl http://127.0.0.1:2033/healthz
 
 默认访问 <http://127.0.0.1:2033>。可用 `APP_PORT` 修改宿主机端口；容器内部始终监听 `8080`。查看日志使用 `docker compose logs -f gateway app-1 app-2 rapidocr migrate`。
 
+如果模型网关与本项目在同一台 Docker 主机上，且公网入口会中断长请求，可让应用通过可选的内部网络桥接访问它，并先把 AIProvider 地址设为 `http://app-network-proxy:3000/v1`：
+
+```bash
+NEW_API_NETWORK=new-api_new-api-network \
+  docker compose -f docker-compose.yml -f deploy/docker-compose.new-api.yml up -d --build
+```
+
+桥接只加入项目网络和指定的外部网络，不发布额外端口；普通部署不需要该覆盖文件。
+
 RapidOCR 首次启动会下载并加载中文模型，健康检查通过后应用才开始接收任务。模型和推理依赖保存在镜像/容器中，OCR 中间文件使用 `rapidocr-jobs` 卷。容器默认最多使用 1 个 CPU 核，ONNX/OpenMP 线程数为 1；可通过 `.env` 的 `RAPIDOCR_CPUS`、`RAPIDOCR_WORKERS` 和 `RAPIDOCR_THREADS` 调整，但单机资源有限时不要同时调高。
 
 升级自旧的单容器 SQLite 部署时，先备份 `paper-data` 卷，再在 `.env` 设置 `MIGRATE_FROM_SQLITE=/app/data/paper.db` 启动一次。迁移服务会建表并在 PostgreSQL 为空时复制现有 SQLite 数据；目标库已有用户时自动跳过。完成核对后清空该变量。旧 SQLite 文件仍保留在同一卷中，可用于回滚。

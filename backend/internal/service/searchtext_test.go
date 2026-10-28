@@ -72,6 +72,22 @@ func TestSplitIndexBatchForRetryKeepsSmallSinglePage(t *testing.T) {
 	}
 }
 
+func TestSplitIndexBatchForRetryAlwaysShrinks(t *testing.T) {
+	for pages := 2; pages <= 20; pages++ {
+		part := make([]pageText, pages)
+		for i := range part {
+			part[i] = pageText{PageNo: i + 1, Text: "题目正文"}
+		}
+		split, ok := splitIndexBatchForRetry(part)
+		if !ok {
+			t.Fatalf("%d pages: expected a split", pages)
+		}
+		if len(split[0]) >= len(part) || len(split[1]) >= len(part) {
+			t.Fatalf("%d pages: split did not shrink: left=%d right=%d", pages, len(split[0]), len(split[1]))
+		}
+	}
+}
+
 func TestBuildIndexBatchesUsesLimitsAndOverlap(t *testing.T) {
 	pages := []pageText{
 		{PageNo: 1, Text: "one"},

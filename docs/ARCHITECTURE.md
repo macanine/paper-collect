@@ -516,6 +516,8 @@ docker compose build
 docker compose up -d
 ```
 
+模型网关若与项目同机，可在部署时叠加 `deploy/docker-compose.new-api.yml`，让应用经不暴露端口的内部 socat 桥接访问网关，避开公网入口对长请求的中断；默认 Compose 不依赖该外部网络。
+
 覆盖范围：
 
 - 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU/PaddleOCR/RapidOCR 协议、搜索文本/高亮、迁移幂等。
