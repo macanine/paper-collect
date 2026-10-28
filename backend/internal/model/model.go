@@ -225,7 +225,7 @@ type Material struct {
 	Grade            string `gorm:"size:16;not null"`
 	AcademicYear     int    `gorm:"not null"`
 	TagsJSON         string `gorm:"type:text;not null"`
-	Role             string `gorm:"size:16;not null;index"`
+	Role             string `gorm:"size:32;not null;index"`
 	Status           string `gorm:"size:24;not null;index"`
 	BlobID           string `gorm:"size:36;not null;index"`
 	FileName         string `gorm:"type:text;not null"`
@@ -262,7 +262,7 @@ type CollectionItem struct {
 	CollectionID string `gorm:"size:36;not null;uniqueIndex:uq_collection_material,priority:1;index"`
 	MaterialID   string `gorm:"size:36;not null;uniqueIndex:uq_collection_material,priority:2;index"`
 	Position     int    `gorm:"not null"`
-	Role         string `gorm:"size:16;not null"`
+	Role         string `gorm:"size:32;not null"`
 	RelativePath string `gorm:"type:text;not null"`
 	CreatedAt    time.Time
 }
