@@ -18,8 +18,9 @@ export const SUBJECT_LABELS: Record<SubjectCode, string> = {
 export const ROLE_LABELS: Record<Role, string> = {
   exam: '试卷',
   answer: '答案',
-  questions_answers: '题目+答案',
+  questions_answers: '试卷+答案',
   teacher_edition: '教师版',
+  lecture: '讲义',
   other: '其他',
 };
 

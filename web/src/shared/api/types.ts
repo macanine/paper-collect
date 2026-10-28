@@ -16,7 +16,7 @@ export const SUBJECT_CODES = [
 ] as const;
 export type SubjectCode = (typeof SUBJECT_CODES)[number];
 
-export const ROLES = ['exam', 'answer', 'questions_answers', 'teacher_edition', 'other'] as const;
+export const ROLES = ['exam', 'answer', 'questions_answers', 'teacher_edition', 'lecture', 'other'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const GRADES = ['', 'grade10', 'grade11', 'grade12'] as const;

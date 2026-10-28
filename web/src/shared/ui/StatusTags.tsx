@@ -66,6 +66,7 @@ const ROLE_COLORS: Record<Role, TagColor> = {
   answer: 'green',
   questions_answers: 'cyan',
   teacher_edition: 'purple',
+  lecture: 'gold',
   other: 'default',
 };
 

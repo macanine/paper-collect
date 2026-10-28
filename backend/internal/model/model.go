@@ -54,11 +54,15 @@ const (
 	// RoleTeacherEdition is a teacher copy where the answer/explanation follows
 	// each question.
 	RoleTeacherEdition = "teacher_edition"
-	RoleOther          = "other"
+	// RoleLecture is tutorial material: explanations, worked examples and
+	// exercises are mixed together rather than forming a standalone exam.
+	RoleLecture = "lecture"
+	// RoleOther is used only when the material cannot be classified.
+	RoleOther = "other"
 )
 
 // MaterialRoles lists the accepted material roles.
-var MaterialRoles = []string{RoleExam, RoleAnswer, RoleQuestionsAnswers, RoleTeacherEdition, RoleOther}
+var MaterialRoles = []string{RoleExam, RoleAnswer, RoleQuestionsAnswers, RoleTeacherEdition, RoleLecture, RoleOther}
 
 // Material statuses.
 const (

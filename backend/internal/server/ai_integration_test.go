@@ -149,6 +149,13 @@ func (f *fakeAI) paddleParseCalls() int {
 	return f.paddleCalls
 }
 
+func (f *fakeAI) chatContains(text string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	raw, _ := json.Marshal(f.lastChat)
+	return bytes.Contains(raw, []byte(text))
+}
+
 func buildMineruZip(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -281,6 +288,9 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	}
 	if !fake.visionSeen {
 		t.Fatalf("vision model did not receive image_url parts")
+	}
+	if !fake.chatContains("学生版，函数与导数。") {
+		t.Fatalf("document body was not sent to the classification model")
 	}
 	if analysis.Data.AppliedAt == nil {
 		t.Fatalf("successful suggestions were not auto-applied: %s", body)

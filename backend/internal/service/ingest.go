@@ -461,9 +461,10 @@ func suggestRole(name string) string {
 		role     string
 		keywords []string
 	}{
-		{model.RoleTeacherEdition, []string{"教师", "老师", "教案", "teacher"}},
+		{model.RoleTeacherEdition, []string{"教师版", "老师版", "教师用", "teacher edition", "teacher_edition"}},
+		{model.RoleLecture, []string{"讲义", "教程", "课件", "教案", "学案", "lecture", "handout"}},
+		{model.RoleQuestionsAnswers, []string{"题目+答案", "试卷+答案", "试卷答案", "含答案", "答案解析", "解析", "详解", "solution"}},
 		{model.RoleAnswer, []string{"答案", "答题卡", "answer", "key"}},
-		{model.RoleQuestionsAnswers, []string{"题目+答案", "含答案", "答案解析", "解析", "详解", "solution"}},
 		{model.RoleExam, []string{"试卷", "学生", "练习", "习题", "exam", "student"}},
 	}
 	for _, rule := range rules {
