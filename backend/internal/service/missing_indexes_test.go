@@ -73,6 +73,10 @@ func TestEnqueueMissingIndexesConcurrentAndIdempotent(t *testing.T) {
 	if len(jobs) != 2 {
 		t.Fatalf("got %d index jobs", len(jobs))
 	}
+	var allIndexJobs int64
+	if err := db.Model(&model.Job{}).Where("kind = ?", model.JobIndex).Count(&allIndexJobs).Error; err != nil || allIndexJobs != 2 {
+		t.Fatalf("ineligible index task history was not removed: %d, %v", allIndexJobs, err)
+	}
 	for _, job := range jobs {
 		var state model.MaterialIndexState
 		if err := db.Where("material_id = ?", job.MaterialID).First(&state).Error; err != nil || state.JobID != job.ID {

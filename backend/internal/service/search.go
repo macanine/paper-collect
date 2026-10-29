@@ -1069,9 +1069,8 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 			return err
 		}
 		return tx.Where(
-			"kind = ? AND status IN ? AND material_id IN (?)",
+			"kind = ? AND material_id IN (?)",
 			model.JobIndex,
-			[]string{model.JobPending, model.JobRunning},
 			tx.Model(&model.Material{}).Select("id").Where("role NOT IN ?", eligibleRoles),
 		).Delete(&model.Job{}).Error
 	}); err != nil {
@@ -1141,10 +1140,8 @@ func (s *Service) syncMaterialIndexForRoleTx(tx *gorm.DB, materialID, role strin
 		if err := deleteQuestionIndexForMaterials(tx, []string{materialID}); err != nil {
 			return err
 		}
-		return tx.Where(
-			"material_id = ? AND kind = ? AND status IN ?",
-			materialID, model.JobIndex, []string{model.JobPending, model.JobRunning},
-		).Delete(&model.Job{}).Error
+		return tx.Where("material_id = ? AND kind = ?", materialID, model.JobIndex).
+			Delete(&model.Job{}).Error
 	}
 	var settings model.SearchSettings
 	if err := tx.Where("id = ?", 1).First(&settings).Error; err != nil {
