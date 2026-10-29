@@ -193,6 +193,7 @@ Material: pending_storage ──ready 副本数 >= minimum_replicas──> archi
 
 Analysis: pending ──> running ──> succeeded | failed
 Index:    pending ──> running ──> succeeded | failed
+Eligible: exam / questions_answers only; other roles are not_applicable
 ```
 
 `RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时四类任务都会在租约仍然有效时回到 pending。
@@ -351,7 +352,7 @@ RunIndex
   → material_index_states 标记 succeeded 与统计
 ```
 
-- 索引默认启用；归档事务内自动入队。关闭索引期间归档的资料，在服务启动时由 `EnqueueMissingIndexes` 补建（仅当索引启用）。
+- 索引默认启用；只有 `exam`/`questions_answers` 资料会在归档、AI 角色应用或人工改角色后入队。关闭索引期间归档的试卷资料，在服务启动时由 `EnqueueMissingIndexes` 补建（仅当索引启用）；非试卷类旧索引和未完成任务会在启动时清理。
 - 自动入队和启动补建共用按资料去重的入队逻辑，索引状态与任务在同一事务创建；分析任务也依靠唯一约束去重，避免逐条预查询。
 - ZIP 容器本身不索引；展开成员各自索引。
 - 手动 `POST /materials/{id}/index` 不依赖索引开关；`force=true` 会清空 `material_texts.source_hash` 以强制重新解析。
@@ -541,7 +542,7 @@ docker compose up -d
 5. **数据治理**：缺少孤儿 CAS 清理、过期任务/缓存保留期和版本化迁移。
 6. **安全加固**：管理员可配置任意 http(s) 上游地址；未实现通用出站 SSRF 允许列表、全局 API 限流或主密钥轮换流程。
 7. **产品能力**：不提供通用全文检索、Office 转换、病毒扫描、跨请求分片断点续传、Range 下载、跨资料同题聚合。
-8. **搜索设置**：目前只有 HTTP 接口，没有独立管理台页面；索引状态只使用 pending/running/succeeded/failed。
+8. **搜索设置**：目前只有 HTTP 接口，没有独立管理台页面；索引状态使用 pending/running/succeeded/failed，非试卷类资料显示 not_applicable。
 
 ## 18. 文档关系
 

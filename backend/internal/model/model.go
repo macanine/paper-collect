@@ -397,6 +397,8 @@ const (
 	AnalysisFailed    = "failed"
 )
 
+const IndexStatusNotApplicable = "not_applicable"
+
 // OCR provider kinds.
 const (
 	OCRKindMinerU    = "mineru"

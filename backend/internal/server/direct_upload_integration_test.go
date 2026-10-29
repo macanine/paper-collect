@@ -163,7 +163,7 @@ func TestIndexingCanBeEnabledAfterUpload(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("disable indexing %d: %s", status, body)
 	}
-	id := directUpload(t, env, "custom", map[string][]byte{"资料.pdf": minimalPDF()})
+	id := directUpload(t, env, "custom", map[string][]byte{"试卷.pdf": minimalPDF()})
 	status, body = env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
 	var upload struct {
 		Data struct {

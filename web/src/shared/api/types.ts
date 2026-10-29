@@ -427,7 +427,7 @@ export interface QuestionRow {
   created_at: string;
 }
 
-export const INDEX_STATUSES = ['pending', 'running', 'succeeded', 'failed'] as const;
+export const INDEX_STATUSES = ['pending', 'running', 'succeeded', 'failed', 'not_applicable'] as const;
 export type IndexStatus = (typeof INDEX_STATUSES)[number];
 
 export interface MaterialIndexState {

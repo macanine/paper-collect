@@ -17,10 +17,13 @@ func TestAutomaticAnalysisAndIndexJobsAreIdempotent(t *testing.T) {
 	if err := db.Create(&model.SearchSettings{ID: 1, Enabled: true, MaxPages: 500, BatchPages: 10, BatchChars: 12000}).Error; err != nil {
 		t.Fatal(err)
 	}
-	pdf1 := &plannedMaterial{ID: newID(), MediaType: "application/pdf"}
-	pdf2 := &plannedMaterial{ID: newID(), MediaType: "application/pdf"}
-	zip := &plannedMaterial{ID: newID(), MediaType: "application/zip"}
-	candidates := []*plannedMaterial{pdf1, pdf2, zip, pdf1}
+	pdf1 := &plannedMaterial{ID: newID(), MediaType: "application/pdf", Role: model.RoleExam}
+	pdf2 := &plannedMaterial{ID: newID(), MediaType: "application/pdf", Role: model.RoleQuestionsAnswers}
+	lecture := &plannedMaterial{ID: newID(), MediaType: "application/pdf", Role: model.RoleLecture}
+	answer := &plannedMaterial{ID: newID(), MediaType: "application/pdf", Role: model.RoleAnswer}
+	teacher := &plannedMaterial{ID: newID(), MediaType: "application/pdf", Role: model.RoleTeacherEdition}
+	zip := &plannedMaterial{ID: newID(), MediaType: "application/zip", Role: model.RoleExam}
+	candidates := []*plannedMaterial{pdf1, pdf2, lecture, answer, teacher, zip, pdf1}
 	now := time.Now().UTC()
 	enqueue := func() error {
 		return db.Transaction(func(tx *gorm.DB) error {
@@ -40,10 +43,10 @@ func TestAutomaticAnalysisAndIndexJobsAreIdempotent(t *testing.T) {
 	if err := db.Find(&jobs).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs) != 4 {
-		t.Fatalf("expected two analysis and two index jobs, got %d", len(jobs))
+	if len(jobs) != 7 {
+		t.Fatalf("expected five analysis and two index jobs, got %d", len(jobs))
 	}
-	for _, candidate := range []*plannedMaterial{pdf1, pdf2} {
+	for _, candidate := range []*plannedMaterial{pdf1, pdf2, lecture, answer, teacher} {
 		var analysis model.MaterialAnalysis
 		if err := db.Where("material_id = ?", candidate.ID).First(&analysis).Error; err != nil {
 			t.Fatal(err)
@@ -52,6 +55,8 @@ func TestAutomaticAnalysisAndIndexJobsAreIdempotent(t *testing.T) {
 		if err := db.Where("id = ?", analysis.JobID).First(&analysisJob).Error; err != nil || analysisJob.Kind != model.JobAnalyze || analysisJob.MaterialID != candidate.ID {
 			t.Fatal("analysis and its job are inconsistent")
 		}
+	}
+	for _, candidate := range []*plannedMaterial{pdf1, pdf2} {
 		var state model.MaterialIndexState
 		if err := db.Where("material_id = ?", candidate.ID).First(&state).Error; err != nil {
 			t.Fatal(err)
@@ -59,6 +64,12 @@ func TestAutomaticAnalysisAndIndexJobsAreIdempotent(t *testing.T) {
 		var indexJob model.Job
 		if err := db.Where("id = ?", state.JobID).First(&indexJob).Error; err != nil || indexJob.Kind != model.JobIndex || indexJob.MaterialID != candidate.ID {
 			t.Fatal("index state and its job are inconsistent")
+		}
+	}
+	for _, candidate := range []*plannedMaterial{lecture, answer, teacher} {
+		var count int64
+		if err := db.Model(&model.MaterialIndexState{}).Where("material_id = ?", candidate.ID).Count(&count).Error; err != nil || count != 0 {
+			t.Fatalf("ineligible role %s must not be indexed", candidate.Role)
 		}
 	}
 	var count int64

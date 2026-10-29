@@ -251,13 +251,13 @@ Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `anal
 
 `search:read`（读取搜索设置）、`search:write`（修改搜索设置）默认仅管理员，可单独授权给 API 密钥。搜索接口本身使用 materials:read。
 
-索引由 `index` 任务完成：默认启用；归档后自动入队，索引启用时启动为关闭期间归档的资料补建。任务复用命中“文件 SHA + OCR 类型/地址/模型 + 缓存版本”的 `material_texts`，未命中时调用当前 OCRProvider → LLM 默认每批 10 页/12000 字（可配置）完成 OCR 纠错与切题 → 保存题目和页码 → 建立 CJK unigram+bigram 与连续字母/数字词倒排。不做跨资料同题聚合；同一题出现在多份试卷就是多条结果。索引不保存页面图/bbox；需要视觉图片时 MinerU 会重新解析。
+索引由 `index` 任务完成：默认启用；只有角色为 `exam`（试卷）或 `questions_answers`（试卷+答案）的资料会在归档、AI 识别应用角色或启动补建时入队，其他角色不会建立题目索引，角色改为非试卷类时会移除旧索引。任务复用命中“文件 SHA + OCR 类型/地址/模型 + 缓存版本”的 `material_texts`，未命中时调用当前 OCRProvider → LLM 默认每批 10 页/12000 字（可配置）完成 OCR 纠错与切题 → 保存题目和页码 → 建立 CJK unigram+bigram 与连续字母/数字词倒排。不做跨资料同题聚合；同一题出现在多份试卷就是多条结果。索引不保存页面图/bbox；需要视觉图片时 MinerU 会重新解析。
 
 - `POST /search/questions`（materials:read）：请求 `{"query":"已知函数...","subject":"math","grade":"grade12","academic_year":0,"limit":20,"offset":0}`。`query` 必填 1..2000 字；`subject`/`grade`/`academic_year` 按字典校验；`limit` 默认 20、最大 50；`offset` >= 0。只返回资料状态为 archived/degraded 且已有题目的记录。200 `{"items":[{"question_id":"...","question_no":"12","text":"完整题干（含选项/小问）","snippet":"...","highlights":[[0,6]],"score":12.3,"page_no":3,"material":{"id":"...","title":"...","file_name":"..."},"subject_codes":["math"],"collection_id":"..."}],"total":1,"took_ms":23}`。`highlights` 是纯文本字符区间，客户端自行渲染，禁止返回 HTML。
 - `GET /search/questions/{id}`（materials:read）：单题详情（同上字段，score 为 0）。
 - `GET /materials/{id}/questions`（materials:read）：分页 `{id,material_id,page_no,seq,question_no,text,confidence,created_at}`，按 `seq` 升序。
-- `GET /materials/{id}/index`（materials:read）：`{status:pending|running|succeeded|failed,job_id,page_count,question_count,llm_calls,llm_failed_batches,error,indexed_at}`；尚无索引记录时返回 `status=pending`、`job_id=""`；后端只返回这四种状态。
-- `POST /materials/{id}/index`（materials:write）：`{"force":true}` 重新索引；`force=true` 会清空解析缓存（`material_texts.source_hash`）以强制重新解析；202 `{"job_id":"...","state":{...}}`。ZIP 容器拒绝索引。
+- `GET /materials/{id}/index`（materials:read）：`{status:pending|running|succeeded|failed|not_applicable,job_id,page_count,question_count,llm_calls,llm_failed_batches,error,indexed_at}`；试卷类资料尚无索引记录时返回 `status=pending`、`job_id=""`；其他角色返回 `status=not_applicable`、`job_id=""`。
+- `POST /materials/{id}/index`（materials:write）：`{"force":true}` 重新索引；`force=true` 会清空解析缓存（`material_texts.source_hash`）以强制重新解析；202 `{"job_id":"...","state":{...}}`。只有角色为 `exam` 或 `questions_answers` 的资料可索引；ZIP 容器和其他角色拒绝索引。
 - `GET /search/settings`（search:read）：`{enabled,max_pages,batch_pages,batch_chars,provider_id,model}`。
 - `PUT /search/settings`（search:write）：完整替换；默认 enabled=true、max_pages=500、batch_pages=10、batch_chars=12000；max_pages 1..5000、batch_pages 1..50、batch_chars 1000..100000。未指定 provider/model 时使用第一个启用端点及其默认模型；指定的 provider 必须存在且启用，否则任务失败。搜索设置可通过 HTTP 或 MCP 访问，目前没有独立管理台页面。
 

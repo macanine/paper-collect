@@ -40,6 +40,10 @@ func defaultSearchSettings() model.SearchSettings {
 	}
 }
 
+func materialNeedsQuestionIndex(role string) bool {
+	return role == model.RoleExam || role == model.RoleQuestionsAnswers
+}
+
 func (s *Service) ensureSearchSettings(ctx context.Context) (model.SearchSettings, error) {
 	db := s.db.WithContext(ctx)
 	var row model.SearchSettings
@@ -98,8 +102,16 @@ func (s *Service) PutSearchSettings(ctx context.Context, p auth.Principal, in mo
 	return s.ensureSearchSettings(ctx)
 }
 
-// GetMaterialIndexState returns index state, or an empty pending view.
+// GetMaterialIndexState returns the current state or marks ineligible roles as
+// not applicable without persisting a synthetic row.
 func (s *Service) GetMaterialIndexState(ctx context.Context, materialID string) (model.MaterialIndexState, error) {
+	var material model.Material
+	if err := s.db.WithContext(ctx).Select("id", "role").Where("id = ?", materialID).First(&material).Error; err != nil {
+		return model.MaterialIndexState{}, apperr.NotFound("资料不存在")
+	}
+	if !materialNeedsQuestionIndex(material.Role) {
+		return model.MaterialIndexState{MaterialID: materialID, Status: model.IndexStatusNotApplicable}, nil
+	}
 	var row model.MaterialIndexState
 	err := s.db.WithContext(ctx).Where("material_id = ?", materialID).First(&row).Error
 	if err == nil {
@@ -120,6 +132,9 @@ func (s *Service) EnqueueMaterialIndex(ctx context.Context, p auth.Principal, ma
 	}
 	if material.MediaType == "application/zip" {
 		return model.MaterialIndexState{}, "", apperr.Validation("ZIP 容器本身不索引，请索引展开后的资料")
+	}
+	if !materialNeedsQuestionIndex(material.Role) {
+		return model.MaterialIndexState{}, "", apperr.Validation("只有试卷和试卷+答案资料需要建立题目索引")
 	}
 	now := s.now()
 	jobID := newID()
@@ -169,6 +184,18 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 	var material model.Material
 	if err := db.Where("id = ?", job.MaterialID).First(&material).Error; err != nil {
 		s.failIndex(job.ID, job.LeaseOwner, job.MaterialID, "资料不存在")
+		return
+	}
+	if !materialNeedsQuestionIndex(material.Role) {
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := deleteQuestionIndexForMaterials(tx, []string{material.ID}); err != nil {
+				return err
+			}
+			return s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, "")
+		})
+		if err != nil && !errors.Is(err, errLeaseLost) {
+			s.logf("index %s: remove inapplicable state: %v", material.ID, err)
+		}
 		return
 	}
 	settings, err := s.ensureSearchSettings(ctx)
@@ -987,14 +1014,9 @@ func (s *Service) ListMaterialQuestions(ctx context.Context, materialID string, 
 	return newPage(rows, total, pg), nil
 }
 
-// deleteSearchDataForMaterials removes index rows during material deletion.
-func deleteSearchDataForMaterials(tx *gorm.DB, materials []model.Material) error {
-	if len(materials) == 0 {
+func deleteQuestionIndexForMaterials(tx *gorm.DB, ids []string) error {
+	if len(ids) == 0 {
 		return nil
-	}
-	ids := make([]string, 0, len(materials))
-	for _, m := range materials {
-		ids = append(ids, m.ID)
 	}
 	var questionIDs []string
 	if err := tx.Model(&model.QuestionBlock{}).Where("material_id IN ?", ids).Pluck("id", &questionIDs).Error; err != nil {
@@ -1008,22 +1030,59 @@ func deleteSearchDataForMaterials(tx *gorm.DB, materials []model.Material) error
 	if err := tx.Where("material_id IN ?", ids).Delete(&model.QuestionBlock{}).Error; err != nil {
 		return err
 	}
-	if err := tx.Where("material_id IN ?", ids).Delete(&model.MaterialText{}).Error; err != nil {
-		return err
-	}
 	return tx.Where("material_id IN ?", ids).Delete(&model.MaterialIndexState{}).Error
 }
 
-// EnqueueMissingIndexes queues materials archived while indexing was disabled.
-// Safe to call on every startup.
+// deleteSearchDataForMaterials removes index rows during material deletion.
+func deleteSearchDataForMaterials(tx *gorm.DB, materials []model.Material) error {
+	ids := make([]string, 0, len(materials))
+	for _, m := range materials {
+		ids = append(ids, m.ID)
+	}
+	if err := deleteQuestionIndexForMaterials(tx, ids); err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return tx.Where("material_id IN ?", ids).Delete(&model.MaterialText{}).Error
+}
+
+// EnqueueMissingIndexes removes stale indexes for ineligible roles and queues
+// eligible materials archived while indexing was disabled. Safe on every startup.
 func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 	settings, err := s.ensureSearchSettings(ctx)
-	if err != nil || !settings.Enabled {
+	if err != nil {
 		return 0, err
 	}
 	db := s.db.WithContext(ctx)
+	eligibleRoles := []string{model.RoleExam, model.RoleQuestionsAnswers}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		var staleIDs []string
+		if err := tx.Model(&model.Material{}).
+			Where("role NOT IN ?", eligibleRoles).
+			Where("id IN (?)", tx.Model(&model.MaterialIndexState{}).Select("material_id")).
+			Pluck("id", &staleIDs).Error; err != nil {
+			return err
+		}
+		if err := deleteQuestionIndexForMaterials(tx, staleIDs); err != nil {
+			return err
+		}
+		return tx.Where(
+			"kind = ? AND status IN ? AND material_id IN (?)",
+			model.JobIndex,
+			[]string{model.JobPending, model.JobRunning},
+			tx.Model(&model.Material{}).Select("id").Where("role NOT IN ?", eligibleRoles),
+		).Delete(&model.Job{}).Error
+	}); err != nil {
+		return 0, err
+	}
+	if !settings.Enabled {
+		return 0, nil
+	}
 	var materialIDs []string
 	if err := db.Model(&model.Material{}).
+		Where("role IN ?", eligibleRoles).
 		Where("status IN ? AND media_type <> ?", []string{model.StatusArchived, model.StatusDegraded}, "application/zip").
 		Where("id NOT IN (?)", db.Model(&model.MaterialIndexState{}).Select("material_id")).
 		Pluck("id", &materialIDs).Error; err != nil {
@@ -1051,7 +1110,7 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 	return queued, nil
 }
 
-// autoEnqueueIndexTx queues indexing for new non-ZIP materials.
+// autoEnqueueIndexTx queues indexing only for new exam-like materials.
 func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, now time.Time) error {
 	var settings model.SearchSettings
 	if err := tx.Where("id = ?", 1).First(&settings).Error; err != nil {
@@ -1065,7 +1124,7 @@ func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, 
 		return nil
 	}
 	for _, pm := range materials {
-		if pm.MediaType == "application/zip" {
+		if pm.MediaType == "application/zip" || !materialNeedsQuestionIndex(pm.Role) {
 			continue
 		}
 		if _, err := enqueueIndexTx(tx, pm.ID, now); err != nil {
@@ -1073,6 +1132,49 @@ func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, 
 		}
 	}
 	return nil
+}
+
+// syncMaterialIndexForRoleTx keeps index state aligned with a role change or an
+// automatically applied role suggestion.
+func (s *Service) syncMaterialIndexForRoleTx(tx *gorm.DB, materialID, role string, now time.Time) error {
+	if !materialNeedsQuestionIndex(role) {
+		if err := deleteQuestionIndexForMaterials(tx, []string{materialID}); err != nil {
+			return err
+		}
+		return tx.Where(
+			"material_id = ? AND kind = ? AND status IN ?",
+			materialID, model.JobIndex, []string{model.JobPending, model.JobRunning},
+		).Delete(&model.Job{}).Error
+	}
+	var settings model.SearchSettings
+	if err := tx.Where("id = ?", 1).First(&settings).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		settings = defaultSearchSettings()
+	}
+	if !settings.Enabled {
+		return nil
+	}
+	var state model.MaterialIndexState
+	err := tx.Where("material_id = ?", materialID).First(&state).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		_, err = enqueueIndexTx(tx, materialID, now)
+		return err
+	}
+	if err != nil || (state.Status != "failed" && state.Status != model.IndexStatusNotApplicable) {
+		return err
+	}
+	jobID := newID()
+	if err := tx.Model(&model.MaterialIndexState{}).Where("material_id = ?", materialID).
+		Updates(map[string]any{
+			"status": "pending", "job_id": jobID, "page_count": 0, "question_count": 0,
+			"llm_calls": 0, "llm_failed_batches": 0, "error": "", "indexed_at": nil, "updated_at": now,
+		}).Error; err != nil {
+		return err
+	}
+	job := model.Job{ID: jobID, Kind: model.JobIndex, Status: model.JobPending, MaterialID: materialID, CreatedAt: now, UpdatedAt: now}
+	return tx.Create(&job).Error
 }
 
 // enqueueIndexTx atomically creates at most one index state and its job. The

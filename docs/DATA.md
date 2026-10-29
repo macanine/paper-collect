@@ -73,7 +73,7 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 - `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received。
 - `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；启动时把遗留 running 改回 pending。
 - `Replica.status`：pending → uploading → ready/failed；failed 可重试回 pending；分享状态独立为 pending/ready/unsupported/failed。
-- `MaterialAnalysis.status` 与 `MaterialIndexState.status`：pending/running/succeeded/failed。
+- `MaterialAnalysis.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
 - `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
 
 ## 3. 数据目录

@@ -19,16 +19,19 @@ func TestEnqueueMissingIndexesConcurrentAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	materials := []model.Material{
-		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf"},
-		{ID: newID(), Status: model.StatusDegraded, MediaType: "application/pdf"},
-		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf"},
-		{ID: newID(), Status: model.StatusArchived, MediaType: "application/zip"},
-		{ID: newID(), Status: model.StatusPendingStorage, MediaType: "application/pdf"},
+		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam},
+		{ID: newID(), Status: model.StatusDegraded, MediaType: "application/pdf", Role: model.RoleQuestionsAnswers},
+		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleLecture},
+		{ID: newID(), Status: model.StatusArchived, MediaType: "application/zip", Role: model.RoleExam},
+		{ID: newID(), Status: model.StatusPendingStorage, MediaType: "application/pdf", Role: model.RoleExam},
 	}
 	if err := db.Create(&materials).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.MaterialIndexState{MaterialID: materials[2].ID, Status: "succeeded", JobID: "previous-job"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Job{ID: "previous-job", Kind: model.JobIndex, Status: model.JobSucceeded, MaterialID: materials[2].ID}).Error; err != nil {
 		t.Fatal(err)
 	}
 	type result struct {
@@ -60,11 +63,11 @@ func TestEnqueueMissingIndexesConcurrentAndIdempotent(t *testing.T) {
 	if err := db.Find(&states).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 3 {
+	if len(states) != 2 {
 		t.Fatalf("got %d index states", len(states))
 	}
 	var jobs []model.Job
-	if err := db.Where("kind = ?", model.JobIndex).Find(&jobs).Error; err != nil {
+	if err := db.Where("kind = ? AND status = ?", model.JobIndex, model.JobPending).Find(&jobs).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(jobs) != 2 {
@@ -84,7 +87,7 @@ func TestEnqueueMissingIndexesRollsBackStateWhenJobFails(t *testing.T) {
 	if _, err := svc.ensureSearchSettings(ctx); err != nil {
 		t.Fatal(err)
 	}
-	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf"}
+	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam}
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}

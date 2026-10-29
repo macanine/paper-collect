@@ -1,4 +1,4 @@
-import type { SubjectCode, Role, Grade, MaterialStatus, CollectionKind, UserRole, ProviderKind, ProviderRole, StorageMode, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus } from '../api/types';
+import type { SubjectCode, Role, Grade, MaterialStatus, CollectionKind, UserRole, ProviderKind, ProviderRole, StorageMode, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus } from '../api/types';
 
 export const SUBJECT_LABELS: Record<SubjectCode, string> = {
   chinese: '语文',
@@ -138,11 +138,12 @@ export const SCOPE_LABELS: Record<Scope, string> = {
   'search:write': '搜索配置管理',
 };
 
-export const INDEX_STATUS_LABELS: Record<'pending' | 'running' | 'succeeded' | 'failed', string> = {
+export const INDEX_STATUS_LABELS: Record<IndexStatus, string> = {
   pending: '排队中',
   running: '索引中',
   succeeded: '已索引',
   failed: '索引失败',
+  not_applicable: '无需索引',
 };
 
 export function optionsFromLabels<T extends string>(labels: Record<T, string>, keys: readonly T[]): { value: T; label: string }[] {

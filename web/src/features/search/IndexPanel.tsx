@@ -61,7 +61,8 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
   ];
 
   const status = state.data?.status;
-  const tagColor = status === 'succeeded' ? 'green' : status === 'failed' ? 'red' : status ? 'blue' : 'default';
+  const tagColor = status === 'succeeded' ? 'green' : status === 'failed' ? 'red' : status === 'not_applicable' ? 'default' : status ? 'blue' : 'default';
+  const indexable = status !== 'not_applicable';
 
   return (
     <Card
@@ -69,7 +70,7 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
       extra={
         <div className="flex items-center gap-2">
           <Tag color={tagColor}>{status ? INDEX_STATUS_LABELS[status] : '加载中'}</Tag>
-          {canWrite ? (
+          {canWrite && indexable ? (
             <Popconfirm title="重建这份资料的题目索引？" okText="重建" cancelText="取消" onConfirm={() => reindex.mutate()}>
               <Button size="small" loading={reindex.isPending}>
                 重建索引
@@ -83,11 +84,15 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
       {state.isError ? <ErrorState error={state.error} onRetry={() => void state.refetch()} /> : null}
       {state.isSuccess ? (
         <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-4 text-sm">
-            <span>页数：{state.data.page_count || '—'}</span>
-            <span>题目：{state.data.question_count}</span>
-            <span>索引时间：{state.data.indexed_at ? formatDateTime(state.data.indexed_at) : '—'}</span>
-          </div>
+          {indexable ? (
+            <div className="flex flex-wrap gap-4 text-sm">
+              <span>页数：{state.data.page_count || '—'}</span>
+              <span>题目：{state.data.question_count}</span>
+              <span>索引时间：{state.data.indexed_at ? formatDateTime(state.data.indexed_at) : '—'}</span>
+            </div>
+          ) : (
+            <Typography.Text type="secondary">只有试卷和试卷+答案资料需要建立题目索引。</Typography.Text>
+          )}
           {state.data.status === 'failed' ? (
             <Typography.Text type="danger">{state.data.error || '索引失败'}</Typography.Text>
           ) : null}

@@ -225,6 +225,11 @@ func (s *Service) applyMaterialPatchTx(tx *gorm.DB, id string, pt MaterialPatch,
 			return "", "", wrap("sync collection item roles", err)
 		}
 	}
+	if newRole != "" {
+		if err := s.syncMaterialIndexForRoleTx(tx, id, newRole, now); err != nil {
+			return "", "", wrap("sync material index state", err)
+		}
+	}
 	if newSubjects != nil {
 		if err := tx.Where("material_id = ?", id).Delete(&model.MaterialSubject{}).Error; err != nil {
 			return "", "", wrap("clear subjects", err)
