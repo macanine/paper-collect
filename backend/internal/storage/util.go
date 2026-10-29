@@ -56,6 +56,21 @@ type ctxReader struct {
 	r   io.Reader
 }
 
+type progressReader struct {
+	r           io.Reader
+	done, total int64
+	report      func(int64, int64)
+}
+
+func (p *progressReader) Read(buf []byte) (int, error) {
+	n, err := p.r.Read(buf)
+	p.done += int64(n)
+	if n > 0 && p.report != nil {
+		p.report(p.done, p.total)
+	}
+	return n, err
+}
+
 func (c ctxReader) Read(p []byte) (int, error) {
 	if err := c.ctx.Err(); err != nil {
 		return 0, err

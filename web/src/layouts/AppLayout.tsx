@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { App as AntdApp, Avatar, Button, Drawer, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
@@ -24,7 +24,7 @@ import {
 import { useAuth } from '../features/auth/AuthContext';
 import type { Scope } from '../shared/api/types';
 import { USER_ROLE_LABELS } from '../shared/lib/labels';
-import { FullPageLoading } from '../shared/ui/States';
+import { FullPageLoading, LoadingState } from '../shared/ui/States';
 
 interface NavigationItem {
   key: string;
@@ -154,7 +154,7 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
       </nav>
       <div className="app-sidebar__footer">
         <SafetyCertificateOutlined className="app-sidebar__footer-icon" />
-        <span>资料按 SHA-256 去重归档</span>
+        <span>相同资料自动去重归档</span>
       </div>
     </div>
   );
@@ -289,7 +289,9 @@ function AuthenticatedAppLayout() {
 
         <main className="app-content">
           <div className="app-content__inner">
-            <Outlet />
+            <Suspense fallback={<LoadingState />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>

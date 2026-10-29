@@ -61,10 +61,10 @@ def _ocr_image(image: Image.Image) -> list[str]:
 
 
 def _write_pdf_pages(path: Path, output: Path) -> int:
-    image = Image.open(path)
-    if getattr(image, "n_frames", 1) > 1:
-        raise ValueError("不支持多页图片，请上传 PDF")
-    texts = _ocr_image(image)
+    with Image.open(path) as image:
+        if getattr(image, "n_frames", 1) > 1:
+            raise ValueError("不支持多页图片，请上传 PDF")
+        texts = _ocr_image(image)
     with output.open("w", encoding="utf-8") as stream:
         stream.write(json.dumps({"page_no": 1, "texts": texts}, ensure_ascii=False) + "\n")
     return 1

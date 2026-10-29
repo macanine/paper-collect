@@ -4,8 +4,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/blob"
 	"github.com/nic/paper-collect/backend/internal/cryptobox"
+	"github.com/nic/paper-collect/backend/internal/office"
 	"github.com/nic/paper-collect/backend/internal/storage"
 	"gorm.io/gorm"
 )
@@ -54,10 +57,18 @@ type WorkerSettings struct {
 	PollInterval         time.Duration
 }
 
+// previewConverter renders and caches Word previews. Tests can replace it
+// without installing LibreOffice.
+type previewConverter interface {
+	PDF(context.Context, string, func(context.Context) (io.ReadCloser, error)) (string, error)
+	Remove(string)
+}
+
 // Service is the application façade. It is safe for concurrent use.
 type Service struct {
 	db                  *gorm.DB
 	blobs               *blob.Store
+	office              previewConverter
 	box                 *cryptobox.Box
 	signer              *auth.Signer
 	limiter             *auth.Limiter
@@ -90,10 +101,11 @@ func New(opts Options) (*Service, error) {
 	if limits == (archive.Limits{}) {
 		limits = archive.DefaultLimits
 	}
-	logf := opts.Logf
-	if logf == nil {
-		logf = log.Printf
+	logSink := opts.Logf
+	if logSink == nil {
+		logSink = log.Printf
 	}
+	logf := func(format string, args ...any) { logSink("%s", redact(fmt.Sprintf(format, args...))) }
 	worker := opts.Worker
 	if strings.TrimSpace(worker.InstanceID) == "" {
 		worker.InstanceID = uuid.NewString()
@@ -125,6 +137,7 @@ func New(opts Options) (*Service, error) {
 	return &Service{
 		db:                  opts.DB,
 		blobs:               opts.Blobs,
+		office:              office.New(opts.Blobs.DataDir()),
 		box:                 opts.Box,
 		signer:              opts.Signer,
 		limiter:             opts.Limiter,

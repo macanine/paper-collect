@@ -17,6 +17,7 @@ var (
 	urlPattern    = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://\S+`)
 	keyValPattern = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key|client[_-]?secret)\s*[:=]\s*\S+`)
 	bearerPattern = regexp.MustCompile(`(?i)bearer\s+\S+`)
+	apiKeyPattern = regexp.MustCompile(`(?:sk-[A-Za-z0-9_-]{43}|pc_[0-9a-fA-F-]{36}\.[A-Za-z0-9_-]{16,128})`)
 )
 
 // redact removes URLs, credential-looking pairs and known secret values, then truncates.
@@ -30,6 +31,7 @@ func redact(msg string, secrets ...string) string {
 	}
 	out = urlPattern.ReplaceAllString(out, "<url>")
 	out = bearerPattern.ReplaceAllString(out, "Bearer ***")
+	out = apiKeyPattern.ReplaceAllString(out, "<api-key>")
 	out = keyValPattern.ReplaceAllStringFunc(out, func(m string) string {
 		if i := strings.IndexAny(m, ":="); i >= 0 {
 			return strings.TrimSpace(m[:i]) + "=***"
@@ -60,11 +62,11 @@ func storageErrorText(err error, secrets ...string) string {
 func publicMessage(err error) string {
 	var ae *apperr.Error
 	if errors.As(err, &ae) {
-		return ae.Message
+		return redact(ae.Message)
 	}
 	var rej *archive.Rejected
 	if errors.As(err, &rej) {
-		return rej.Reason
+		return redact(rej.Reason)
 	}
 	var apiErr *ai.APIError
 	if errors.As(err, &apiErr) {

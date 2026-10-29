@@ -2,10 +2,8 @@ package server
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/model"
 )
 
@@ -66,20 +64,6 @@ func (s *Server) handleLogout(c *gin.Context) {
 		return
 	}
 	respondNoContent(c)
-}
-
-func (s *Server) handleAgentToken(c *gin.Context) {
-	key := strings.TrimSpace(c.GetHeader("X-API-Key"))
-	if key == "" {
-		respondError(c, apperr.Unauthorized("API Key 无效"))
-		return
-	}
-	token, err := s.svc.AgentToken(c.Request.Context(), key)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	s.respondData(c, http.StatusOK, agentTokenDTO{AccessToken: token, ExpiresIn: 900})
 }
 
 func (s *Server) handleMe(c *gin.Context) {

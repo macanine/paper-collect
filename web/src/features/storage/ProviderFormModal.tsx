@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormInstance } from 'antd';
-import { App, Checkbox, Form, Input, InputNumber, Modal, Select, Switch } from 'antd';
+import { Alert, App, Checkbox, Form, Input, InputNumber, Modal, Select, Switch } from 'antd';
 import type { ProviderKind, ProviderRole, StorageProvider } from '../../shared/api/types';
 import { PROVIDER_ROLE_LABELS } from '../../shared/lib/labels';
 import { errorMessage } from '../../shared/api/errors';
@@ -11,7 +11,10 @@ import {
   buildPatchPayload,
   configDefaultsForKind,
   initialProviderValues,
+  oneDriveAuthMode,
   validateProviderForm,
+  visibleConfigFields,
+  visibleSecretFields,
   type FieldSpec,
   type ProviderFormValues,
 } from './providerFields';
@@ -56,6 +59,9 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
   const kind = watchedKind ?? provider?.kind ?? 'local';
   const spec = PROVIDER_FIELD_SPECS[kind];
   const clearSecret = Boolean(Form.useWatch('clearSecret', form));
+  const watchedConfig = Form.useWatch('config', form) as Record<string, string> | undefined;
+  const config = watchedConfig ?? (provider?.kind === kind ? initialProviderValues(provider).config : configDefaultsForKind(kind));
+  const oneDriveMode = oneDriveAuthMode(config);
 
   useEffect(() => {
     if (!open) return;
@@ -80,6 +86,10 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
       clearSecret: Boolean(values.clearSecret),
     };
     const validation = validateProviderForm(normalized, editing ? 'edit' : 'create');
+    if (provider?.kind === 'onedrive' && oneDriveAuthMode(provider.config) !== oneDriveAuthMode(normalized.config) && !normalized.secret.refresh_token?.trim()) {
+      validation.errors['secret.refresh_token'] = '切换授权方式时，请填写对应的刷新令牌';
+      validation.valid = false;
+    }
     if (!validation.valid) {
       applyFieldErrors(form, validation.errors);
       message.error('请修正表单中标红的问题');
@@ -119,6 +129,8 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
       maskClosable={!submitting}
     >
       <Form<ProviderFormValues> form={form} layout="vertical" requiredMark="optional" disabled={submitting}>
+        {kind === 'onedrive' ? <Alert className="mb-4" type="info" showIcon message="连接国际版 OneDrive" description="共享文件夹须对授权账号开放写入；不填链接时使用自己的 OneDrive。" /> : null}
+        {kind === 's3' ? <Alert className="mb-4" type="info" showIcon message="分享链接在设定时间后失效，可在资料详情中重新生成。" /> : null}
         <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <Form.Item
             name="name"
@@ -155,7 +167,7 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
           <>
             <div className="mb-3 text-sm font-medium">配置</div>
             <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
-              {spec.config.map((field) => (
+              {visibleConfigFields(kind, config).map((field) => (
                 <Form.Item
                   key={field.key}
                   name={fieldName(field)}
@@ -163,7 +175,7 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
                   rules={field.required ? [{ required: true, whitespace: true, message: `请输入${field.label}` }] : undefined}
                 >
                   {field.input === 'select' ? (
-                    <Select allowClear options={field.options} placeholder={field.placeholder ?? '默认'} />
+                    <Select allowClear={field.key !== 'auth_mode'} options={field.options} placeholder={field.placeholder ?? '默认'} />
                   ) : (
                     <Input placeholder={field.placeholder} maxLength={2048} />
                   )}
@@ -173,11 +185,32 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
           </>
         ) : null}
 
+        {kind === 'onedrive' ? (
+          <Alert
+            className="mb-4"
+            type={oneDriveMode === 'openlist' ? 'warning' : 'info'}
+            showIcon
+            message={oneDriveMode === 'openlist' ? '使用现成应用获取刷新令牌' : '使用自己的微软应用'}
+            description={oneDriveMode === 'openlist' ? (
+              <div className="flex flex-col gap-2">
+                <span>打开 OpenList 授权页面，选择 OneDrive 个人版或企业版，勾选“使用 OpenList 提供的参数”，点击“获取 Token”并登录微软账号。将页面中的刷新令牌粘贴到下方。</span>
+                <a href="https://api.oplist.org/" target="_blank" rel="noopener noreferrer">打开 OpenList 获取令牌</a>
+                <span>此方式使用 OpenList 第三方应用，授权时请求访问你有权访问的文件。每次续期会通过 OpenList 服务传递刷新令牌，该服务接口将令牌放在 URL 参数中。</span>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <span>在微软注册应用，授予 Files.ReadWrite 和 offline_access；使用该应用完成授权后，把刷新令牌填入下方。</span>
+                <a href="https://learn.microsoft.com/zh-cn/graph/auth-v2-user" target="_blank" rel="noopener noreferrer">查看微软授权步骤</a>
+              </div>
+            )}
+          />
+        ) : null}
+
         {spec.secret.length > 0 ? (
           <>
             <div className="mb-3 text-sm font-medium">凭据</div>
             <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
-              {spec.secret.map((field) => (
+              {visibleSecretFields(kind, config).map((field) => (
                 <Form.Item key={field.key} name={['secret', field.key]} label={field.label} required={field.required}>
                   <Input.Password
                     autoComplete="new-password"
@@ -187,6 +220,7 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
                 </Form.Item>
               ))}
             </div>
+            {kind === 'onedrive' && editing && provider.secret_configured ? <p className="text-xs text-slate-500">更换凭据时，请同时重新填写仍需使用的应用密钥和共享文件夹链接；留空的旧凭据不会保留。</p> : null}
             {editing && provider.secret_configured ? (
               <Form.Item name="clearSecret" valuePropName="checked">
                 <Checkbox>清空已保存凭据</Checkbox>

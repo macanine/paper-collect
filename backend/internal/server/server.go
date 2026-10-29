@@ -29,7 +29,12 @@ type Options struct {
 type Server struct {
 	svc     *service.Service
 	webDist string
+	router  *gin.Engine
 }
+
+// Only an in-process MCP dispatch can attach an already authenticated principal.
+// HTTP scope middleware still runs for the forwarded request.
+type internalPrincipalKey struct{}
 
 // New validates dependencies and returns a Server.
 func New(opts Options) (*Server, error) {
@@ -42,6 +47,7 @@ func New(opts Options) (*Server, error) {
 // Router builds the complete Gin engine. It is safe to call once per Server.
 func (s *Server) Router() *gin.Engine {
 	r := gin.New()
+	s.router = r
 	r.Use(requestIDMiddleware(), recoveryMiddleware())
 
 	r.GET("/healthz", func(c *gin.Context) {
@@ -56,43 +62,43 @@ func (s *Server) Router() *gin.Engine {
 	api := r.Group("/api/v1")
 	api.POST("/auth/login", s.handleLogin)
 	api.POST("/auth/refresh", s.handleRefresh)
-	api.POST("/auth/agent-token", s.handleAgentToken)
-
 	authGroup := api.Group("", s.authMiddleware())
 	authGroup.POST("/auth/logout", s.handleLogout)
 	authGroup.GET("/auth/me", s.handleMe)
 
 	authGroup.GET("/subjects", s.requireScope(model.ScopeMaterialsRead), s.handleSubjects)
-	authGroup.GET("/users", s.requireScope(model.ScopeUsersManage), s.rejectAgent(), s.handleListUsers)
-	authGroup.POST("/users", s.requireScope(model.ScopeUsersManage), s.rejectAgent(), s.handleCreateUser)
-	authGroup.GET("/api-keys", s.requireScope(model.ScopeKeysManage), s.rejectAgent(), s.handleListKeys)
-	authGroup.POST("/api-keys", s.requireScope(model.ScopeKeysManage), s.rejectAgent(), s.handleCreateKey)
-	authGroup.DELETE("/api-keys/:id", s.requireScope(model.ScopeKeysManage), s.rejectAgent(), s.handleRevokeKey)
+	authGroup.GET("/users", s.requireScope(model.ScopeUsersManage), s.handleListUsers)
+	authGroup.POST("/users", s.requireScope(model.ScopeUsersManage), s.handleCreateUser)
+	authGroup.GET("/api-keys", s.requireScope(model.ScopeKeysManage), s.handleListKeys)
+	authGroup.POST("/api-keys", s.requireScope(model.ScopeKeysManage), s.handleCreateKey)
+	authGroup.DELETE("/api-keys/:id", s.requireScope(model.ScopeKeysManage), s.handleRevokeKey)
 	authGroup.GET("/audit-logs", s.requireScope(model.ScopeAuditRead), s.handleListAudit)
 
 	authGroup.POST("/search/questions", s.requireScope(model.ScopeMaterialsRead), s.handleSearchQuestions)
 	authGroup.GET("/search/questions/:id", s.requireScope(model.ScopeMaterialsRead), s.handleGetQuestion)
-	authGroup.GET("/search/settings", s.requireScope(model.ScopeSearchRead), s.rejectAgent(), s.handleGetSearchSettings)
-	authGroup.PUT("/search/settings", s.requireScope(model.ScopeSearchWrite), s.rejectAgent(), s.handlePutSearchSettings)
+	authGroup.GET("/search/settings", s.requireScope(model.ScopeSearchRead), s.handleGetSearchSettings)
+	authGroup.PUT("/search/settings", s.requireScope(model.ScopeSearchWrite), s.handlePutSearchSettings)
 
-	authGroup.GET("/ai/providers", s.requireScope(model.ScopeAIRead), s.rejectAgent(), s.handleListAIProviders)
-	authGroup.POST("/ai/providers", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleCreateAIProvider)
-	authGroup.PATCH("/ai/providers/:id", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handlePatchAIProvider)
-	authGroup.POST("/ai/providers/probe", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleProbeAIProviders)
-	authGroup.POST("/ai/providers/:id/probe", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleProbeSavedAIProvider)
-	authGroup.POST("/ai/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleTestAIProvider)
-	authGroup.GET("/ocr/providers", s.requireScope(model.ScopeAIRead), s.rejectAgent(), s.handleListOCRProviders)
-	authGroup.POST("/ocr/providers", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleCreateOCRProvider)
-	authGroup.PATCH("/ocr/providers/:id", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handlePatchOCRProvider)
-	authGroup.POST("/ocr/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleTestOCRProvider)
-	authGroup.GET("/ai/settings", s.requireScope(model.ScopeAIRead), s.rejectAgent(), s.handleGetAISettings)
-	authGroup.PUT("/ai/settings", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handlePutAISettings)
-	authGroup.POST("/ai/mineru/test", s.requireScope(model.ScopeAIWrite), s.rejectAgent(), s.handleTestMinerU)
+	authGroup.GET("/ai/providers", s.requireScope(model.ScopeAIRead), s.handleListAIProviders)
+	authGroup.POST("/ai/providers", s.requireScope(model.ScopeAIWrite), s.handleCreateAIProvider)
+	authGroup.PATCH("/ai/providers/:id", s.requireScope(model.ScopeAIWrite), s.handlePatchAIProvider)
+	authGroup.POST("/ai/providers/probe", s.requireScope(model.ScopeAIWrite), s.handleProbeAIProviders)
+	authGroup.POST("/ai/providers/:id/probe", s.requireScope(model.ScopeAIWrite), s.handleProbeSavedAIProvider)
+	authGroup.POST("/ai/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.handleTestAIProvider)
+	authGroup.GET("/ocr/providers", s.requireScope(model.ScopeAIRead), s.handleListOCRProviders)
+	authGroup.POST("/ocr/providers", s.requireScope(model.ScopeAIWrite), s.handleCreateOCRProvider)
+	authGroup.PATCH("/ocr/providers/:id", s.requireScope(model.ScopeAIWrite), s.handlePatchOCRProvider)
+	authGroup.POST("/ocr/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.handleTestOCRProvider)
+	authGroup.GET("/ai/settings", s.requireScope(model.ScopeAIRead), s.handleGetAISettings)
+	authGroup.PUT("/ai/settings", s.requireScope(model.ScopeAIWrite), s.handlePutAISettings)
+	authGroup.POST("/ai/mineru/test", s.requireScope(model.ScopeAIWrite), s.handleTestMinerU)
 
 	authGroup.GET("/materials", s.requireScope(model.ScopeMaterialsRead), s.handleListMaterials)
+	authGroup.GET("/materials/stats", s.requireScope(model.ScopeMaterialsRead), s.handleMaterialStats)
 	authGroup.GET("/materials/:id", s.requireScope(model.ScopeMaterialsRead), s.handleGetMaterial)
 	authGroup.PATCH("/materials/:id", s.requireScope(model.ScopeMaterialsWrite), s.handlePatchMaterial)
 	authGroup.GET("/materials/:id/download", s.requireScope(model.ScopeMaterialsRead), s.handleDownloadMaterial)
+	authGroup.GET("/materials/:id/preview", s.requireScope(model.ScopeMaterialsRead), s.handlePreviewMaterial)
 	authGroup.DELETE("/materials/:id", s.requireScope(model.ScopeMaterialsWrite), s.handleDeleteMaterial)
 	authGroup.POST("/materials/:id/analysis", s.requireScope(model.ScopeMaterialsWrite), s.handleEnqueueAnalysis)
 	authGroup.GET("/materials/:id/analysis", s.requireScope(model.ScopeMaterialsRead), s.handleGetAnalysis)
@@ -114,6 +120,7 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.POST("/uploads/:id/finalize", s.requireScope(model.ScopeUploadsWrite), s.handleFinalizeUpload)
 
 	authGroup.GET("/jobs", s.requireScope(model.ScopeJobsRead), s.handleListJobs)
+	authGroup.GET("/jobs/stats", s.requireScope(model.ScopeJobsRead), s.handleJobStats)
 	authGroup.GET("/jobs/:id", s.requireScope(model.ScopeJobsRead), s.handleGetJob)
 	authGroup.POST("/jobs/:id/retry", s.requireScope(model.ScopeJobsWrite), s.handleRetryJob)
 
@@ -156,6 +163,11 @@ func methodNotAllowed(c *gin.Context) {
 
 func (s *Server) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if p, ok := c.Request.Context().Value(internalPrincipalKey{}).(auth.Principal); ok {
+			c.Set(principalKey, p)
+			c.Next()
+			return
+		}
 		bearer := bearerToken(c)
 		if bearer == "" {
 			respondError(c, apperr.Unauthorized("凭据无效或已过期"))
@@ -197,17 +209,7 @@ func (s *Server) requireScope(scope string) gin.HandlerFunc {
 func (s *Server) agentOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !principal(c).IsAgent() {
-			respondError(c, apperr.Forbidden("MCP 仅支持代理令牌"))
-			return
-		}
-		c.Next()
-	}
-}
-
-func (s *Server) rejectAgent() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if principal(c).IsAgent() {
-			respondError(c, apperr.Forbidden("代理密钥不能访问该接口"))
+			respondError(c, apperr.Forbidden("MCP 仅支持 API 密钥"))
 			return
 		}
 		c.Next()

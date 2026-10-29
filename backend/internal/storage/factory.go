@@ -14,6 +14,10 @@ func New(cfg Config) (Adapter, error) {
 		return NewLanzou(cfg, nil)
 	case "123pan":
 		return New123Pan(cfg, nil)
+	case "s3":
+		return NewS3(cfg, nil)
+	case "onedrive":
+		return NewOneDrive(cfg, nil)
 	default:
 		return nil, newCloudError(ClassUnsupported, "kind_unsupported", false)
 	}

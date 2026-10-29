@@ -4,8 +4,8 @@ import type { ColumnsType } from 'antd/es/table';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
-import type { JobStatus, Upload } from '../../shared/api/types';
-import { formatBytes, shortId } from '../../shared/lib/format';
+import type { Job, JobStatus, Upload } from '../../shared/api/types';
+import { formatBytes } from '../../shared/lib/format';
 import { UPLOAD_STATUS_LABELS } from '../../shared/lib/labels';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
@@ -221,6 +221,8 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
           jobQueryError={job.error}
           jobStatus={job.data?.status}
           jobFailure={job.data?.error ?? ''}
+          jobProgress={job.data?.progress_message ?? ''}
+          jobLogs={job.data?.logs}
           jobId={upload.job_id}
           attempts={job.data?.attempts ?? 0}
           canRetryJob={can('jobs:write')}
@@ -250,16 +252,20 @@ interface SubmittedCardProps {
   jobQueryError: unknown;
   jobStatus: JobStatus | undefined;
   jobFailure: string;
+  jobProgress: string;
+  jobLogs: Job['logs'];
   attempts: number;
   canRetryJob: boolean;
   retrying: boolean;
   onRetry: () => void;
 }
 
-function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jobFailure, attempts, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
+function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jobFailure, jobProgress, jobLogs, attempts, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
   if (upload.status === 'completed') {
+    const skipped = jobLogs?.filter((entry) => entry.message.includes('个不支持的文件，已跳过，未归档')) ?? [];
     return (
       <Card>
+        {skipped.map((entry) => <Alert key={`${entry.time}-${entry.message}`} type="warning" showIcon message={entry.message} className="mb-3" />)}
         <Result
           status="success"
           title="归档完成"
@@ -279,6 +285,7 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
                 <Button>查看全部资料</Button>
               </Link>
             ) : null,
+            <Link key="job" to={`/jobs/${jobId}`}><Button>查看处理记录</Button></Link>,
           ]}
         />
       </Card>
@@ -292,10 +299,11 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
         size="small"
         column={{ xs: 1, md: 3 }}
         items={[
-          { key: 'job', label: '任务', children: <Link to={`/jobs/${jobId}`}>{shortId(jobId)}</Link> },
+          { key: 'job', label: '任务', children: <Link to={`/jobs/${jobId}`}>查看处理记录</Link> },
           { key: 'status', label: '状态', children: jobPending || !jobStatus ? '加载中…' : <JobStatusTag status={jobStatus} /> },
           { key: 'attempts', label: '尝试次数', children: attempts },
           { key: 'upload-status', label: '清单状态', children: UPLOAD_STATUS_LABELS[upload.status] },
+          { key: 'progress', label: '当前进度', children: jobProgress || '等待处理' },
         ]}
       />
       {jobStatus === 'failed' ? (

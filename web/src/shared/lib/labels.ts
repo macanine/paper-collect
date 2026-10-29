@@ -56,6 +56,8 @@ export const PROVIDER_KIND_LABELS: Record<ProviderKind, string> = {
   webdav: 'WebDAV',
   lanzou: '蓝奏云',
   '123pan': '123 云盘',
+  onedrive: 'OneDrive',
+  s3: 'S3 / 兼容对象存储',
 };
 
 export const PROVIDER_ROLE_LABELS: Record<ProviderRole, string> = {
@@ -79,7 +81,7 @@ export const REPLICA_STATUS_LABELS: Record<ReplicaStatus, string> = {
 export const VERIFICATION_LABELS: Record<Verification, string> = {
   uploaded: '仅上传成功',
   size: '字节数已校验',
-  sha256: 'SHA-256 已校验',
+  sha256: '内容完整性已校验',
 };
 
 export const SHARE_STATUS_LABELS: Record<ShareStatus, string> = {

@@ -132,6 +132,7 @@ func (s *Service) DeleteMaterial(ctx context.Context, p auth.Principal, id strin
 	}
 	for _, sha := range blobSHAs {
 		_ = os.Remove(s.blobs.Path(sha))
+		s.office.Remove(sha)
 	}
 	return nil
 }

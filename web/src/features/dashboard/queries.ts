@@ -1,50 +1,53 @@
 import { useQuery } from '@tanstack/react-query';
-import type { JobKind, JobStatus, MaterialStatus } from '../../shared/api/types';
-import { listJobs } from '../jobs/api';
-import { listMaterials } from '../materials/api';
+import { getJobStats, listJobs } from '../jobs/api';
+import { getMaterialStats, listMaterials } from '../materials/api';
 
 const REFRESH_MS = 30_000;
 
 export const dashboardKeys = {
   all: ['dashboard'] as const,
-  materialStatus: (status: MaterialStatus) => ['dashboard', 'materials', 'status', status] as const,
+  materialStats: ['dashboard', 'materials', 'stats'] as const,
   recentMaterials: ['dashboard', 'materials', 'recent'] as const,
-  jobStatus: (status: JobStatus) => ['dashboard', 'jobs', 'status', status] as const,
-  recentJobs: (kind: JobKind | '') => ['dashboard', 'jobs', 'recent', kind] as const,
+  jobStats: ['dashboard', 'jobs', 'stats'] as const,
+  recentJobs: ['dashboard', 'jobs', 'recent'] as const,
 };
 
-export function useMaterialStatusCount(status: MaterialStatus, enabled: boolean) {
+export function useMaterialStats(enabled: boolean) {
   return useQuery({
-    queryKey: dashboardKeys.materialStatus(status),
-    queryFn: () => listMaterials({ page: 1, page_size: 1, status }),
+    queryKey: dashboardKeys.materialStats,
+    queryFn: ({ signal }) => getMaterialStats(signal),
     enabled,
     staleTime: REFRESH_MS,
+    refetchInterval: REFRESH_MS,
   });
 }
 
 export function useRecentMaterials(enabled: boolean) {
   return useQuery({
     queryKey: dashboardKeys.recentMaterials,
-    queryFn: () => listMaterials({ page: 1, page_size: 6 }),
+    queryFn: ({ signal }) => listMaterials({ page: 1, page_size: 6 }, signal),
     enabled,
     staleTime: REFRESH_MS,
+    refetchInterval: REFRESH_MS,
   });
 }
 
-export function useJobStatusCount(status: JobStatus, enabled: boolean) {
+export function useJobStats(enabled: boolean) {
   return useQuery({
-    queryKey: dashboardKeys.jobStatus(status),
-    queryFn: () => listJobs({ page: 1, page_size: 1, status }),
+    queryKey: dashboardKeys.jobStats,
+    queryFn: ({ signal }) => getJobStats(signal),
     enabled,
     staleTime: REFRESH_MS,
+    refetchInterval: REFRESH_MS,
   });
 }
 
 export function useRecentJobs(enabled: boolean) {
   return useQuery({
-    queryKey: dashboardKeys.recentJobs(''),
-    queryFn: () => listJobs({ page: 1, page_size: 6 }),
+    queryKey: dashboardKeys.recentJobs,
+    queryFn: ({ signal }) => listJobs({ page: 1, page_size: 6 }, signal),
     enabled,
     staleTime: REFRESH_MS,
+    refetchInterval: REFRESH_MS,
   });
 }

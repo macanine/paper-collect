@@ -9,7 +9,7 @@ import { FileSelector } from './FileSelector';
 import type { SelectedFile, SourceResult } from './fileSources';
 import { validateManifest } from './manifest';
 import { stashFiles } from './stash';
-import { matchFiles } from './useUploadTransfer';
+import { matchFiles } from './matchFiles';
 
 export function NewUploadPage() {
   const navigate = useNavigate();

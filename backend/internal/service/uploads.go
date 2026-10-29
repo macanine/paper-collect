@@ -78,8 +78,9 @@ func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadI
 		if err := validateRelativePath(e.RelativePath); err != nil {
 			return UploadView{}, err
 		}
-		if _, ok := blob.ExtensionKind(e.RelativePath); !ok {
-			return UploadView{}, apperr.UnsupportedMedia("仅支持 .zip、.pptx、.pdf、.docx、.doc 文件")
+		_, ok := blob.ExtensionKind(e.RelativePath)
+		if !ok {
+			return UploadView{}, apperr.UnsupportedMedia("仅支持 PDF、DOC、DOCX、PPTX 和 ZIP")
 		}
 		if e.SizeBytes < 1 || e.SizeBytes > maxUploadBytes {
 			return UploadView{}, apperr.Validation("单文件大小必须为 1 字节到 512 MiB")
@@ -135,7 +136,7 @@ func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadI
 		if err := tx.Create(&up).Error; err != nil {
 			return wrap("create upload", err)
 		}
-		if err := tx.Create(&entries).Error; err != nil {
+		if err := tx.CreateInBatches(&entries, 250).Error; err != nil {
 			return wrap("create upload entries", err)
 		}
 		return s.audit(tx, p, "upload.create", up.ID)
@@ -163,8 +164,8 @@ func (s *Service) GetUpload(ctx context.Context, p auth.Principal, id string) (U
 	return UploadView{Upload: up, Entries: entries}, nil
 }
 
-// PutEntry streams one file to a staging file, checks size, real format and SHA-256,
-// then publishes it into the CAS and marks the entry received.
+// PutEntry streams and validates a file, then stores documents in the CAS or
+// keeps ZIPs in a separate staging area until their ingest job succeeds.
 // A repeated PUT of identical content returns the original result; different content is a conflict.
 func (s *Service) PutEntry(ctx context.Context, p auth.Principal, uploadID, entryID string, body io.Reader, declared int64) (model.UploadEntry, error) {
 	db := s.db.WithContext(ctx)
@@ -229,7 +230,13 @@ func (s *Service) PutEntry(ctx context.Context, p auth.Principal, uploadID, entr
 	if !ok || kind != expected {
 		return model.UploadEntry{}, apperr.UnsupportedMedia("文件真实格式与扩展名不一致")
 	}
-	if err := s.blobs.Publish(tmpPath, sum); err != nil {
+	archivePath := ""
+	if kind == blob.KindZIP {
+		if err := s.stageArchive(tmpPath, entry.ID, sum); err != nil {
+			return model.UploadEntry{}, apperr.Internal(err)
+		}
+		archivePath = s.archiveUploadPath(entry.ID, sum)
+	} else if err := s.blobs.Publish(tmpPath, sum); err != nil {
 		return model.UploadEntry{}, apperr.Internal(err)
 	}
 	published = true
@@ -250,7 +257,20 @@ func (s *Service) PutEntry(ctx context.Context, p auth.Principal, uploadID, entr
 		return model.UploadEntry{}, apperr.Internal(err)
 	}
 	if reloaded.Status == model.EntryReceived && reloaded.SHA256 == sum {
+		if archivePath != "" && res.RowsAffected == 0 {
+			// A duplicate writer may finish after the ingest worker has cleaned
+			// up. Remove its staged file only if the upload is already complete.
+			var current model.Upload
+			if err := db.Select("status").Where("id = ?", uploadID).First(&current).Error; err == nil && current.Status == model.UploadCompleted {
+				_ = os.Remove(archivePath)
+			}
+		}
 		return reloaded, nil
+	}
+	if archivePath != "" && reloaded.Status == model.EntryReceived {
+		// A concurrent request won with different content; its staging file has
+		// a different name and must remain available to the ingest job.
+		_ = os.Remove(archivePath)
 	}
 	return model.UploadEntry{}, apperr.Conflict("已接收的文件不能替换为不同内容")
 }

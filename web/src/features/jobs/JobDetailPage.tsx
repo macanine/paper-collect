@@ -9,6 +9,7 @@ import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { useJobDetail, useRetryJob } from './queries';
+import { JobProgress, progressText } from './JobProgress';
 
 export function JobDetailPage() {
   const { jobId = '' } = useParams();
@@ -34,7 +35,7 @@ export function JobDetailPage() {
     <div className="page-stack">
       <BackLink />
       <PageHeader
-        title={`任务 ${job.id.slice(0, 8)}`}
+        title={JOB_KIND_LABELS[job.kind] ?? '任务详情'}
         extra={
           <div className="flex items-center gap-2">
             <JobStatusTag status={job.status} />
@@ -70,29 +71,20 @@ export function JobDetailPage() {
           size="small"
           column={{ xs: 1, md: 2 }}
           items={[
-            { key: 'id', label: '任务编号', span: { xs: 1, md: 2 }, children: <span className="mono-text">{job.id}</span> },
             { key: 'kind', label: '类型', children: JOB_KIND_LABELS[job.kind] ?? job.kind },
             { key: 'status', label: '状态', children: <JobStatusTag status={job.status} /> },
             { key: 'attempts', label: '尝试次数', children: job.attempts },
-            {
-              key: 'upload',
-              label: '关联清单',
-              children:
-                job.upload_id && can('uploads:write') ? <Link to={`/uploads/${job.upload_id}`}>{job.upload_id}</Link> : job.upload_id || '—',
-            },
-            { key: 'replica', label: '关联副本', children: job.replica_id ? <span className="mono-text">{job.replica_id}</span> : '—' },
+            { key: 'progress', label: '当前进度', span: { xs: 1, md: 2 }, children: progressText(job) },
+            ...(job.upload_id && can('uploads:write') ? [{ key: 'upload', label: '关联清单', children: <Link to={`/uploads/${job.upload_id}`}>查看上传清单</Link> }] : []),
+            ...(job.material_id && can('materials:read') ? [{ key: 'material', label: '关联资料', children: <Link to={`/materials/${job.material_id}`}>查看资料</Link> }] : []),
             { key: 'created', label: '创建时间', children: formatDateTime(job.created_at) },
             { key: 'updated', label: '更新时间', children: formatDateTime(job.updated_at) },
           ]}
         />
       </Card>
 
-      <Card title="错误信息">
-        {job.error ? (
-          <pre className="m-0 whitespace-pre-wrap break-all rounded bg-red-50 p-3 text-sm text-red-700">{job.error}</pre>
-        ) : (
-          '—'
-        )}
+      <Card title="处理记录">
+        <JobProgress job={job} />
       </Card>
     </div>
   );

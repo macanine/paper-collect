@@ -181,7 +181,7 @@ func (a *webdavAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 		return Stored{}, err
 	}
 	target := a.remoteURL(segments)
-	resp, err := a.do(ctx, http.MethodPut, target, src, obj.Size, map[string]string{
+	resp, err := a.do(ctx, http.MethodPut, target, &progressReader{r: src, total: obj.Size, report: obj.Progress}, obj.Size, map[string]string{
 		"Content-Type": "application/octet-stream",
 	}, a.uploadTimeout, "webdav_put")
 	if err != nil {

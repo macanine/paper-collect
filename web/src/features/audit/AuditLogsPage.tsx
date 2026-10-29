@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { Card, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import type { Audit } from '../../shared/api/types';
-import { formatDateTime, shortId } from '../../shared/lib/format';
+import { formatDateTime } from '../../shared/lib/format';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { listAuditLogs } from './api';
@@ -26,17 +27,30 @@ export function AuditLogsPage() {
     },
     {
       title: '操作者',
-      dataIndex: 'user_id',
+      dataIndex: 'username',
       key: 'user_id',
       width: 150,
-      render: (value: string) => <span className="font-mono text-xs">{shortId(value)}</span>,
+      render: (value: string, record) => value || (record.user_id ? '用户不可用' : '系统'),
     },
     {
       title: '目标',
       dataIndex: 'target_id',
       key: 'target_id',
       width: 150,
-      render: (value: string) => (value ? <span className="font-mono text-xs">{shortId(value)}</span> : '—'),
+      render: (value: string, record) => {
+        const action = record.action.replace(/^agent:/, '');
+        if (!value) return '系统设置';
+        if (action.startsWith('material.') && action !== 'material.delete') return <Link to={`/materials/${value}`}>查看资料</Link>;
+        if (action.startsWith('collection.') && action !== 'collection.delete') return <Link to={`/collections/${value}`}>查看合集</Link>;
+        if (action === 'job.retry') return <Link to={`/jobs/${value}`}>查看任务</Link>;
+        if (action.startsWith('upload.') || action === 'ingest.complete') return <Link to={`/uploads/${value}`}>查看上传清单</Link>;
+        if (action.startsWith('storage.')) return '存储设置';
+        if (action.startsWith('ai.')) return '智能识别设置';
+        if (action.startsWith('user.') || action.startsWith('auth.')) return '用户账户';
+        if (action.startsWith('api_key.')) return '接口密钥';
+        if (action.endsWith('.delete')) return '已删除的内容';
+        return '相关内容';
+      },
     },
     {
       title: '时间',

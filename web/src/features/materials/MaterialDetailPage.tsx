@@ -1,13 +1,12 @@
-import { useMemo, useState } from 'react';
-import { App, Button, Card, Descriptions, Popconfirm, Space, Tag, Typography } from 'antd';
-import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, EditOutlined } from '@ant-design/icons';
+import { lazy, Suspense, useMemo, useState } from 'react';
+import { App, Button, Card, Descriptions, Popconfirm, Space, Spin, Tag, Typography } from 'antd';
+import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { Replica, StorageProvider } from '../../shared/api/types';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { saveBlob } from '../../shared/lib/download';
 import { GRADE_LABELS } from '../../shared/lib/labels';
-import { CopyButton } from '../../shared/ui/CopyButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { MaterialStatusTag, RoleTag, SubjectTags } from '../../shared/ui/StatusTags';
@@ -15,10 +14,12 @@ import { useAuth } from '../auth/AuthContext';
 import { AnalysisPanel } from '../ai/AnalysisPanel';
 import { IndexPanel } from '../search/IndexPanel';
 import { useProviders, useRefreshShare } from '../storage/queries';
-import { deleteMaterial, downloadMaterial } from './api';
+import { deleteMaterial, downloadMaterial, previewMaterial } from './api';
 import { MaterialEditModal } from './MaterialEditModal';
 import { ReplicaTable } from './ReplicaTable';
 import { useMaterial } from './queries';
+
+const MaterialPreviewModal = lazy(() => import('./MaterialPreviewModal').then((module) => ({ default: module.MaterialPreviewModal })));
 
 export function MaterialDetailPage() {
   const { materialId = '' } = useParams();
@@ -31,6 +32,8 @@ export function MaterialDetailPage() {
   const refreshShare = useRefreshShare();
   const [editing, setEditing] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [converting, setConverting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -50,6 +53,8 @@ export function MaterialDetailPage() {
   }
 
   const material = query.data;
+  const isWord = material.media_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const pdfFileName = `${material.file_name.replace(/\.docx$/i, '')}.pdf`;
 
   const handleDownload = async () => {
     setDownloading(true);
@@ -61,6 +66,19 @@ export function MaterialDetailPage() {
       message.error(detail ? `${title}：${detail}` : title);
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setConverting(true);
+    try {
+      const { blob } = await previewMaterial(material.id);
+      saveBlob(blob, pdfFileName);
+    } catch (error) {
+      const { title, detail } = describeError(error);
+      message.error(detail ? `${title}：${detail}` : title);
+    } finally {
+      setConverting(false);
     }
   };
 
@@ -106,6 +124,14 @@ export function MaterialDetailPage() {
               <Button icon={<EditOutlined />} onClick={() => setEditing(true)}>
                 编辑
               </Button>
+            ) : null}
+            {can('materials:read') ? (
+              material.media_type === 'application/pdf' || isWord ? (
+                <Button icon={<EyeOutlined />} onClick={() => setPreviewing(true)}>预览</Button>
+              ) : null
+            ) : null}
+            {can('materials:read') && isWord ? (
+              <Button icon={<DownloadOutlined />} loading={converting} onClick={() => void handleDownloadPdf()}>下载 PDF</Button>
             ) : null}
             {can('materials:read') ? (
               <Button type="primary" icon={<DownloadOutlined />} loading={downloading} onClick={() => void handleDownload()}>
@@ -167,19 +193,8 @@ export function MaterialDetailPage() {
               ),
             },
             { key: 'file', label: '文件名', children: material.file_name },
-            { key: 'media', label: '媒体类型', children: material.media_type || '—' },
+            { key: 'media', label: '文件类型', children: fileTypeName(material.media_type) },
             { key: 'size', label: '大小', children: formatBytes(material.size_bytes) },
-            {
-              key: 'sha',
-              label: 'SHA-256',
-              span: { xs: 1, md: 2 },
-              children: (
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="mono-text">{material.sha256}</span>
-                  <CopyButton value={material.sha256} label="复制" />
-                </div>
-              ),
-            },
             { key: 'source', label: '原始路径', span: { xs: 1, md: 2 }, children: material.source_path || '—' },
             {
               key: 'parent',
@@ -212,8 +227,20 @@ export function MaterialDetailPage() {
       </Card>
 
       {editing ? <MaterialEditModal material={material} open={editing} onClose={() => setEditing(false)} /> : null}
+      {previewing ? <Suspense fallback={<Spin fullscreen tip="正在加载预览" />}><MaterialPreviewModal materialId={material.id} title={material.title} isWord={isWord} pdfFileName={pdfFileName} onClose={() => setPreviewing(false)} /></Suspense> : null}
     </div>
   );
+}
+
+function fileTypeName(mediaType: string): string {
+  const names: Record<string, string> = {
+    'application/pdf': 'PDF 文档',
+    'application/msword': 'Word 文档（DOC）',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word 文档（DOCX）',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint 演示文稿',
+    'application/zip': 'ZIP 压缩包',
+  };
+  return names[mediaType] ?? '其他文件';
 }
 
 function BackLink() {

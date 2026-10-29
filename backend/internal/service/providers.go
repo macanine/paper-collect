@@ -55,17 +55,21 @@ type PolicyInput struct {
 }
 
 var providerConfigKeys = map[string]map[string]bool{
-	model.KindLocal:  {},
-	model.KindWebDAV: {"base_url": true, "path_prefix": true, "public_base_url": true},
-	model.KindLanzou: {"base_url": true, "folder_id": true, "verify_remote_hash": true},
-	model.KindPan123: {"base_url": true, "parent_file_id": true},
+	model.KindLocal:    {},
+	model.KindWebDAV:   {"base_url": true, "path_prefix": true, "public_base_url": true},
+	model.KindLanzou:   {"base_url": true, "folder_id": true, "verify_remote_hash": true},
+	model.KindPan123:   {"base_url": true, "parent_file_id": true},
+	model.KindS3:       {"endpoint": true, "region": true, "bucket": true, "path_prefix": true, "path_style": true, "share_expires_seconds": true},
+	model.KindOneDrive: {"auth_mode": true, "client_id": true, "tenant": true, "path_prefix": true, "share_scope": true},
 }
 
 var providerSecretKeys = map[string]map[string]bool{
-	model.KindLocal:  {},
-	model.KindWebDAV: {"username": true, "password": true},
-	model.KindLanzou: {"cookie": true},
-	model.KindPan123: {"client_id": true, "client_secret": true},
+	model.KindLocal:    {},
+	model.KindWebDAV:   {"username": true, "password": true},
+	model.KindLanzou:   {"cookie": true},
+	model.KindPan123:   {"client_id": true, "client_secret": true},
+	model.KindS3:       {"access_key_id": true, "secret_access_key": true, "session_token": true},
+	model.KindOneDrive: {"client_secret": true, "refresh_token": true, "share_url": true},
 }
 
 // ListProviders returns every endpoint, including disabled ones, by read priority.
@@ -154,8 +158,19 @@ func (s *Service) UpdateProvider(ctx context.Context, p auth.Principal, id strin
 	}
 
 	cfg := model.DecodeMap(provider.ConfigJSON)
+	oldAuthMode := cfg["auth_mode"]
+	if oldAuthMode == "" {
+		oldAuthMode = "direct"
+	}
 	if pt.Config != nil {
 		cfg = *pt.Config
+	}
+	newAuthMode := cfg["auth_mode"]
+	if newAuthMode == "" {
+		newAuthMode = "direct"
+	}
+	if provider.Kind == model.KindOneDrive && oldAuthMode != newAuthMode && pt.Secret == nil {
+		return model.StorageProvider{}, apperr.Validation("切换 OneDrive 授权方式时，请填写对应的刷新令牌")
 	}
 	secret := map[string]string{}
 	if provider.SecretCipher != "" {
@@ -164,6 +179,9 @@ func (s *Service) UpdateProvider(ctx context.Context, p auth.Principal, id strin
 			return model.StorageProvider{}, apperr.Internal(err)
 		}
 		secret = model.DecodeMap(string(raw))
+	}
+	if provider.Kind == model.KindOneDrive && oldAuthMode != newAuthMode && pt.Secret != nil && (*pt.Secret)["refresh_token"] == secret["refresh_token"] {
+		return model.StorageProvider{}, apperr.Validation("切换 OneDrive 授权方式时，请填写新应用对应的刷新令牌")
 	}
 	if pt.Secret != nil {
 		secret = *pt.Secret
@@ -265,7 +283,7 @@ func validateProviderCommon(name, kind, role string, priority, weight int) error
 		return apperr.Validation("存储端点名称长度必须为 1 到 128 个字符")
 	}
 	if !isOneOf(kind, model.StorageKinds...) {
-		return apperr.Validation("存储端点类型只能是 local、webdav、lanzou 或 123pan")
+		return apperr.Validation("不支持该存储端点类型")
 	}
 	if !isOneOf(role, model.RolePrimary, model.RoleBackup) {
 		return apperr.Validation("存储端点角色只能是 primary 或 backup")

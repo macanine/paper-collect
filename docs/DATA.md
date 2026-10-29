@@ -18,7 +18,7 @@
 | 表 | 模型 | 作用与关键约束 |
 | --- | --- | --- |
 | `users` | `User` | 账号；`username` 唯一（3..64，字母/数字/下划线/连字符）；`role` 为 admin/editor/viewer；`enabled` 控制登录与 Agent 密钥 |
-| `api_keys` | `APIKey` | Agent 密钥；只存 secret 的 SHA-256；`user_id`、`expires_at`；`scopes_json`；`revoked`/`revoked_at` |
+| `api_keys` | `APIKey` | Agent 密钥；只存随机 secret 的 SHA-256，并为 `secret_hash` 建索引用于直接鉴权；`user_id`、`expires_at`；`scopes_json`；`revoked`/`revoked_at` |
 | `sessions` | `Session` | 浏览器会话；`refresh_hash` 唯一；`prev_hash` 记录上一枚 token 用于重放检测；`expires_at`、`revoked` |
 | `audits` | `Audit` | 审计元数据；`user_id`、`action`、`target_id`、`created_at`；不含正文、令牌、Cookie、密钥、分享链接 |
 | `blobs` | `Blob` | 不可变内容；`sha256` 唯一；大小/媒体类型/原始文件名；一个 Blob 可被多个 Material 引用 |
@@ -28,7 +28,7 @@
 | `collection_items` | `CollectionItem` | 资料摆放；唯一索引 `(collection_id, material_id)`；`position`、存储时角色、`relative_path`；读取时角色以资料为准 |
 | `uploads` | `Upload` | 上传清单；`user_id`、`status`、`job_id` 索引；标题/类型/学科/年级/学年/标签；完成后记录 `collection_id`/`material_id` |
 | `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status` |
-| `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error` |
+| `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
 | `job_locks` | `JobLock` | 同资料 analyze/index 互斥；资源键、任务 ID、租约到期时间 |
 | `storage_providers` | `StorageProvider` | 存储端点；`enabled`、`priority` 索引；kind/role/weight/config JSON/加密 secret；kind 不可改 |
 | `replicas` | `Replica` | Blob×Provider 副本；唯一索引 `(blob_id, provider_id)`；`status` 索引；verification、分享字段、远端标识、`plan_mode` |
@@ -85,7 +85,12 @@ DATA_DIR/
   paper.db                             默认 SQLite 数据库
   paper.db-wal / paper.db-shm          运行中的 WAL 文件（备份时需与 .db 同时刻）
   blobs/<sha[0:2]>/<sha>               原件 CAS，无扩展名
-  tmp/stage-*.part                     上传/ZIP 展开的临时文件
+  tmp/stage-*.part                     上传及 ZIP 展开的临时文件
+  tmp/upload-archives/*.zip            已接收且尚未处理成功的 ZIP 临时文件
+  tmp/docx-*.part                      远端副本读取 DOCX 时的临时文件
+  tmp/docx-*/                          预览转换期间的临时 Word 文件和独立配置
+  tmp/fontconfig-cache/                 macOS 转换器使用的字体缓存
+  previews/docx-v1/<sha前两位>/<sha>.pdf  DOCX 生成的 PDF 预览缓存
   analysis/<materialID>/document.md    识别用 Markdown（数据库存绝对路径）
   providers/<providerID>/...           本地存储端点的副本（按对象 key 分层）
 ```
@@ -94,6 +99,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 
 - `DATABASE_DSN` 若指向 `DATA_DIR` 外的 SQLite 文件或 PostgreSQL，数据库不在上述默认位置；CAS/临时文件/分析 Markdown/本地副本仍在 `DATA_DIR`。
 - CAS 以内容 SHA-256 寻址；相同内容只存一份。`Publish` 用原子 rename 落盘，重复内容丢弃临时文件。
+- DOCX 预览是可重建的派生文件，原件最后一个资料引用删除时一并清理；转换异常退出时可能留下临时目录。预览和临时文件也可能包含资料正文，备份和权限应与原件一致。
 - 原始上传在 `tmp/` 完成后才发布到 CAS；失败不会标记 entry received，但极端情况下可能留下未被引用的 CAS 文件。
 - `analysis/<materialID>/document.md` 每次分析前会删除并重建；数据库中的 `markdown_path` 是绝对路径，移动数据目录后旧分析摘要可能读不到，直到重新识别。
 - 本地存储端点根目录固定为 `DATA_DIR/providers/<providerID>`，API 不能指定任意路径。
@@ -106,8 +112,8 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 1. **停止服务并等待进程退出**，同时停止任何其他写同一数据库/数据目录的进程（包括手工导入、脚本和另一个 worker）。升级结构前先完成备份。
 2. **完整复制 `DATA_DIR`**。SQLite 默认数据库在其中；若 `DATABASE_DSN` 指向目录外，还须一并复制该数据库。不要在服务运行中只复制 `.db` 文件：WAL 模式下还必须复制同一时点的 `-wal`/`-shm`，或在停止服务后复制。
 3. **PostgreSQL**：停止写入后执行 `pg_dump` 备份数据库，再复制同一时点的 `DATA_DIR`。数据库和文件快照必须来自同一时点。
-4. **单独安全保存**：原 `MASTER_KEY`、`JWT_SECRET`、`DATABASE_DSN`、管理员自举配置（如需）。不要把这些值放进代码库或普通文档。`MASTER_KEY` 丢失后，已保存的云盘、AI 和 OCR 凭据无法解密；`JWT_SECRET` 改变会使现有 access/refresh 会话失效，但不影响业务数据。
-5. 记录当前版本/提交和升级前的数据库文件副本。云盘上的副本不属于本地备份；本地 CAS 是重新复制、下载和 ZIP 成员的材料，必须保留。
+4. **单独安全保存**：原 `MASTER_KEY`、`JWT_SECRET`、`DATABASE_DSN`、管理员自举配置（如需）。不要把这些值放进代码库或普通文档。`MASTER_KEY` 丢失后，已保存的云盘、AI 和 OCR 凭据无法解密；`JWT_SECRET` 改变会使现有 access JWT 失效，未撤销的 refresh token 仍可换取新浏览器 JWT，直接使用的 API 密钥不受影响。
+5. 记录当前版本/提交和升级前的数据库文件副本。云盘上的副本不属于本地备份；本地 CAS 是重新复制和下载资料所需的内容，必须保留。新上传的 ZIP 在处理成功后清理临时文件，历史数据不会自动清除；未完成任务依赖的临时 ZIP 也需要备份。
 
 ### 4.2 恢复
 
@@ -120,7 +126,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 
 ### 4.3 一致性注意
 
-- 数据库与 CAS/远端对象不是同一事务：上传/ZIP 展开先写 CAS，再在数据库事务中发布资料；进程在两步之间崩溃可能留下孤儿 CAS。复制任务先远端上传、后写副本状态，也可能出现“远端已存在但数据库未记录”的情况。
+- 数据库与 CAS/远端对象不是同一事务：普通文件和 ZIP 成员先写 CAS，再在数据库事务中发布资料；进程在两步之间崩溃可能留下孤儿 CAS。复制任务先远端上传、后写副本状态，也可能出现“远端已存在但数据库未记录”的情况。
 - 备份前停止所有写入比“热拷贝”更可靠。只恢复数据库而不恢复 CAS，会出现资料元数据在但原件缺失，下载只能尝试云副本；只恢复 CAS 而不恢复数据库，则原件无法被索引/关联。
 - 恢复后 worker 会处理 pending 任务和启动补建索引；在确认数据完整前，建议先禁用外部端点或隔离网络。
 

@@ -109,7 +109,7 @@ func TestDirectFolderAndZIPBuildOneCollection(t *testing.T) {
 		wantItems  int
 	}{
 		{"folder", "folder", map[string][]byte{"数学/一.pdf": minimalPDF(), "数学/二.pdf": minimalPDF()}, 2},
-		{"zip", "zip", map[string][]byte{"资料.zip": zipWith(t, map[string][]byte{"一.pdf": minimalPDF(), "二.pdf": minimalPDF()})}, 3},
+		{"zip", "zip", map[string][]byte{"资料.zip": zipWith(t, map[string][]byte{"一.pdf": minimalPDF(), "二.pdf": minimalPDF()})}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newEnv(t)

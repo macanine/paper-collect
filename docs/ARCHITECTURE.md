@@ -9,11 +9,11 @@
 面向高中资料的上传、归档、多点存储、AI 辅助编目和纯文本搜题系统：
 
 - **归档**：PDF、DOC、DOCX、PPTX、文件夹和 ZIP；资料是一份逻辑文件，原件按 SHA-256 去重。
-- **存储**：本地、WebDAV、蓝奏云、123 云盘适配器；一个 Blob 可在多个端点各保存一份副本。
+- **存储**：本地、WebDAV、蓝奏云、123 云盘、OneDrive 和 S3 适配器；一个 Blob 可在多个端点各保存一份副本。
 - **编目**：学科、年级、学年、标签、角色和合集摆放；角色来自资料本身，不来自合集条目。
 - **AI**：可切换的自建 RapidOCR、MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；通过白名单校验后自动应用并更新文件名，人工可覆盖。
 - **搜题**：索引任务把试卷切成题目并建立可移植倒排表，按题干文本检索并返回页码。
-- **Agent**：用受限 API Key 换取短期 JWT，再以单一 Bearer JWT 访问 REST 和 `/mcp` 只读工具。
+- **Agent**：用 API 密钥直接访问 REST 和 `/mcp` 中按 scope 授权的工具。
 
 非目标：在线编辑文档、执行宏、病毒扫描、跨请求分片续传、云盘物理删除、通用全文检索、跨资料同题聚合。
 
@@ -39,14 +39,14 @@
   ▼
 ┌──────────────── 单个 Go 进程 ─────────────────────────────────────┐
 │ Gin Router                                                         │
-│  ├─ 认证 / scope / Agent JWT                                      │
+│  ├─ 认证 / scope / Agent API Key                                  │
 │  ├─ REST handlers ──┐                                              │
 │  └─ MCP JSON-RPC ───┤                                              │
 │                     ▼                                              │
 │              service（业务与事务边界）                             │
 │                ├─ GORM ─────────── SQLite / PostgreSQL             │
 │                ├─ blob Store ───── DATA_DIR/blobs（CAS）           │
-│                ├─ storage ──────── local / webdav / lanzou / 123pan │
+│                ├─ storage ──────── local / webdav / lanzou / 123pan / onedrive / s3 │
 │                └─ ai ─────── OpenAI / MinerU / PaddleOCR / RapidOCR  │
 │                                                                    │
 │ 按类型的有界 worker 池 ← jobs 表（pending + lease）                 │
@@ -72,6 +72,9 @@
 | `internal/server` | Gin 路由、JSON envelope、鉴权/scope、DTO、MCP | 薄适配层；字段以 API.md 为准 |
 | `internal/storage` | 存储适配器和稳定错误分类 | 不依赖 GORM/HTTP 路由；远端对象只通过 `Adapter` 端口访问 |
 | `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU/PaddleOCR/RapidOCR 解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
+| `internal/ooxml` | OPC/ZIP 包校验、内部路径与关系解析 | 读取前完成路径、加密、外部引用和总量校验 |
+| `internal/docx` | 直接解析 Word 正文、标题、表格、文本框、公式、分页和嵌入图片 | 不依赖 LibreOffice、PDF 或 OCR 文本层；输出有界 |
+| `internal/office` | DOCX→PDF 预览转换与内容寻址缓存 | 只服务预览；单进程单转换槽，复用 `ooxml` 校验 |
 | `internal/blob` | 本地 CAS、临时文件、文件签名嗅探 | 扩展名不是格式判定的唯一依据 |
 | `internal/archive` | ZIP 全量校验、编码还原、成员提取 | 先 `Inspect` 后 `Extract`；拒绝不安全包 |
 | `internal/auth` | JWT、密码哈希、refresh/API Key 原语、登录节流、角色 scope | 不在日志或响应中输出秘密 |
@@ -79,7 +82,7 @@
 | `internal/apperr` | 领域错误到 HTTP 状态/机器码的映射 | 对外 message 必须可安全展示 |
 | `internal/paths` | 相对路径校验、自然排序、忽略系统文件 | 上传清单与 ZIP 成员共用 |
 
-依赖方向大致为 `server → service → {model, db, blob, storage, ai, archive, auth, apperr}`；`storage` 和 `ai` 不反向依赖 `service` 或 `server`。HTTP/MCP 只通过 service 执行业务，不直接拼 SQL 或访问存储。
+依赖方向大致为 `server → service → {model, db, blob, storage, ai, archive, auth, apperr, ooxml, docx, office}`；`docx` 只依赖 `ooxml`，`office` 只依赖 `ooxml`，`storage` 和 `ai` 不反向依赖 `service` 或 `server`。HTTP/MCP 只通过 service 执行业务，不直接拼 SQL 或访问存储。
 
 ### 4.2 前端
 
@@ -93,7 +96,7 @@ web/src/
   styles/         全局样式
 ```
 
-- 路由在 `App.tsx` 声明；`ScopeGuard` 按角色 scope 隐藏/拦截页面，服务端仍逐请求重新授权。
+- 路由在 `App.tsx` 声明，登录后的布局及各页面按需加载；`ScopeGuard` 按角色 scope 隐藏/拦截页面，服务端仍逐请求重新授权。
 - 所有 API 调用经过 `shared/api/client.ts`：统一 envelope、`ApiError`、401 单飞刷新并重试一次、Blob 下载、XHR 二进制上传进度。
 - TanStack Query 负责服务端状态；上传、任务、分析和索引按状态轮询，终态停止。
 - 浏览器 access token 只存内存；refresh token 与用户摘要存 `localStorage`，刷新页面后先经 `/auth/me` 校验。浏览器不保存 Agent Secret Key。
@@ -106,8 +109,8 @@ web/src/
 请求
  → request_id 中间件（UUID，写响应头 X-Request-ID）
  → panic 恢复（500 envelope）
- → auth 中间件（Bearer JWT）
- → requireScope / rejectAgent / agentOnly
+ → auth 中间件（浏览器 Bearer JWT 或 Agent Bearer API Key）
+ → requireScope / agentOnly
  → handler（严格 JSON 解码、参数校验）
  → service（业务/事务）
  → {"data": ..., "request_id": ...} 或 {"error": {...}, "request_id": ...}
@@ -117,18 +120,18 @@ web/src/
 - JSON 请求体上限 1 MiB；未知字段、非对象根、尾随数据、非声明字段的 `null` 会被拒绝。
 - `NoRoute` 对非 API 的 GET/HEAD 从 `WEB_DIST` 提供 SPA，找不到文件时回退 `index.html`；API 路径返回 JSON 404。
 - HTTP 服务器设置 `ReadHeaderTimeout=10s`、`IdleTimeout=120s`，没有设置全局 Read/WriteTimeout；长文件通过流式接口和适配器超时控制，而不是整体写超时。
-- MCP 走同一个 auth 中间件，但 `agentOnly` 只接受代理 JWT；`GET/PUT/DELETE /mcp` 返回 405。
+- MCP 走同一个 auth 中间件，但 `agentOnly` 只接受 API 密钥身份；`GET/PUT/DELETE /mcp` 返回 405。
 
 ### 5.2 凭据
 
 | 调用方 | 凭据 | 校验 |
 | --- | --- | --- |
 | 浏览器 | 用户名/口令 → 15 分钟 access JWT + 7 天 refresh token | JWT HS256，固定 issuer/audience；每次请求查 Session/User |
-| Agent | `X-API-Key: pc_<id>.<secret>` → 15 分钟 JWT（`key_id`），后续只用 Bearer JWT | JWT HS256；每次请求按 `key_id` 查 Key/User 状态，撤销/过期立即失效 |
-| MCP | 只接受代理 Bearer JWT | 无浏览器会话、无 SSE、无 session id |
+| Agent | `Authorization: Bearer sk-<随机密钥>`；旧 `pc_` 密钥兼容 | 索引查询密钥哈希并关联用户，每次请求检查撤销、过期和当前角色 |
+| MCP | 接受代理 Bearer API 密钥 | 无浏览器会话、无 SSE、无 session id |
 
 - 角色：`admin`（全部 scope）、`editor`（资料/合集写、上传、任务读）、`viewer`（资料/合集/任务读）。
-- Agent scope 是“用户角色 scope ∩ 密钥 scope”，且永远不能包含 `keys:manage`、`users:manage`、`ai:read`、`ai:write`；AI 与搜索设置接口另行拒绝 Agent。
+- Agent scope 是“用户角色 scope ∩ 密钥 scope”。有管理权限的密钥可创建其他密钥或用户，但只能授予不超过自身有效权限的 scope 或角色。新密钥是独立凭据，撤销创建者的密钥不会自动撤销它。
 - refresh token 轮换：旧 token 立即失效；检测到已轮换 token 被重放时撤销该 Session。refresh 的 7 天从登录起算，轮换不延长。
 - 登录节流按用户名和客户端 IP 分别计数：5 次失败 / 15 分钟窗口，锁定 15 分钟；内存实现，进程重启清空。
 - 密码使用 argon2id；API Key 只存 secret 的 SHA-256，创建时显示一次。
@@ -158,7 +161,7 @@ web/src/
 
 ### 6.1 资料、Blob 与副本
 
-- 原件的权威内容在 `DATA_DIR/blobs/<sha[2]>/<sha>`；上传/ZIP 展开先写入 CAS，再在一个数据库事务中发布资料、合集、副本计划和任务。
+- 已归档资料的权威内容在 `DATA_DIR/blobs/<sha[2]>/<sha>`；普通上传和 ZIP 成员先写入 CAS，ZIP 原件暂存，随后在一个数据库事务中发布资料、合集、副本计划和任务。
 - 多个 Material 可以共享同一 Blob。副本属于 Blob，因此共享同一 Blob 的资料会看到同一组 Replica；资料 `status` 也按 Blob 的副本事实刷新。
 - Material 的 `file_name` 是下载名和本地副本名；修改 `title` 会同步 `file_name` 并重命名本地端点副本。云盘适配器没有改名能力，远端对象保留上传时的名字。
 - 新副本使用工作时的 `file_name`；远端对象 key 仍是内容寻址前缀 + 安全化文件名。
@@ -194,25 +197,28 @@ Index:    pending ──> running ──> succeeded | failed
 
 `RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时四类任务都会在租约仍然有效时回到 pending。
 
+任务行保存当前阶段、当前阶段的计数和最多 200 条带时间的处理记录，记录在领取、处理阶段和结束时写入；传输进度最多约每 5 秒写一次。进度更新受租约约束，旧 worker 不能覆盖新执行者的记录。列表省略历史日志，详情读取历史记录；旧任务允许没有日志。日志不写令牌、分享链接或文件内容。
+
 ## 7. 上传与归档流水线
 
 ```
 选择文件（浏览器）
-  → POST /uploads（清单：相对路径、字节数、可选 SHA）
-  → 逐文件 PUT /uploads/{id}/files/{entry_id}（原始字节流）
-      流写 DATA_DIR/tmp → 字节数校验 → 真实格式嗅探 → SHA 计算 → CAS
+  → POST /uploads（相对路径、字节数、可选 SHA）
+  → 逐文件 PUT /uploads/{id}/files/{entry_id}（ZIP 原文件直接上传）
+      流写 DATA_DIR/tmp → 字节数校验 → 格式嗅探 → SHA 计算
+      → 普通文件进入 CAS；ZIP 写入独立临时区
   → POST /uploads/{id}/finalize（幂等，创建 ingest Job）
-  → worker：ZIP 校验/展开 → 构造资料与合集计划
+  → worker：检查并展开 ZIP 成员到 CAS → 构造资料与合集计划
   → 单个数据库事务：Blob/Material/Subject/Collection/Item/Replica plan/
                      analyze/index 自动任务/Upload 状态/Job 状态/审计
-  → 复制任务异步上传各端点
+  → 成功后清理临时 ZIP，复制任务异步上传各端点
 ```
 
 ### 7.1 清单与单文件接收
 
-- 清单 1..2000 条；单文件 1 字节..512 MiB；清单总大小 ≤2 GiB；相对路径 ≤1024 UTF-8 字节。
+- 清单 1..2000 条；JSON 请求最多 1 MiB；单文件 1 字节..512 MiB；清单总大小 ≤2 GiB；相对路径 ≤1024 UTF-8 字节。
 - 路径必须为正斜杠分隔的相对路径，拒绝反斜杠、绝对路径、盘符、`.`/`..`、空段和控制字符。浏览器文件夹使用 `webkitRelativePath`。
-- 允许 `.pdf`、`.doc`、`.docx`、`.pptx`、`.zip`（不区分大小写）；创建清单时先按扩展名过滤，接收时再嗅探真实内容。
+- 允许 `.pdf`、`.doc`、`.docx`、`.pptx`、`.zip`（不区分大小写）；ZIP 原文件先上传到服务端。创建清单时先按扩展名过滤，接收时再嗅探真实内容。
 - 条目按自然文件名顺序分配 position；清单可带 SHA，服务器不信任客户端 SHA，仍会重新计算并比对。
 - `PUT` 支持 `Content-Length` 或 chunked；声明长度大于条目大小直接 413。字节数不符 422，真实格式与扩展名不符 415，已 finalize 的清单 409。
 - 相同内容重复 PUT 返回原条目；已 received 的条目不允许替换为不同内容。
@@ -220,28 +226,24 @@ Index:    pending ──> running ──> succeeded | failed
 
 ### 7.2 ZIP 安全展开
 
-`archive.Inspect` 在提取任何字节之前检查完整中央目录：
+服务端 `archive.InspectWithSkipped` 在提取前检查完整中央目录，`archive.Extract` 再按成员顺序展开：
 
-- 拒绝路径穿越、绝对路径/盘符、反斜杠、控制字符、空段、`.`/`..`、符号链接、特殊文件、加密条目、重复路径；
-- 限制展开总大小 2 GiB、非忽略文件 5000 条、单条压缩比 200；
-- 忽略 `.DS_Store`、`._*` 和 `__MACOSX`；
-- 按整包候选编码（UTF-8、GB18030、Big5、Shift-JIS）打分还原文件名，而不是写死 GBK；
-- 只提取 `.pdf`、`.doc`、`.docx`、`.pptx`、`.zip`；其他文件保留在原 ZIP 中，不执行/不提取；
-- 嵌套 ZIP 作为成员保留，不递归展开；
-- 每个提取成员的字节数、真实格式和扩展名必须一致；任何一个成员不合格就拒绝整个压缩包。
+- 拒绝路径穿越、绝对路径/盘符、反斜杠、控制字符、空段、`.`/`..`、符号链接、特殊文件、加密条目和重复路径；
+- 每个 ZIP 限制声明展开总大小 2 GiB、非忽略文件 5000 条、单条压缩比 200；忽略 `.DS_Store`、`._*` 和 `__MACOSX`；
+- 按整包候选编码（UTF-8、GB18030、Big5、Shift-JIS）打分还原文件名；提取 PDF/DOC/DOCX/PPTX 与 ZIP，嵌套 ZIP 作为成员保留、不递归展开；
+- 其他格式跳过，任务日志记录总数并在完成页提示；没有可归档成员时任务失败。每个提取成员的字节数和真实格式必须与声明一致。
 
-ZIP 校验/展开失败会使 ingest Job 失败，不发布任何资料；原 ZIP 仍留在 CAS 中（供重试或人工处理）。
-
+新上传的 ZIP 原件只保存在 `tmp/upload-archives/`，处理成功且数据库提交后删除；失败或取消时保留供重试。ZIP 原件不会创建资料或副本。处理前已在 CAS 的历史 ZIP 仍可使用，但不会自动删除。文件系统和数据库无法原子提交，崩溃或清理失败可能留下临时文件，当前没有自动清理。
 ### 7.3 合集拓扑
 
 | 输入 | 结果 |
 | --- | --- |
 | `collection_kind=custom`，单个普通文件，路径无 `/` | 不创建合集，只创建一份 Material |
-| `collection_kind=zip`，清单只有一个 ZIP | 创建一个合集；条目包含 ZIP 原件和展开成员（无子合集） |
-| 其他批次（文件夹、多文件、或 ZIP 与其他文件混合） | 创建清单合集；每个 ZIP 另建 `kind=zip` 的子合集，ZIP 成员放进子合集；清单合集放顶层文件（及 ZIP 原件），不重复放 ZIP 成员 |
+| `collection_kind=zip`，清单只有一个 ZIP | 创建一个合集；条目只包含展开成员（无子合集） |
+| 其他批次（文件夹、多文件、或 ZIP 与其他文件混合） | 创建清单合集；每个 ZIP 另建 `kind=zip` 的子合集，ZIP 成员放进子合集；清单合集放顶层普通文件，不重复放 ZIP 成员 |
 | 文件夹 | 保留浏览器给出的相对路径；成员按自然顺序排列 |
 
-- ZIP 成员记录 `source_path = ZIP 相对路径 + "/" + 成员路径`、`parent_material_id = ZIP 原件资料 ID`。
+- ZIP 成员记录 `source_path = ZIP 相对路径 + "/" + 成员路径`；新资料没有 ZIP 容器父资料。
 - 资料标题由文件名去掉扩展名生成；批次/合集的标题使用清单 `title`。学科、年级、学年、标签来自清单，服务端不从文件名推断学科。
 - 角色有且只有 `exam`（试卷，只有题）、`answer`（答案）、`questions_answers`（试卷+答案，先试卷后集中答案）、`teacher_edition`（每题后紧跟答案解析）、`lecture`（讲义，教程型材料，讲解与例题/练习混杂）、`other`（无法判断）。归档时服务端按文件名关键词给出建议，默认 `other`；归档后 AI 自动应用及人工修改均走同一角色校验。合集条目自动跟随资料角色。
 - 归档角色只由服务端 `suggestRole` 决定；清单不提交 `role`，上传页也不显示角色预览，避免前端提示与最终结果不一致。
@@ -272,7 +274,7 @@ ZIP 校验/展开失败会使 ingest Job 失败，不发布任何资料；原 ZI
 - 分享 URL、提取码、过期时间只出现在有 `materials:read` 的资料详情响应；不写日志/审计。
 - 下载先看本地 CAS；缺失时按“主端优先、priority 升序、Provider ID/创建时间稳定排序”尝试 ready 副本，全部失败返回 503。
 - `POST /storage/reconcile` 只按当前策略补建缺少的副本/任务，不删除额外副本；历史副本不自动迁移。
-- 远端上传成功但数据库更新失败时可能残留远端对象；本地/WebDAV 使用固定对象 key，重试通常覆盖同一对象，其他适配器不保证远端幂等。
+- 远端上传成功但数据库更新失败时可能残留远端对象；本地、WebDAV、S3 使用固定对象 key，OneDrive 使用固定路径并请求替换同名文件；其他适配器不保证远端幂等。
 
 ### 8.3 适配器能力
 
@@ -282,8 +284,10 @@ ZIP 校验/展开失败会使 ingest Job 失败，不发布任何资料；原 ZI
 | `webdav` | 可用 | 可用 | 条件可用 | PUT/MKCOL/HEAD/GET/PROPFIND；配置 `public_base_url` 才返回公开目录拼接链接，不代表匿名可访问；提供 SHA 时上传后完整下载重算 |
 | `lanzou` | 可用（非官方协议） | 可用 | 可用 | Cookie 会话；单文件 100 MiB；默认 verification=uploaded，`verify_remote_hash=true` 才做远端校验；未对真实服务联调 |
 | `123pan` | 不可用 | 不可用 | 不可用 | 只实现 access_token 与 Health；Put/Open/Share 返回 unsupported（如 `123pan_upload_unverified`），Capabilities 全 false |
+| `onedrive` | 可用 | 可用 | 可配置 | Graph 委派授权；可使用自有应用或 OpenList 在线应用；分段上传和只读分享，刷新令牌加密轮换；未对真实服务联调 |
+| `s3` | 可用 | 可用 | 可用 | AWS SDK 分段并行上传，HEAD 比对大小，签名链接按配置过期；兼容服务需实际验证 |
 
-适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported 等）；存储错误写入 Job/Replica 前会脱敏。`Retryable` 只在蓝奏内部重试逻辑中使用，服务层没有自动重试循环。
+适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported 等）；存储错误写入 Job/Replica 前会脱敏。蓝奏有内部重试，S3 使用 SDK 自带的请求重试；服务层没有自动重试循环。
 
 ## 9. AI 识别
 
@@ -303,6 +307,9 @@ worker RunAnalyze
          → 轮询 /api/v2/ocr/jobs/{jobId}（默认 15 分钟）
          → 下载 resultUrl.jsonUrl JSONL，提取 rec_texts
        RapidOCR：multipart POST /api/v1/ocr/jobs
+         → DOCX 由 Go 直接解析 OOXML（正文、表格、文本框、公式、分页）
+         → 嵌入位图逐张提交同一 OCR 接口（最多 20 张、并发 2）
+         → PDF/图片仍按页上传
          → 轮询 /api/v1/ocr/jobs/{id}（默认 15 分钟）
          → 下载 result_url JSONL，按页提取 texts
   → 写 material_texts（Markdown + 逐页文本）
@@ -319,8 +326,10 @@ worker RunAnalyze
 - 题目索引按 `batch_pages`/`batch_chars` 分组后最多 3 个批次并发调用，结果再按原页码顺序去重合并。切题模型使用 128000 输出 token 上限和 `reasoning_effort=high`；只有空响应或非法 JSON 才二分降级重试，上游 5xx/限流最多额外重试一次，超时、鉴权等错误立即失败，避免错误重试倍增调用量。
 - 归类必须基于正文或页面图像：提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准；若 OCR/解析既没有得到正文也没有页面图像，任务失败而不会退回文件名猜测。归档阶段仍会按文件名写入一个初始角色建议，但启用自动识别后会被基于正文的 AI 结果覆盖。
 - `analysis_enabled` 只控制归档后的自动入队；手动触发不依赖它。
-- 图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。
-- 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。
+- 解析出的独立页面图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。DOCX 生成的 PDF 预览缓存可能包含文档原有图片，应按原件保护。
+- 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。RapidOCR 的 DOCX 原生解析另含 `docx-native-v1` 版本标记。
+- DOCX 原生解析由 `internal/docx` 完成：读取 `word/document.xml` 与关系表，按段落/表格/文本框/公式生成 Markdown 和逐页文本，识别显式分页与 `lastRenderedPageBreak`；嵌入的 PNG/JPEG/GIF/BMP/TIFF/WebP 按引用顺序记录，最多 20 张、单张 12 MiB、总计 64 MiB，图片 OCR 失败只记录日志，不影响正文。页码依赖文档保存的分页提示，连续文档没有提示时按第 1 页处理。自建 RapidOCR 的 DOCX 不再经过 LibreOffice 转换或 OCR 文字层，因此分析/搜题不依赖 `soffice`，也不依赖 RapidOCR 镜像版本同步；MinerU/PaddleOCR 仍按各自协议接收原件。
+- DOCX 预览仍由 `internal/office` 调用 LibreOffice Writer 生成 PDF，使用独立配置、最高宏安全级别、内容寻址缓存 `previews/docx-v1/<sha前两位>/<sha>.pdf`；每个应用实例最多同时转换一个文档。非容器部署需自行安装 Writer 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
 - 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
 - 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
 - 关键超时：OCR 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
@@ -343,10 +352,12 @@ RunIndex
 ```
 
 - 索引默认启用；归档事务内自动入队。关闭索引期间归档的资料，在服务启动时由 `EnqueueMissingIndexes` 补建（仅当索引启用）。
+- 自动入队和启动补建共用按资料去重的入队逻辑，索引状态与任务在同一事务创建；分析任务也依靠唯一约束去重，避免逐条预查询。
 - ZIP 容器本身不索引；展开成员各自索引。
 - 手动 `POST /materials/{id}/index` 不依赖索引开关；`force=true` 会清空 `material_texts.source_hash` 以强制重新解析。
 - 失败不会删除上一次成功的索引；旧题目仍可搜索，状态显示 failed。重建成功才原子替换题目和词项。
 - `question_terms` 使用 CJK unigram + bigram 和连续字母/数字词，不依赖 SQLite FTS5、PostgreSQL 扩展或向量库。
+- 题目和词项在事务内分批写入，词项缓冲有界，减少逐行写入的数据库往返；合集成员使用稳定自然排序。
 - `material_index_states` 记录页数、题目数、LLM 调用数、失败批次数和 indexed_at。
 
 ### 10.2 搜索
@@ -358,30 +369,16 @@ RunIndex
 - 返回 `snippet`（约 180 字）和纯文本字符区间 `highlights`，不返回 HTML；前端自行渲染 `<mark>`。
 - `limit` 默认 20，最大 50；`offset` 从 0 开始；`total` 是过滤后的命中数，不是 SQL 候选数。
 - 每条结果对应一个题目块；同一题出现在多份试卷就是多条结果，不做跨资料聚合。结果可带第一个包含该资料的合集 ID。
-- 搜索接口使用 `materials:read`；搜索设置使用 `search:read`/`search:write`，默认仅管理员，且拒绝 Agent。
+- 搜索接口使用 `materials:read`；搜索设置使用 `search:read`/`search:write`，默认仅管理员，可授权给 API 密钥。
 - 搜索不检查 `material_index_states.status`，因此重建失败时旧索引仍可查询；这与“没有索引就没有结果”并不矛盾。
 
 ## 11. MCP
 
-`POST /mcp` 是无状态 Streamable HTTP 的 JSON 子集：
+`POST /mcp` 是无状态 Streamable HTTP 的 JSON 子集，只接受 API 密钥 Bearer。支持 `initialize`、`ping`、`tools/list` 和 `tools/call`，单条 JSON-RPC 请求，不提供 SSE、batch 或会话 ID。协议和客户端示例见 [MCP.md](MCP.md)。
 
-- 只接受代理 Bearer JWT；`Content-Type: application/json`；服务端不强制校验 Accept，成功响应为 `application/json`，不提供 SSE。
-- 单条 JSON-RPC 2.0；不支持 batch、SSE、session id。
-- `initialize` 协商 2025-03-26 / 2025-06-18 / 2025-11-25；`notifications/initialized` 返回 202；`ping` 返回 `{}`；`tools/list` 按当前 scope 过滤；`tools/call` 再次检查权限。
-- 工具：
+工具目录映射固定的 REST 路由：参数按 schema 校验后交给同一套 HTTP handler、权限和业务逻辑；内部请求复用已认证的身份并再次检查 scope，无需重复查询密钥。不存在通用 URL 或本地文件读取工具。`tools/list` 按当前 scope 过滤并区分查询和写入；工具调用再次检查权限。后端测试检查每个业务路由均有工具，避免前端与 MCP 功能漂移。
 
-| 工具 | scope | 参数 | 返回 |
-| --- | --- | --- | --- |
-| `materials_search` | materials:read | `q?`、`subject?`、`page?`、`page_size?` | Page\<Material> |
-| `materials_get` | materials:read | `id` | Material + replicas |
-| `questions_search` | materials:read | `query`、`subject?`、`grade?`、`limit?`(1..50) | 题目文本、页码、原资料 |
-| `collections_list` | collections:read | `q?`、`page?`、`page_size?` | Page\<Collection> |
-| `collections_get` | collections:read | `id` | Collection + items |
-| `jobs_get` | jobs:read | `id` | Job |
-
-- 工具 schema `additionalProperties=false`；缺少/未知/类型错误参数返回 -32602；解析失败 -32700、请求非法 -32600、方法未知 -32601。
-- 领域失败（不存在、权限等）返回 `content=[{type:"text",...}]` 且 `isError=true`；成功 content 是 JSON 文本。
-- MCP 不提供上传、删除、修改或任意 URL/路径读取；工具不能绕过 HTTP 授权。
+`uploads_file_put` 支持最多 512 KiB 的 Base64 内容；更大的上传和资料下载返回受鉴权的相对路径，客户端使用同一密钥直接流式请求。参数错误返回 `-32602`，领域错误返回 `isError: true`；成功结果是 JSON 文本。
 
 ## 12. 前端交互架构
 
@@ -400,11 +397,13 @@ RunIndex
 | `/admin/ai-models`、`/admin/ai-settings` | AI 模型/解析设置 | ai:read |
 | `/admin/api-keys`、`/admin/users`、`/admin/audit` | 密钥、用户、审计 | keys:manage / users:manage / audit:read |
 
-前端权限只是可见性镜像；服务端是唯一授权来源。搜索设置目前只有 HTTP 接口，没有独立管理台页面。
+前端权限只是可见性镜像；服务端是唯一授权来源。搜索设置可通过 HTTP 或 MCP 访问，目前没有独立管理台页面。
+
+OneDrive 新建表单默认引导使用 OpenList 应用；服务端旧配置缺省 `auth_mode` 为 `direct`，以免切换已有账户。OpenList 模式通过第三方 HTTPS 接口续期，按上游协议把刷新令牌放在查询参数中；界面告知用户该数据流，本服务不记录请求 URL，且拒绝重定向。自有应用仍使用微软直连端点。不同应用签发的刷新令牌不能混用，切换模式必须提交新令牌。
 
 ### 12.2 上传会话
 
-- 选择文件/文件夹/ZIP 后立即 `POST /uploads`，按文件名推断标题、合集类型、共同学科；不等待预检表单。
+- 选择文件/文件夹/ZIP 后立即自动 `POST /uploads`，按文件名推断标题、合集类型、共同学科；不等待预检表单。
 - 传输使用 XHR 以获得进度，最多 3 个并发；网络错误、429、5xx 自动重试 1 秒/3 秒，415/422/409/413 不重试。
 - 全部条目 received 后自动 finalize；失败保留手动提交/重试入口。
 - 刷新页面后 `File` 对象丢失，需要重新选择相同相对路径和字节数的文件；已接收条目跳过。
@@ -415,7 +414,7 @@ RunIndex
 - 任务列表/详情：3 秒，终态停止。
 - 上传会话：2 秒，完成/失败停止。
 - 分析、索引：3 秒，pending/running 时轮询。
-- 仪表盘：30 秒 staleTime；每个汇总独立查询，单项失败不影响整页。
+- 仪表盘：资料与任务各使用一次按状态聚合的统计接口；最近记录和统计在页面可见时每 30 秒更新，手动刷新也会重新获取统计、最近记录及有权限的存储信息。各区域独立查询，单项失败不影响整页。
 - 所有写操作成功后按 query key 失效相关列表/详情；不使用本地假数据。
 
 ### 12.4 界面约定
@@ -455,7 +454,8 @@ config.Load（校验环境变量）
 DATA_DIR/
   paper.db                 默认 SQLite（可用 DATABASE_DSN 指向别处）
   blobs/<sha[0:2]>/<sha>   原件 CAS
-  tmp/                     上传/展开临时文件（成功发布后移走）
+  tmp/                     上传/展开临时文件
+  tmp/upload-archives/     已接收、等待处理的 ZIP；成功后清理
   analysis/<materialID>/document.md   识别 Markdown（绝对路径写入数据库）
   providers/<providerID>/...          本地存储端点的副本
 ```
@@ -479,11 +479,11 @@ DATA_DIR/
 
 ## 14. 安全边界
 
-- **认证**：JWT 只接受 HS256，校验 issuer/audience/exp/nbf；每次请求重新查 Session/User/Key，撤销立即生效。
-- **授权**：HTTP scope 与 MCP 工具二次检查；Agent scope 取角色与密钥交集，并禁止管理/AI scope；MCP 仅 Agent。
+- **认证**：浏览器 JWT 只接受 HS256，校验 issuer/audience/exp/nbf；Agent 直接使用 API 密钥。每次请求重新查 Session/User/Key，撤销立即生效；升级前已签发的旧代理 JWT 在原有效期内仍可校验。
+- **授权**：HTTP scope 与 MCP 工具二次检查；Agent scope 取角色与密钥交集，委派的密钥或用户权限不得超过调用者；MCP 仅 Agent。
 - **秘密**：存储/AI/OCR 凭据加密；API Key/refresh 只存哈希；日志和审计不写秘密、Cookie、分享链接或完整 URL；`redact` 处理存储与上游错误。
-- **请求**：严格 JSON、1 MiB 限制、未知字段/非法 null 拒绝；MCP 无任意 URL/路径工具。
-- **文件**：相对路径校验；ZIP 先全量检查再提取；拒绝遍历/符号链接/加密/炸弹/格式伪装；本地端点根目录由服务端固定，适配器再次校验路径不逃逸。
+- **请求**：严格 JSON、1 MiB 限制、未知字段/非法 null 拒绝；MCP 无通用 URL/本地文件读取工具。
+- **文件**：相对路径校验；ZIP 在服务端检查后解压成员；拒绝遍历/符号链接/加密/炸弹/格式伪装；本地端点根目录由服务端固定，适配器再次校验路径不逃逸。
 - **AI 输入**：文档内容按不可信数据处理；提示要求忽略其中指令；模型输出经白名单校验后自动写入编目字段，人工可覆盖。
 - **浏览器**：同源部署，未实现 CORS；access token 只在内存，refresh 存 localStorage；浏览器不保存 Agent 密钥。
 - **限流**：登录按用户名/IP 内存节流；API Key 与上传没有全局限流，依赖部署层或反向代理。
@@ -510,7 +510,7 @@ DATA_DIR/
 (cd backend && go test -race -count=1 ./internal/service)
 (cd backend && go build ./cmd/server)
 (cd web && npm run typecheck)
-(cd web && npm test)          # 10 个测试文件、32 个用例
+(cd web && npm test)
 (cd web && npm run build)
 docker compose build
 docker compose up -d
@@ -520,26 +520,26 @@ docker compose up -d
 
 覆盖范围：
 
-- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123）、AI/MinerU/PaddleOCR/RapidOCR 协议、搜索文本/高亮、迁移幂等。
-- 后端集成测试（临时 SQLite + httptest 模拟上游）：上传→归档→ZIP 展开→合集→本地副本；恶意 ZIP 拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；Agent 单一 Bearer/MCP/撤销；未鉴权 401；删除级联。
-- 前端：typecheck、10 个测试文件 32 个用例、生产构建。
+- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123/OneDrive/S3）、AI/MinerU/PaddleOCR/RapidOCR 协议、搜索文本/高亮、迁移幂等。
+- 后端集成测试（临时 SQLite + httptest 模拟上游）：上传 ZIP→服务端展开→合集→本地副本；恶意 ZIP 与路径拒绝；直传单文件/文件夹/ZIP；分析/索引共享解析；Agent 单一 Bearer/MCP/撤销；未鉴权 401；删除级联。
+- 前端：typecheck、上传和存储配置等测试、生产构建。
 - PostgreSQL 部署：`postgres:16-alpine` 一次性迁移、两个应用实例、Nginx 单端口网关均健康；旧 SQLite 的账号、资料、Blob、任务与设置已复制，登录、`/auth/me` 和资料列表实测成功。租约竞争自动化测试仍以临时 SQLite 执行，未在生产库注入合成任务。
 
 未验证（不得写成已通过）：
 
-- 真实蓝奏云、123 云盘、WebDAV 的联网上传/下载/分享；
-- 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；RapidOCR 已用真实扫描 PDF 验证，但尚未覆盖 Word/PPT 和大规模并发；
+- 真实蓝奏云、123 云盘、WebDAV、OneDrive、S3 的联网上传/下载/分享；
+- 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；RapidOCR 已用真实扫描 PDF 验证，DOCX 原生解析已用样例覆盖，但尚未覆盖真实 Word 版式、PPT 和大规模并发；
 - 浏览器逐页人工操作、真实 Agent 客户端、真实大文件/长文档；
 - 任务运行指标、租约告警与按上游配额动态限流。
 
 ## 17. 已知边界与后续方向
 
 1. **多实例运维**：为各实例设置唯一 `WORKER_INSTANCE_ID`，共享 `DATA_DIR`，监控过期租约和任务失败率。
-2. **真实存储**：WebDAV/蓝奏需要真实端点联调；123 云盘在官方接口可核对前保持 unsupported，不应作为可上传端点启用。
+2. **真实存储**：WebDAV/蓝奏/OneDrive/S3 需要真实端点联调；123 云盘在官方接口可核对前保持 unsupported，不应作为可上传端点启用。
 3. **远端删除/改名**：适配器没有删除接口；改名只同步本地副本。需要远端生命周期管理时另设能力与审计。
 4. **AI/索引质量**：RapidOCR 已对真实 6 页扫描试卷完成识别，但 OCR 纠错、切题、页码准确率和大文件成本仍未系统验证；分析与索引可继续共享解析缓存。
 5. **数据治理**：缺少孤儿 CAS 清理、过期任务/缓存保留期和版本化迁移。
-6. **安全加固**：管理员可配置任意 http(s) 上游地址；未实现出站 SSRF 允许列表、全局 API 限流或密钥轮换流程。
+6. **安全加固**：管理员可配置任意 http(s) 上游地址；未实现通用出站 SSRF 允许列表、全局 API 限流或主密钥轮换流程。
 7. **产品能力**：不提供通用全文检索、Office 转换、病毒扫描、跨请求分片断点续传、Range 下载、跨资料同题聚合。
 8. **搜索设置**：目前只有 HTTP 接口，没有独立管理台页面；索引状态只使用 pending/running/succeeded/failed。
 

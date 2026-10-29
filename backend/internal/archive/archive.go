@@ -44,7 +44,7 @@ func reject(format string, args ...any) error {
 }
 
 // SupportedExtensions are the member types extracted from a package.
-// Anything else is left inside the original ZIP and never extracted.
+// Other entries are not extracted and are reported to the user.
 var SupportedExtensions = []string{".pdf", ".doc", ".docx", ".pptx", ".zip"}
 
 // Member is one extractable file inside a package.
@@ -58,6 +58,18 @@ type Member struct {
 // It rejects traversal, absolute or backslash paths, symlinks, special files,
 // encrypted entries, duplicate paths, bombs, and oversize or over-count packages.
 func Inspect(zipPath string, lim Limits) ([]Member, error) {
+	var skipped int
+	return inspect(zipPath, lim, &skipped)
+}
+
+// InspectWithSkipped also counts non-ignored files whose formats are unsupported.
+func InspectWithSkipped(zipPath string, lim Limits) ([]Member, int, error) {
+	var skipped int
+	members, err := inspect(zipPath, lim, &skipped)
+	return members, skipped, err
+}
+
+func inspect(zipPath string, lim Limits, skipped *int) ([]Member, error) {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return nil, reject("压缩包结构损坏，无法读取")
@@ -118,6 +130,8 @@ func Inspect(zipPath string, lim Limits) ([]Member, error) {
 		}
 		if isSupported(name) {
 			members = append(members, Member{Path: name, Index: i, Size: sz})
+		} else {
+			(*skipped)++
 		}
 	}
 	return members, nil

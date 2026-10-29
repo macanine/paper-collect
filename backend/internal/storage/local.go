@@ -121,7 +121,7 @@ func (a *localAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 	}()
 
 	hasher := sha256.New()
-	written, err := io.Copy(io.MultiWriter(tmp, hasher), ctxReader{ctx: ctx, r: src})
+	written, err := io.Copy(io.MultiWriter(tmp, hasher), &progressReader{r: ctxReader{ctx: ctx, r: src}, total: obj.Size, report: obj.Progress})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Stored{}, transportError(ctx, ctxErr, "local_put")

@@ -3,7 +3,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { Link } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { Job, JobKind, JobStatus } from '../../shared/api/types';
-import { formatDateTime, shortId } from '../../shared/lib/format';
+import { formatDateTime } from '../../shared/lib/format';
 import { useListSearch } from '../../shared/lib/listSearch';
 import { JOB_KIND_OPTIONS, JOB_STATUS_OPTIONS } from '../../shared/lib/options';
 import { PageHeader } from '../../shared/ui/PageHeader';
@@ -11,6 +11,7 @@ import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { JobKindTag, JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { useJobsList, useRetryJob } from './queries';
+import { progressText } from './JobProgress';
 
 const FILTER_KEYS = ['status', 'kind'] as const;
 type FilterKey = (typeof FILTER_KEYS)[number];
@@ -33,10 +34,10 @@ export function JobsListPage() {
     {
       title: '任务',
       key: 'id',
-      width: 130,
+      width: 90,
       render: (_: unknown, job) => (
-        <Link to={`/jobs/${job.id}`} className="font-mono text-xs">
-          {shortId(job.id)}
+        <Link to={`/jobs/${job.id}`} className="whitespace-nowrap">
+          查看详情
         </Link>
       ),
     },
@@ -44,14 +45,14 @@ export function JobsListPage() {
       title: '类型',
       dataIndex: 'kind',
       key: 'kind',
-      width: 110,
+      width: 100,
       render: (kind: JobKind) => <JobKindTag kind={kind} />,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 110,
+      width: 90,
       render: (status: JobStatus) => <JobStatusTag status={status} />,
     },
     {
@@ -62,19 +63,13 @@ export function JobsListPage() {
       align: 'right',
     },
     {
-      title: '错误信息',
-      dataIndex: 'error',
-      key: 'error',
-      render: (error: string) =>
-        error ? (
-          <Tooltip title={error}>
-            <Typography.Text type="danger" ellipsis className="block max-w-[320px]">
-              {error}
-            </Typography.Text>
-          </Tooltip>
-        ) : (
-          <span className="text-slate-400">—</span>
-        ),
+      title: '处理进度',
+      key: 'progress',
+      render: (_: unknown, job) => (
+        <Tooltip title={progressText(job)}>
+          <Typography.Text type={job.status === 'failed' ? 'danger' : undefined} ellipsis className="block max-w-[320px]">{progressText(job)}</Typography.Text>
+        </Tooltip>
+      ),
     },
     {
       title: '关联',
@@ -82,8 +77,9 @@ export function JobsListPage() {
       width: 160,
       render: (_: unknown, job) => (
         <div className="flex flex-col text-xs">
-          {job.upload_id && can('uploads:write') ? <Link to={`/uploads/${job.upload_id}`}>清单 {shortId(job.upload_id)}</Link> : null}
-          {job.replica_id ? <span className="font-mono text-slate-500">副本 {shortId(job.replica_id)}</span> : null}
+          {job.upload_id && can('uploads:write') ? <Link to={`/uploads/${job.upload_id}`}>查看清单</Link> : null}
+          {job.material_id && can('materials:read') ? <Link to={`/materials/${job.material_id}`}>查看资料</Link> : null}
+          {job.replica_id ? <span className="text-slate-500">存储副本</span> : null}
         </div>
       ),
     },
@@ -98,7 +94,6 @@ export function JobsListPage() {
       title: '操作',
       key: 'actions',
       width: 120,
-      fixed: 'right',
       render: (_: unknown, job) =>
         canRetry && job.status === 'failed' ? (
           <Popconfirm

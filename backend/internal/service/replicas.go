@@ -312,6 +312,7 @@ func (s *Service) RunReplicate(ctx context.Context, jobID string) {
 }
 
 func (s *Service) replicate(ctx context.Context, job model.Job) error {
+	s.jobProgress(ctx, job, "检查副本、原文件和存储端点", 0, 0)
 	db := s.db.WithContext(ctx)
 	var replica model.Replica
 	if err := db.Where("id = ?", job.ReplicaID).First(&replica).Error; err != nil {
@@ -367,7 +368,30 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		SHA256: blob.SHA256,
 		Size:   blob.SizeBytes,
 	}
+	s.jobProgress(ctx, job, "正在上传文件并验证远端副本", 0, 0)
+	type uploadProgress struct{ done, total int64 }
+	updatesProgress := make(chan uploadProgress, 1)
+	progressDone := make(chan struct{})
+	go func() {
+		defer close(progressDone)
+		var last time.Time
+		for p := range updatesProgress {
+			if p.total <= 0 || time.Since(last) < 5*time.Second {
+				continue
+			}
+			last = time.Now()
+			s.jobProgress(ctx, job, fmt.Sprintf("文件传输中：%.1f / %.1f MiB", float64(p.done)/(1<<20), float64(p.total)/(1<<20)), int(p.done), int(p.total))
+		}
+	}()
+	obj.Progress = func(done, total int64) {
+		select {
+		case updatesProgress <- uploadProgress{done, total}:
+		default:
+		}
+	}
 	stored, err := adapter.Put(ctx, obj)
+	close(updatesProgress)
+	<-progressDone
 	if err != nil {
 		return err
 	}
@@ -385,6 +409,7 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		"remote_name":  obj.Name,
 		"updated_at":   now,
 	}
+	s.jobProgress(ctx, job, "副本上传完成，正在处理分享链接", 0, 0)
 	shareURL, sharePassword, shareExpires, shareStatus, shareErr := s.shareReplica(ctx, adapter, stored.RemoteID)
 	updates["share_status"] = shareStatus
 	updates["share_url"] = shareURL
@@ -392,6 +417,11 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 	updates["share_expires_at"] = shareExpires
 	if shareErr != "" {
 		updates["error"] = shareErr
+		s.jobProgress(ctx, job, "副本已保存，分享链接创建失败，可稍后重试", 0, 0)
+	} else if shareStatus == model.ShareStatusUnsupported {
+		s.jobProgress(ctx, job, "副本已保存，此端点不支持分享链接", 0, 0)
+	} else {
+		s.jobProgress(ctx, job, "副本已保存，分享链接已生成", 0, 0)
 	}
 	return s.completeReplicateInTx(job, replica, updates)
 }
@@ -603,6 +633,7 @@ func providerReadRank(role string) int {
 }
 
 func (s *Service) failReplicaJob(jobID, owner, replicaID, message string) {
+	message = redact(message)
 	s.failJob(jobID, owner, message, func(tx *gorm.DB) error {
 		if replicaID == "" {
 			return nil
@@ -640,7 +671,34 @@ func (s *Service) adapterFor(p model.StorageProvider) (storage.Adapter, error) {
 		}
 		secrets = model.DecodeMap(string(raw))
 	}
-	return s.factory(storage.Config{ID: p.ID, Kind: p.Kind, Settings: settings, Secrets: secrets})
+	cfg := storage.Config{ID: p.ID, Kind: p.Kind, Settings: settings, Secrets: secrets}
+	if p.Kind == model.KindOneDrive {
+		cfg.SaveRefreshToken = func(ctx context.Context, previous, next string) error {
+			if previous == next || next == "" || secrets["refresh_token"] != previous {
+				return nil
+			}
+			updated := make(map[string]string, len(secrets))
+			for key, value := range secrets {
+				updated[key] = value
+			}
+			updated["refresh_token"] = next
+			cipher, err := s.sealSecret(p.ID, updated)
+			if err != nil {
+				return err
+			}
+			res := s.db.WithContext(ctx).Model(&model.StorageProvider{}).Where("id = ? AND secret_cipher = ?", p.ID, p.SecretCipher).
+				Updates(map[string]any{"secret_cipher": cipher, "updated_at": s.now()})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 1 {
+				p.SecretCipher = cipher
+				secrets["refresh_token"] = next
+			}
+			return nil
+		}
+	}
+	return s.factory(cfg)
 }
 
 // objectKey is the stable content-addressed key used by local and WebDAV adapters.

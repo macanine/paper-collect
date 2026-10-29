@@ -66,6 +66,18 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 	}))
 }
 
+func (s *Server) handleMaterialStats(c *gin.Context) {
+	counts, err := s.svc.GetMaterialStats(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, materialStatsDTO{
+		Total: counts.Total, PendingStorage: counts.PendingStorage,
+		Archived: counts.Archived, Degraded: counts.Degraded,
+	})
+}
+
 func (s *Server) handleGetMaterial(c *gin.Context) {
 	view, err := s.svc.GetMaterial(c.Request.Context(), c.Param("id"))
 	if err != nil {
@@ -126,6 +138,24 @@ func (s *Server) handleDownloadMaterial(c *gin.Context) {
 	}
 	c.Status(http.StatusOK)
 	_, _ = io.Copy(c.Writer, download.Reader)
+}
+
+func (s *Server) handlePreviewMaterial(c *gin.Context) {
+	preview, err := s.svc.OpenMaterialPreview(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	defer preview.Reader.Close()
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", "inline")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Cache-Control", "private, no-store")
+	if preview.Size > 0 {
+		c.Header("Content-Length", fmt.Sprintf("%d", preview.Size))
+	}
+	c.Status(http.StatusOK)
+	_, _ = io.Copy(c.Writer, preview.Reader)
 }
 
 func contentDisposition(name string) string {

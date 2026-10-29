@@ -13,7 +13,6 @@ import { Link } from 'react-router';
 import type { CollectionDetail, Material } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import { validateRelativePath } from '../../shared/lib/paths';
-import { shortId } from '../../shared/lib/format';
 import { RoleTag } from '../../shared/ui/StatusTags';
 import { MaterialPickerModal } from './MaterialPickerModal';
 import {
@@ -155,7 +154,7 @@ export function CollectionItemsEditor({ collection, canWrite }: CollectionItemsE
       render: (_: unknown, row) => {
         const material = materials.get(row.material_id);
         if (!material) {
-          return <span className="font-mono text-xs text-slate-500">资料 {shortId(row.material_id)}</span>;
+          return <span className="text-slate-500">资料暂不可用</span>;
         }
         return (
           <Link to={`/materials/${material.id}`} target="_blank" rel="noreferrer" className="truncate font-medium">
@@ -300,7 +299,7 @@ function ReadOnlyItems({ collection }: { collection: CollectionDetail }) {
         return material ? (
           <Link to={`/materials/${material.id}`}>{material.title}</Link>
         ) : (
-          <span className="font-mono text-xs">资料 {shortId(row.material_id)}</span>
+          <span>资料暂不可用</span>
         );
       },
     },

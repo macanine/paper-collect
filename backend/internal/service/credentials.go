@@ -148,33 +148,22 @@ func (s *Service) Logout(ctx context.Context, p auth.Principal, refreshToken str
 	})
 }
 
-// AgentToken exchanges a valid API key for a short-lived JWT bound to the key id.
-func (s *Service) AgentToken(ctx context.Context, apiKey string) (string, error) {
-	id, secret, err := auth.ParseAPIKey(apiKey)
-	if err != nil {
-		return "", apperr.Unauthorized("API Key 无效")
-	}
-	key, user, err := s.resolveAPIKey(ctx, id, secret)
-	if err != nil {
-		return "", err
-	}
-	token, err := s.signer.Sign(user.ID, "", key.ID)
-	if err != nil {
-		return "", apperr.Internal(err)
-	}
-	p := auth.Principal{UserID: user.ID, Role: user.Role, KeyID: key.ID}
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return s.audit(tx, p, "auth.agent_token", key.ID)
-	}); err != nil {
-		return "", apperr.Internal(err)
-	}
-	return token, nil
-}
-
-// Authenticate resolves the caller from an access JWT.
+// Authenticate accepts API keys directly as well as browser access JWTs.
 // Every call re-checks user, session and key state, so revocation is immediate.
 func (s *Service) Authenticate(ctx context.Context, bearer string) (auth.Principal, error) {
 	unauth := apperr.Unauthorized("凭据无效或已过期")
+	if strings.HasPrefix(bearer, auth.APIKeyPrefix) || strings.HasPrefix(bearer, auth.LegacyAPIKeyPrefix) {
+		id, secret, err := auth.ParseAPIKey(bearer)
+		if err != nil {
+			return auth.Principal{}, unauth
+		}
+		key, user, err := s.resolveAPIKey(ctx, id, secret)
+		if err != nil {
+			return auth.Principal{}, unauth
+		}
+		return auth.Principal{UserID: user.ID, Username: user.Username, Role: user.Role, KeyID: key.ID,
+			Scopes: auth.EffectiveScopes(user.Role, decodeScopes(key.ScopesJSON))}, nil
+	}
 	claims, err := s.signer.Parse(bearer)
 	if err != nil {
 		return auth.Principal{}, unauth
@@ -234,18 +223,26 @@ func (s *Service) Me(ctx context.Context, p auth.Principal) (model.User, error) 
 // resolveAPIKey checks revocation, expiry, the secret hash and the owner's state.
 func (s *Service) resolveAPIKey(ctx context.Context, id, secret string) (model.APIKey, model.User, error) {
 	unauth := apperr.Unauthorized("API Key 无效")
-	key, err := s.activeAPIKey(ctx, id)
-	if err != nil {
+	hash := auth.HashToken(secret)
+	var row struct {
+		ID, UserID, SecretHash, ScopesJSON, Username, Role string
+		ExpiresAt                                          *time.Time
+	}
+	query := s.db.WithContext(ctx).Table("api_keys AS k").
+		Select("k.id, k.user_id, k.secret_hash, k.scopes_json, k.expires_at, u.username, u.role").
+		Joins("JOIN users AS u ON u.id = k.user_id").
+		Where("k.revoked = ? AND u.enabled = ?", false, true)
+	if id == "" {
+		query = query.Where("k.secret_hash = ?", hash)
+	} else {
+		query = query.Where("k.id = ?", id)
+	}
+	if err := query.Take(&row).Error; err != nil || subtle.ConstantTimeCompare([]byte(hash), []byte(row.SecretHash)) != 1 ||
+		(row.ExpiresAt != nil && !s.now().Before(*row.ExpiresAt)) {
 		return model.APIKey{}, model.User{}, unauth
 	}
-	if subtle.ConstantTimeCompare([]byte(auth.HashToken(secret)), []byte(key.SecretHash)) != 1 {
-		return model.APIKey{}, model.User{}, unauth
-	}
-	user, err := s.enabledUser(ctx, key.UserID)
-	if err != nil {
-		return model.APIKey{}, model.User{}, unauth
-	}
-	return key, user, nil
+	return model.APIKey{ID: row.ID, UserID: row.UserID, ScopesJSON: row.ScopesJSON},
+		model.User{ID: row.UserID, Username: row.Username, Role: row.Role}, nil
 }
 
 func (s *Service) activeAPIKey(ctx context.Context, id string) (model.APIKey, error) {

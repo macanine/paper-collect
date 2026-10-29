@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -39,7 +40,7 @@ type plannedMaterial struct {
 
 // zipGroup is one uploaded package with the members extracted from it.
 type zipGroup struct {
-	Container    *plannedMaterial
+	ArchivePath  string
 	Members      []*plannedMaterial
 	CollectionID string
 }
@@ -80,6 +81,7 @@ func (s *Service) RunIngest(ctx context.Context, jobID string) {
 }
 
 func (s *Service) ingest(ctx context.Context, job model.Job) error {
+	s.jobProgress(ctx, job, "读取上传清单并检查文件", 0, 0)
 	db := s.db.WithContext(ctx)
 	var up model.Upload
 	if err := db.Where("id = ?", job.UploadID).First(&up).Error; err != nil {
@@ -96,57 +98,68 @@ func (s *Service) ingest(ctx context.Context, job model.Job) error {
 	staged := map[string]stagedBlob{}
 	var top []*plannedMaterial
 	var groups []*zipGroup
-	for _, e := range entries {
+	skipped := 0
+	for i, e := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if e.Status != model.EntryReceived {
 			return &archive.Rejected{Reason: "上传文件尚未全部接收"}
 		}
-		container := &plannedMaterial{
-			ID:         newID(),
-			Title:      titleFromName(e.RelativePath),
-			FileName:   baseName(e.RelativePath),
-			MediaType:  e.MediaType,
-			SHA:        e.SHA256,
-			Size:       e.SizeBytes,
-			SourcePath: e.RelativePath,
-			RelPath:    e.RelativePath,
-		}
-		container.Role = suggestRole(container.FileName)
-		addStaged(staged, container.SHA, stagedBlob{Size: container.Size, MediaType: container.MediaType, FileName: container.FileName})
-		top = append(top, container)
-
-		if e.MediaType != blob.MediaTypes[blob.KindZIP] {
+		if e.MediaType == blob.MediaTypes[blob.KindZIP] {
+			s.jobProgress(ctx, job, fmt.Sprintf("正在检查并展开压缩包（第 %d / %d 个文件）", i+1, len(entries)), i, len(entries))
+			members, skippedMembers, err := s.expandPackage(ctx, job, e)
+			if err != nil {
+				return err
+			}
+			skipped += skippedMembers
+			group := &zipGroup{ArchivePath: e.RelativePath, CollectionID: newID()}
+			for _, member := range members {
+				pm := &plannedMaterial{
+					ID: newID(), Title: titleFromName(member.Path), FileName: baseName(member.Path),
+					MediaType: member.MediaType, SHA: member.SHA, Size: member.Size,
+					SourcePath: e.RelativePath + "/" + member.Path, RelPath: member.Path,
+				}
+				pm.Role = suggestRole(pm.FileName)
+				addStaged(staged, pm.SHA, stagedBlob{Size: pm.Size, MediaType: pm.MediaType, FileName: pm.FileName})
+				group.Members = append(group.Members, pm)
+			}
+			groups = append(groups, group)
 			continue
 		}
-		members, err := s.expandPackage(e)
-		if err != nil {
-			return err
+		pm := &plannedMaterial{
+			ID: newID(), Title: titleFromName(e.RelativePath), FileName: baseName(e.RelativePath),
+			MediaType: e.MediaType, SHA: e.SHA256, Size: e.SizeBytes,
+			SourcePath: e.RelativePath, RelPath: e.RelativePath,
 		}
-		group := &zipGroup{Container: container, CollectionID: newID()}
-		for _, m := range members {
-			pm := &plannedMaterial{
-				ID:         newID(),
-				Title:      titleFromName(m.Path),
-				FileName:   baseName(m.Path),
-				MediaType:  m.MediaType,
-				SHA:        m.SHA,
-				Size:       m.Size,
-				SourcePath: e.RelativePath + "/" + m.Path,
-				ParentID:   container.ID,
-				RelPath:    m.Path,
-			}
-			pm.Role = suggestRole(pm.FileName)
-			addStaged(staged, pm.SHA, stagedBlob{Size: pm.Size, MediaType: pm.MediaType, FileName: pm.FileName})
-			group.Members = append(group.Members, pm)
+		pm.Role = suggestRole(pm.FileName)
+		addStaged(staged, pm.SHA, stagedBlob{Size: pm.Size, MediaType: pm.MediaType, FileName: pm.FileName})
+		top = append(top, pm)
+		if (i+1)%25 == 0 || i+1 == len(entries) {
+			s.jobProgress(ctx, job, fmt.Sprintf("已检查 %d / %d 个上传文件", i+1, len(entries)), i+1, len(entries))
 		}
-		groups = append(groups, group)
 	}
+	if skipped > 0 {
+		s.jobProgress(ctx, job, fmt.Sprintf("压缩包中共有 %d 个不支持的文件，已跳过，未归档", skipped), len(entries), len(entries))
+	}
+	s.jobProgress(ctx, job, fmt.Sprintf("文件检查完成，正在保存资料并安排存储（%d 个文件，%d 个压缩包）", len(entries), len(groups)), len(entries), len(entries))
 
-	return db.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		return s.publishIngest(tx, job, up, top, groups, staged)
 	})
+	if err != nil {
+		return err
+	}
+	// Once the catalogue transaction has committed, new ZIP uploads have no
+	// remaining consumers. Old uploads in the CAS are never removed here.
+	for _, e := range entries {
+		if e.MediaType == blob.MediaTypes[blob.KindZIP] {
+			if err := os.Remove(s.archiveUploadPath(e.ID, e.SHA256)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.logf("remove temporary archive: %v", err)
+			}
+		}
+	}
+	return nil
 }
 
 // publishIngest writes blobs, materials, collections, replica plans and job state in one transaction.
@@ -182,7 +195,7 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 
 	subjects := model.DecodeStrings(up.SubjectsJSON)
 	standalone := up.CollectionKind == "custom" && len(top) == 1 && len(groups) == 0 && !strings.Contains(top[0].RelPath, "/")
-	flatZIP := up.CollectionKind == model.KindZip && len(top) == 1 && len(groups) == 1
+	flatZIP := up.CollectionKind == model.KindZip && len(top) == 0 && len(groups) == 1
 	manifest := model.Collection{}
 	if !standalone {
 		manifest = model.Collection{
@@ -236,7 +249,7 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 		}
 		child := model.Collection{
 			ID:           g.CollectionID,
-			Title:        titleFromName(g.Container.FileName),
+			Title:        titleFromName(g.ArchivePath),
 			Description:  "",
 			Kind:         model.KindZip,
 			ParentID:     manifest.ID,
@@ -262,7 +275,7 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 			})
 		}
 		if len(items) > 0 {
-			if err := tx.Create(&items).Error; err != nil {
+			if err := tx.CreateInBatches(&items, 250).Error; err != nil {
 				return fmt.Errorf("create zip items: %w", err)
 			}
 		}
@@ -282,7 +295,7 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 			})
 		}
 		if len(manifestItems) > 0 {
-			if err := tx.Create(&manifestItems).Error; err != nil {
+			if err := tx.CreateInBatches(&manifestItems, 250).Error; err != nil {
 				return fmt.Errorf("create manifest items: %w", err)
 			}
 		}
@@ -306,15 +319,14 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 		}
 	}
 
-	if err := s.autoEnqueueAnalysesTx(tx, top, groups, now); err != nil {
+	candidates := append([]*plannedMaterial(nil), top...)
+	for _, group := range groups {
+		candidates = append(candidates, group.Members...)
+	}
+	if err := s.autoEnqueueAnalysesTx(tx, candidates, now); err != nil {
 		return err
 	}
-	indexCandidates := make([]*plannedMaterial, 0, len(top))
-	indexCandidates = append(indexCandidates, top...)
-	for _, group := range groups {
-		indexCandidates = append(indexCandidates, group.Members...)
-	}
-	if err := s.autoEnqueueIndexTx(tx, indexCandidates, now); err != nil {
+	if err := s.autoEnqueueIndexTx(tx, candidates, now); err != nil {
 		return err
 	}
 	materialID := ""
@@ -333,20 +345,34 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, top
 
 // expandPackage validates a ZIP completely, then extracts its supported members into the CAS.
 // Each member's real format must match its extension, otherwise the whole package is rejected.
-func (s *Service) expandPackage(e model.UploadEntry) ([]expandedMember, error) {
-	zipPath := s.blobs.Path(e.SHA256)
-	members, err := archive.Inspect(zipPath, s.limits)
-	if err != nil {
-		return nil, err
+func (s *Service) expandPackage(ctx context.Context, job model.Job, e model.UploadEntry) ([]expandedMember, int, error) {
+	zipPath := s.archiveUploadPath(e.ID, e.SHA256)
+	if _, err := os.Stat(zipPath); errors.Is(err, os.ErrNotExist) {
+		// Uploads received before this change live in the CAS. They may also
+		// be referenced by historical materials, so leave them untouched.
+		zipPath = s.blobs.Path(e.SHA256)
+	} else if err != nil {
+		return nil, 0, err
 	}
+	members, skipped, err := archive.InspectWithSkipped(zipPath, s.limits)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(members) == 0 {
+		return nil, skipped, &archive.Rejected{Reason: "压缩包中没有支持归档的文件"}
+	}
+	s.jobProgress(ctx, job, fmt.Sprintf("压缩包检查通过，准备展开 %d 个受支持的文件", len(members)), 0, len(members))
 	var out []expandedMember
 	err = archive.Extract(zipPath, members, func(m archive.Member, r io.Reader) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		tmp, err := s.blobs.NewTemp()
 		if err != nil {
 			return err
 		}
 		tmpPath := tmp.Name()
-		n, sum, copyErr := blob.CopyHashed(tmp, r)
+		n, sum, copyErr := blob.CopyHashed(tmp, ingestContextReader{ctx: ctx, reader: r})
 		closeErr := tmp.Close()
 		if copyErr == nil {
 			copyErr = closeErr
@@ -365,12 +391,27 @@ func (s *Service) expandPackage(e model.UploadEntry) ([]expandedMember, error) {
 			return err
 		}
 		out = append(out, expandedMember{Path: m.Path, SHA: sum, Size: n, MediaType: blob.MediaTypes[kind]})
+		if len(out)%25 == 0 || len(out) == len(members) {
+			s.jobProgress(ctx, job, fmt.Sprintf("压缩包展开进度：%d / %d 个文件", len(out), len(members)), len(out), len(members))
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, skipped, err
 	}
-	return out, nil
+	return out, skipped, nil
+}
+
+type ingestContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r ingestContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 // failJob marks a job failed and optionally applies related projection writes
@@ -424,11 +465,7 @@ func addStaged(m map[string]stagedBlob, sha string, st stagedBlob) {
 }
 
 func sortPlanned(items []*plannedMaterial) {
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0 && paths.NaturalLess(items[j].RelPath, items[j-1].RelPath); j-- {
-			items[j], items[j-1] = items[j-1], items[j]
-		}
-	}
+	sort.SliceStable(items, func(i, j int) bool { return paths.NaturalLess(items[i].RelPath, items[j].RelPath) })
 }
 
 // titleFromName derives a display title from a path: base name without its extension.

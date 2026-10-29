@@ -592,7 +592,7 @@ func (a *lanzouAdapter) getFileShare(ctx context.Context, fileID string) (lanzou
 }
 
 // uploadFile 通过 html5up.php 上传。成功只代表远端返回了 fileId；校验由调用方决定。
-func (a *lanzouAdapter) uploadFile(ctx context.Context, sourcePath, remoteName string, size int64) (string, error) {
+func (a *lanzouAdapter) uploadFile(ctx context.Context, sourcePath, remoteName string, size int64, progress func(int64, int64)) (string, error) {
 	if a.maxUploadBytes > 0 && size > a.maxUploadBytes {
 		return "", newCloudError(ClassUnsupported, "lanzou_file_too_large", false)
 	}
@@ -627,7 +627,7 @@ func (a *lanzouAdapter) uploadFile(ctx context.Context, sourcePath, remoteName s
 	target := a.origin + "/html5up.php"
 	referer := a.origin + "/mydisk.php?item=files&action=index"
 	build := func(reqCtx context.Context) (*http.Request, error) {
-		body := io.MultiReader(bytes.NewReader(prefix), io.NewSectionReader(src, 0, size), bytes.NewReader(suffix))
+		body := io.MultiReader(bytes.NewReader(prefix), &progressReader{r: io.NewSectionReader(src, 0, size), total: size, report: progress}, bytes.NewReader(suffix))
 		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, target, body)
 		if err != nil {
 			return nil, err
@@ -1055,7 +1055,7 @@ func (a *lanzouAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 		expectedSHA = normalized
 	}
 	name := sanitizeRemoteName(obj.Name, path.Base(obj.Key))
-	fileID, err := a.uploadFile(ctx, obj.Path, name, obj.Size)
+	fileID, err := a.uploadFile(ctx, obj.Path, name, obj.Size, obj.Progress)
 	if err != nil {
 		return Stored{}, err
 	}

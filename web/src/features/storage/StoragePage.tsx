@@ -15,6 +15,15 @@ import { usePolicy, useProviders, useReconcile, useTestProvider, useUpdatePolicy
 
 const ROLE_LABELS: Record<ProviderRole, string> = { primary: '主端', backup: '备端' };
 
+function connectionMessage(provider: StorageProvider, healthy: boolean, detail: string): string | undefined {
+  if (provider.kind !== 'onedrive' || healthy) return detail || undefined;
+  if (detail.includes('onedrive_token_rejected')) return '刷新令牌无效、过期或已撤销，请重新授权并更新端点。';
+  if (provider.config.auth_mode === 'openlist' && (detail.includes('onedrive_token_network') || detail.includes('onedrive_token_timeout') || detail.includes('onedrive_token_http_'))) {
+    return '无法通过 OpenList 续期令牌，请检查网络和服务可用性；如果持续失败，请重新获取刷新令牌。';
+  }
+  return detail || undefined;
+}
+
 export function StoragePage() {
   const { can } = useAuth();
   const { message, modal } = App.useApp();
@@ -43,7 +52,7 @@ export function StoragePage() {
       onSuccess: (result) => {
         modal.info({
           title: result.healthy ? `${provider.name}：连接正常` : `${provider.name}：连接失败`,
-          content: result.message || undefined,
+          content: connectionMessage(provider, result.healthy, result.message),
         });
       },
       onError: (error) => message.error(describeError(error).title),

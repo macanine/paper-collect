@@ -31,7 +31,7 @@ export type CollectionKind = (typeof COLLECTION_KINDS)[number];
 export const USER_ROLES = ['admin', 'editor', 'viewer'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
-export const PROVIDER_KINDS = ['local', 'webdav', 'lanzou', '123pan'] as const;
+export const PROVIDER_KINDS = ['local', 'webdav', 'lanzou', '123pan', 'onedrive', 's3'] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 export const PROVIDER_ROLES = ['primary', 'backup'] as const;
@@ -89,6 +89,21 @@ export interface Page<T> {
   total: number;
   page: number;
   page_size: number;
+}
+
+export interface MaterialStats {
+  total: number;
+  pending_storage: number;
+  archived: number;
+  degraded: number;
+}
+
+export interface JobStats {
+  total: number;
+  pending: number;
+  running: number;
+  succeeded: number;
+  failed: number;
 }
 
 export interface User {
@@ -215,6 +230,10 @@ export interface Job {
   material_id: string;
   attempts: number;
   error: string;
+  progress_message: string;
+  progress_current: number;
+  progress_total: number;
+  logs?: { time: string; level: 'info' | 'error'; message: string }[];
   created_at: string;
   updated_at: string;
 }
@@ -271,6 +290,7 @@ export interface CreatedAPIKey {
 export interface Audit {
   id: string;
   user_id: string;
+  username: string;
   action: string;
   target_id: string;
   created_at: string;

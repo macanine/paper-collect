@@ -34,14 +34,6 @@ var roleScopes = map[string][]string{
 	},
 }
 
-// agentForbidden scopes can never be granted to an API key.
-var agentForbidden = map[string]bool{
-	model.ScopeKeysManage:  true,
-	model.ScopeUsersManage: true,
-	model.ScopeAIRead:      true,
-	model.ScopeAIWrite:     true,
-}
-
 // RoleScopes returns the scopes granted to a role. Unknown roles get none.
 func RoleScopes(role string) []string {
 	return roleScopes[role]
@@ -57,10 +49,7 @@ func IsKnownScope(scope string) bool {
 	return false
 }
 
-// IsForbiddenForKeys reports whether a key may never carry scope.
-func IsForbiddenForKeys(scope string) bool { return agentForbidden[scope] }
-
-// EffectiveScopes intersects role scopes with key scopes and removes forbidden ones.
+// EffectiveScopes intersects role scopes with explicitly granted key scopes.
 // A nil keyScopes means the scopes come from the role alone (browser sessions).
 func EffectiveScopes(role string, keyScopes []string) map[string]bool {
 	allowed := map[string]bool{}
@@ -75,7 +64,7 @@ func EffectiveScopes(role string, keyScopes []string) map[string]bool {
 		return out
 	}
 	for _, s := range keyScopes {
-		if allowed[s] && !agentForbidden[s] {
+		if allowed[s] {
 			out[s] = true
 		}
 	}

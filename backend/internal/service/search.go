@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -165,6 +165,7 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 	if err := db.Where("id = ?", jobID).First(&job).Error; err != nil || job.Kind != model.JobIndex {
 		return
 	}
+	s.jobProgress(ctx, job, "正在准备索引并读取资料正文", 0, 0)
 	var material model.Material
 	if err := db.Where("id = ?", job.MaterialID).First(&material).Error; err != nil {
 		s.failIndex(job.ID, job.LeaseOwner, job.MaterialID, "资料不存在")
@@ -178,7 +179,7 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 	_ = db.Model(&model.MaterialIndexState{}).Where("material_id = ?", material.ID).
 		Updates(map[string]any{"status": "running", "job_id": job.ID, "error": "", "updated_at": s.now()}).Error
 
-	pages, err := s.loadIndexPages(ctx, material, settings)
+	pages, err := s.loadIndexPages(context.WithValue(ctx, progressJobKey{}, job), material, settings)
 	originalPageCount := len(pages)
 	if err == nil {
 		pages = splitLongPages(pages, settings.BatchChars/2)
@@ -193,7 +194,8 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 		s.failIndex(job.ID, job.LeaseOwner, material.ID, err.Error())
 		return
 	}
-	questions, calls, failedBatches, err := s.segmentQuestions(ctx, provider, modelName, pages, settings)
+	s.jobProgress(ctx, job, fmt.Sprintf("已读取 %d 页，正在识别题目", originalPageCount), 0, 0)
+	questions, calls, failedBatches, err := s.segmentQuestions(context.WithValue(ctx, progressJobKey{}, job), provider, modelName, pages, settings)
 	if err != nil {
 		s.logf("index %s: segmentation: %v (calls=%d failed=%d)", material.ID, err, calls, failedBatches)
 		s.failIndex(job.ID, job.LeaseOwner, material.ID, indexErrorText(err), map[string]any{
@@ -202,6 +204,7 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 		return
 	}
 
+	s.jobProgress(ctx, job, fmt.Sprintf("已识别 %d 道题，正在建立搜索索引", len(questions)), len(questions), len(questions))
 	now := s.now()
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
@@ -219,20 +222,43 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 				return err
 			}
 		}
+		blocks := make([]model.QuestionBlock, 0, len(questions))
 		for i, q := range questions {
 			block := model.QuestionBlock{
 				ID: newID(), MaterialID: material.ID, PageNo: q.PageNo, Seq: i,
 				QuestionNo: q.QuestionNo, Text: q.Text, Normalized: normalizeSearchText(q.Text),
 				Confidence: q.Confidence, Model: modelName, PromptVersion: searchPromptVersion, CreatedAt: now,
 			}
-			if err := tx.Create(&block).Error; err != nil {
+			blocks = append(blocks, block)
+		}
+		if len(blocks) > 0 {
+			if err := tx.CreateInBatches(&blocks, 50).Error; err != nil {
 				return err
 			}
+		}
+		terms := make([]model.QuestionTerm, 0, 1000)
+		flushTerms := func() error {
+			if len(terms) == 0 {
+				return nil
+			}
+			if err := tx.CreateInBatches(&terms, 100).Error; err != nil {
+				return err
+			}
+			terms = terms[:0]
+			return nil
+		}
+		for _, block := range blocks {
 			for term, tf := range searchTerms(block.Normalized) {
-				if err := tx.Create(&model.QuestionTerm{Term: term, QuestionID: block.ID, TF: tf}).Error; err != nil {
-					return err
+				terms = append(terms, model.QuestionTerm{Term: term, QuestionID: block.ID, TF: tf})
+				if len(terms) == cap(terms) {
+					if err := flushTerms(); err != nil {
+						return err
+					}
 				}
 			}
+		}
+		if err := flushTerms(); err != nil {
+			return err
 		}
 		indexedAt := now
 		res := tx.Model(&model.MaterialIndexState{}).
@@ -278,6 +304,7 @@ func indexErrorText(err error) string {
 }
 
 func (s *Service) failIndex(jobID, owner, materialID, message string, extra ...map[string]any) {
+	message = redact(message)
 	updates := map[string]any{"status": "failed", "error": message, "updated_at": s.now()}
 	for _, values := range extra {
 		for key, value := range values {
@@ -304,28 +331,14 @@ func (s *Service) loadIndexPages(ctx context.Context, material model.Material, s
 	}
 	var cached model.MaterialText
 	if err := db.Where("material_id = ?", material.ID).First(&cached).Error; err == nil {
-		if cached.SourceHash == material.SHA256 && cached.PagesJSON != "" && cached.ParseKey == textParseKey(ocrProvider) {
+		if cached.SourceHash == material.SHA256 && cached.PagesJSON != "" && cached.ParseKey == textParseKey(ocrProvider, material.MediaType) {
 			var pages []pageText
 			if err := json.Unmarshal([]byte(cached.PagesJSON), &pages); err == nil && len(pages) > 0 {
 				return limitIndexPages(pages, settings.MaxPages), nil
 			}
 		}
 	}
-	var document []byte
-	if s.blobs.Exists(material.SHA256) {
-		document, err = os.ReadFile(s.blobs.Path(material.SHA256))
-	} else {
-		var download Download
-		download, err = s.OpenMaterialDownload(ctx, material.ID)
-		if err == nil {
-			defer download.Reader.Close()
-			document, err = ioReadAllLimit(download.Reader, 256<<20)
-		}
-	}
-	if err != nil {
-		return nil, fmt.Errorf("读取原件失败: %w", err)
-	}
-	parsed, ocrProvider, err := s.parseWithOCR(ctx, aiSettings, material.FileName, document)
+	parsed, ocrProvider, err := s.parseWithOCR(ctx, aiSettings, material)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +350,7 @@ func (s *Service) loadIndexPages(ctx context.Context, material model.Material, s
 	now := s.now()
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		return tx.Save(&model.MaterialText{
-			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(ocrProvider),
+			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(ocrProvider, material.MediaType),
 			PageCount: parsed.PageCount, PagesJSON: string(raw), Markdown: parsed.Markdown, CreatedAt: now, UpdatedAt: now,
 		}).Error
 	}); err != nil {
@@ -505,6 +518,8 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 	batches := buildIndexBatches(pages, batchPages, batchChars)
 	results := make([][]segmentedQuestion, len(batches))
 	var calls, failed atomic.Int64
+	var progressMu sync.Mutex
+	completed := 0
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(indexBatchConcurrency)
 	for index, batch := range batches {
@@ -515,6 +530,13 @@ func (s *Service) segmentQuestions(ctx context.Context, provider model.AIProvide
 				return err
 			}
 			results[index] = questions
+			progressMu.Lock()
+			completed++
+			done := completed
+			if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+				s.jobProgress(groupCtx, job, fmt.Sprintf("题目识别进度：已完成 %d / %d 批", done, len(batches)), done, len(batches))
+			}
+			progressMu.Unlock()
 			return nil
 		})
 	}
@@ -1000,46 +1022,26 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	db := s.db.WithContext(ctx)
-	var materials []model.Material
-	if err := db.Where("status IN ? AND media_type <> ?", []string{model.StatusArchived, model.StatusDegraded}, "application/zip").
+	var materialIDs []string
+	if err := db.Model(&model.Material{}).
+		Where("status IN ? AND media_type <> ?", []string{model.StatusArchived, model.StatusDegraded}, "application/zip").
 		Where("id NOT IN (?)", db.Model(&model.MaterialIndexState{}).Select("material_id")).
-		Find(&materials).Error; err != nil {
+		Pluck("id", &materialIDs).Error; err != nil {
 		return 0, err
 	}
 	now := s.now()
 	queued := 0
-	for _, material := range materials {
-		jobID := newID()
+	for _, materialID := range materialIDs {
+		created := false
 		err := db.Transaction(func(tx *gorm.DB) error {
-			var count int64
-			if err := tx.Model(&model.MaterialIndexState{}).Where("material_id = ?", material.ID).Count(&count).Error; err != nil {
-				return err
-			}
-			if count > 0 {
-				return nil
-			}
-			state := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.MaterialIndexState{
-				MaterialID: material.ID, Status: "pending", JobID: jobID, UpdatedAt: now,
-			})
-			if state.Error != nil {
-				return state.Error
-			}
-			if state.RowsAffected == 0 {
-				return nil
-			}
-			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.Job{
-				ID: jobID, Kind: model.JobIndex, Status: model.JobPending,
-				MaterialID: material.ID, CreatedAt: now, UpdatedAt: now,
-			}).Error
+			var err error
+			created, err = enqueueIndexTx(tx, materialID, now)
+			return err
 		})
 		if err != nil {
 			return queued, err
 		}
-		var count int64
-		if err := db.Model(&model.Job{}).Where("id = ?", jobID).Count(&count).Error; err != nil {
-			return queued, err
-		}
-		if count == 1 {
+		if created {
 			queued++
 		}
 	}
@@ -1066,22 +1068,28 @@ func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, 
 		if pm.MediaType == "application/zip" {
 			continue
 		}
-		var count int64
-		if err := tx.Model(&model.MaterialIndexState{}).Where("material_id = ?", pm.ID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			continue
-		}
-		jobID := newID()
-		state := model.MaterialIndexState{MaterialID: pm.ID, Status: "pending", JobID: jobID, UpdatedAt: now}
-		if err := tx.Create(&state).Error; err != nil {
-			return err
-		}
-		job := model.Job{ID: jobID, Kind: model.JobIndex, Status: model.JobPending, MaterialID: pm.ID, CreatedAt: now, UpdatedAt: now}
-		if err := tx.Create(&job).Error; err != nil {
+		if _, err := enqueueIndexTx(tx, pm.ID, now); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// enqueueIndexTx atomically creates at most one index state and its job. The
+// material_id primary key coordinates both ingest and startup across instances.
+func enqueueIndexTx(tx *gorm.DB, materialID string, now time.Time) (bool, error) {
+	jobID := newID()
+	state := model.MaterialIndexState{MaterialID: materialID, Status: "pending", JobID: jobID, UpdatedAt: now}
+	inserted := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "material_id"}}, DoNothing: true}).Create(&state)
+	if inserted.Error != nil {
+		return false, inserted.Error
+	}
+	if inserted.RowsAffected == 0 {
+		return false, nil
+	}
+	job := model.Job{ID: jobID, Kind: model.JobIndex, Status: model.JobPending, MaterialID: materialID, CreatedAt: now, UpdatedAt: now}
+	if err := tx.Create(&job).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }

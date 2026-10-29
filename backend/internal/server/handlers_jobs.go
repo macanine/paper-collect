@@ -22,6 +22,18 @@ func (s *Server) handleListJobs(c *gin.Context) {
 	s.respondData(c, http.StatusOK, toPage(page, toJob))
 }
 
+func (s *Server) handleJobStats(c *gin.Context) {
+	counts, err := s.svc.GetJobStats(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, jobStatsDTO{
+		Total: counts.Total, Pending: counts.Pending, Running: counts.Running,
+		Succeeded: counts.Succeeded, Failed: counts.Failed,
+	})
+}
+
 func (s *Server) handleGetJob(c *gin.Context) {
 	job, err := s.svc.GetJob(c.Request.Context(), c.Param("id"))
 	if err != nil {

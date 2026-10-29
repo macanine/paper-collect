@@ -325,7 +325,7 @@ func (s *Service) ocrClient(ctx context.Context, row model.OCRProvider) (ocrClie
 	}
 }
 
-func (s *Service) parseWithOCR(ctx context.Context, settings model.AISettings, filename string, data []byte) (ai.Result, model.OCRProvider, error) {
+func (s *Service) parseWithOCR(ctx context.Context, settings model.AISettings, material model.Material) (ai.Result, model.OCRProvider, error) {
 	row, err := s.selectedOCRProvider(ctx, settings)
 	if err != nil {
 		return ai.Result{}, model.OCRProvider{}, err
@@ -336,7 +336,7 @@ func (s *Service) parseWithOCR(ctx context.Context, settings model.AISettings, f
 	}
 	parseCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
 	defer cancel()
-	result, err := client.Extract(parseCtx, filename, data)
+	result, err := s.parseMaterial(parseCtx, client, row, material)
 	return result, row, err
 }
 

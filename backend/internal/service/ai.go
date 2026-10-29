@@ -17,6 +17,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -764,8 +765,9 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 	_ = db.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).
 		Updates(map[string]any{"status": model.AnalysisRunning, "error": "", "updated_at": now}).Error
 	analysis.Status = model.AnalysisRunning
+	s.jobProgress(ctx, job, "正在读取资料并解析正文", 0, 0)
 
-	result, err := s.analyzeMaterial(ctx, &analysis, job.MaterialID)
+	result, err := s.analyzeMaterial(context.WithValue(ctx, progressJobKey{}, job), &analysis, job.MaterialID)
 	if err != nil {
 		message := publicMessage(err)
 		if ctx.Err() != nil {
@@ -788,6 +790,7 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 		})
 		return
 	}
+	s.jobProgress(ctx, job, "识别完成，正在保存并应用编目结果", 0, 0)
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
 			return err
@@ -862,6 +865,8 @@ type analyzeResult struct {
 	AutoFileName    string
 }
 
+type progressJobKey struct{}
+
 func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialAnalysis, materialID string) (analyzeResult, error) {
 	settings, err := s.ensureAISettings(ctx)
 	if err != nil {
@@ -890,38 +895,24 @@ func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialA
 		}
 		var cached model.MaterialText
 		if err := s.db.WithContext(ctx).Where("material_id = ?", material.ID).First(&cached).Error; err == nil &&
-			cached.SourceHash == material.SHA256 && cached.ParseKey == textParseKey(ocrProvider) && strings.TrimSpace(cached.Markdown) != "" {
+			cached.SourceHash == material.SHA256 && cached.ParseKey == textParseKey(ocrProvider, material.MediaType) && strings.TrimSpace(cached.Markdown) != "" {
 			parsed.Markdown, parsed.PageCount = cached.Markdown, cached.PageCount
 		}
 	}
 	if parsed.Markdown == "" {
+		if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+			s.jobProgress(ctx, job, "正在读取原件并调用文档解析服务", 0, 0)
+		}
 		// Visual analysis still needs images, which are deliberately not persisted.
-		var document []byte
-		if s.blobs.Exists(material.SHA256) {
-			document, err = os.ReadFile(s.blobs.Path(material.SHA256))
-		} else {
-			var download Download
-			download, err = s.OpenMaterialDownload(ctx, materialID)
-			if err == nil {
-				defer download.Reader.Close()
-				document, err = ioReadAllLimit(download.Reader, 256<<20)
-			}
-		}
-		if err != nil {
-			return analyzeResult{}, fmt.Errorf("读取原件失败: %w", err)
-		}
-		if len(document) == 0 {
-			return analyzeResult{}, errors.New("原件为空")
-		}
 		var ocrProvider model.OCRProvider
-		parsed, ocrProvider, err = s.parseWithOCR(ctx, settings, material.FileName, document)
+		parsed, ocrProvider, err = s.parseWithOCR(ctx, settings, material)
 		if err != nil {
 			return analyzeResult{}, err
 		}
 		pages, _ := json.Marshal(parsedPages(parsed))
 		now := s.now()
 		if err := s.db.WithContext(ctx).Save(&model.MaterialText{
-			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(ocrProvider),
+			MaterialID: material.ID, SourceHash: material.SHA256, ParseKey: textParseKey(ocrProvider, material.MediaType),
 			PageCount: parsed.PageCount, PagesJSON: string(pages), Markdown: parsed.Markdown, CreatedAt: now, UpdatedAt: now,
 		}).Error; err != nil {
 			s.logf("analysis text cache unavailable")
@@ -949,6 +940,9 @@ func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialA
 		return analyzeResult{}, errors.New("文档未解析出正文或页面图像，已停止 AI 归类，避免仅凭文件名判断")
 	}
 
+	if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+		s.jobProgress(ctx, job, fmt.Sprintf("正文解析完成（%d 页），正在生成编目建议", parsed.PageCount), 0, 0)
+	}
 	providerID, _, modelName, suggestions, confidence, err := s.generateSuggestions(
 		ctx, sampleAnalysisDocument(markdown, analysisMarkdownLimit), material.FileName, material.SourcePath, images)
 	if err != nil {
@@ -973,7 +967,7 @@ func (s *Service) generateSuggestions(ctx context.Context, markdown, fileName, s
 		return "", "", "", Suggestions{}, 0, errors.New("没有启用的 AI 模型端点")
 	}
 	var lastErr error
-	for _, provider := range providers {
+	for index, provider := range providers {
 		modelName := provider.DefaultModel
 		useVision := len(images) > 0 && strings.TrimSpace(provider.VisionModel) != ""
 		if useVision {
@@ -981,6 +975,9 @@ func (s *Service) generateSuggestions(ctx context.Context, markdown, fileName, s
 		}
 		if strings.TrimSpace(modelName) == "" {
 			continue
+		}
+		if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+			s.jobProgress(ctx, job, fmt.Sprintf("正在尝试第 %d / %d 个模型服务", index+1, len(providers)), index, len(providers))
 		}
 		key, err := s.openAISecret(provider.APIKeyCipher, provider.ID)
 		if err != nil {
@@ -1004,6 +1001,9 @@ func (s *Service) generateSuggestions(ctx context.Context, markdown, fileName, s
 		if err != nil {
 			lastErr = err
 			s.logf("analysis provider %s failed: %s", provider.Name, ai.Sanitize(err.Error()))
+			if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+				s.jobProgress(ctx, job, fmt.Sprintf("第 %d / %d 个模型服务未完成", index+1, len(providers)), index+1, len(providers))
+			}
 			continue
 		}
 		suggestions, confidence, err := parseSuggestions(content)
@@ -1122,7 +1122,7 @@ func ioReadAllLimit(reader interface{ Read([]byte) (int, error) }, limit int64) 
 		n, err := reader.Read(buf)
 		total += int64(n)
 		if total > limit {
-			return nil, errors.New("文件超过 256 MiB，暂不支持自动解析")
+			return nil, fmt.Errorf("文件超过 %d MiB，暂不支持自动解析", limit>>20)
 		}
 		out = append(out, buf[:n]...)
 		if err != nil {
@@ -1136,7 +1136,7 @@ func ioReadAllLimit(reader interface{ Read([]byte) (int, error) }, limit int64) 
 
 // autoEnqueueAnalysesTx creates pending analyses for non-ZIP materials when
 // automatic analysis is enabled. ZIP containers are skipped; members are not.
-func (s *Service) autoEnqueueAnalysesTx(tx *gorm.DB, top []*plannedMaterial, groups []*zipGroup, now time.Time) error {
+func (s *Service) autoEnqueueAnalysesTx(tx *gorm.DB, materials []*plannedMaterial, now time.Time) error {
 	var settings model.AISettings
 	if err := tx.Where("id = ?", 1).First(&settings).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1147,38 +1147,27 @@ func (s *Service) autoEnqueueAnalysesTx(tx *gorm.DB, top []*plannedMaterial, gro
 	if !settings.AnalysisEnabled {
 		return nil
 	}
-	candidates := make([]*plannedMaterial, 0, len(top))
-	candidates = append(candidates, top...)
-	for _, group := range groups {
-		candidates = append(candidates, group.Members...)
-	}
-	for _, pm := range candidates {
+	for _, pm := range materials {
 		if pm.MediaType == "application/zip" {
 			continue
 		}
-		var count int64
-		if err := tx.Model(&model.MaterialAnalysis{}).Where("material_id = ?", pm.ID).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			continue
-		}
+		jobID := newID()
 		analysis := model.MaterialAnalysis{
-			ID: newID(), MaterialID: pm.ID, Status: model.AnalysisPending,
+			ID: newID(), MaterialID: pm.ID, Status: model.AnalysisPending, JobID: jobID,
 			ImagesJSON: "[]", SuggestionsJSON: "{}", CreatedAt: now, UpdatedAt: now,
 		}
-		if err := tx.Create(&analysis).Error; err != nil {
-			return err
+		inserted := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "material_id"}}, DoNothing: true}).Create(&analysis)
+		if inserted.Error != nil {
+			return inserted.Error
+		}
+		if inserted.RowsAffected == 0 {
+			continue
 		}
 		job := model.Job{
-			ID: newID(), Kind: model.JobAnalyze, Status: model.JobPending,
+			ID: jobID, Kind: model.JobAnalyze, Status: model.JobPending,
 			MaterialID: pm.ID, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&job).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).
-			Updates(map[string]any{"job_id": job.ID}).Error; err != nil {
 			return err
 		}
 	}

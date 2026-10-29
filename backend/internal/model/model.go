@@ -106,12 +106,14 @@ const (
 
 // Storage provider kinds, roles and policy modes.
 const (
-	KindLocal   = "local"
-	KindWebDAV  = "webdav"
-	KindLanzou  = "lanzou"
-	KindPan123  = "123pan"
-	RolePrimary = "primary"
-	RoleBackup  = "backup"
+	KindLocal    = "local"
+	KindWebDAV   = "webdav"
+	KindLanzou   = "lanzou"
+	KindPan123   = "123pan"
+	KindOneDrive = "onedrive"
+	KindS3       = "s3"
+	RolePrimary  = "primary"
+	RoleBackup   = "backup"
 
 	ModeMirrorAll     = "mirror_all"
 	ModePrimaryBackup = "primary_backup"
@@ -119,7 +121,7 @@ const (
 )
 
 // StorageKinds lists provider kinds.
-var StorageKinds = []string{KindLocal, KindWebDAV, KindLanzou, KindPan123}
+var StorageKinds = []string{KindLocal, KindWebDAV, KindLanzou, KindPan123, KindOneDrive, KindS3}
 
 // PolicyModes lists storage policy modes.
 var PolicyModes = []string{ModeMirrorAll, ModePrimaryBackup, ModeBalanced}
@@ -177,7 +179,7 @@ type APIKey struct {
 	ID         string `gorm:"primaryKey;size:36"`
 	UserID     string `gorm:"size:36;not null;index"`
 	Name       string `gorm:"size:128;not null"`
-	SecretHash string `gorm:"size:64;not null"`
+	SecretHash string `gorm:"size:64;not null;index"`
 	ScopesJSON string `gorm:"type:text;not null"`
 	ExpiresAt  *time.Time
 	Revoked    bool `gorm:"not null"`
@@ -205,6 +207,7 @@ type Audit struct {
 	Action    string    `gorm:"size:64;not null;index"`
 	TargetID  string    `gorm:"size:64"`
 	CreatedAt time.Time `gorm:"index"`
+	Username  string    `gorm:"-"`
 }
 
 // Blob is immutable content addressed by SHA-256.
@@ -301,19 +304,30 @@ type UploadEntry struct {
 
 // Job is a persisted unit of background work.
 type Job struct {
-	ID          string `gorm:"primaryKey;size:36"`
-	Kind        string `gorm:"size:16;not null;index"`
-	Status      string `gorm:"size:16;not null;index"`
-	UploadID    string `gorm:"size:36;index"`
-	ReplicaID   string `gorm:"size:36;index"`
-	MaterialID  string `gorm:"size:36;index"`
-	Attempts    int    `gorm:"not null"`
-	Error       string `gorm:"type:text;not null"`
-	LeaseOwner  string `gorm:"size:128;index"`
-	LeaseUntil  *time.Time
-	HeartbeatAt *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID              string `gorm:"primaryKey;size:36"`
+	Kind            string `gorm:"size:16;not null;index"`
+	Status          string `gorm:"size:16;not null;index"`
+	UploadID        string `gorm:"size:36;index"`
+	ReplicaID       string `gorm:"size:36;index"`
+	MaterialID      string `gorm:"size:36;index"`
+	Attempts        int    `gorm:"not null"`
+	Error           string `gorm:"type:text;not null"`
+	ProgressMessage string `gorm:"type:text;not null;default:''"`
+	ProgressCurrent int    `gorm:"not null;default:0"`
+	ProgressTotal   int    `gorm:"not null;default:0"`
+	LogJSON         string `gorm:"type:text;not null;default:''"`
+	LeaseOwner      string `gorm:"size:128;index"`
+	LeaseUntil      *time.Time
+	HeartbeatAt     *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// JobLog contains only application-generated, non-secret progress information.
+type JobLog struct {
+	Time    time.Time `json:"time"`
+	Level   string    `json:"level"`
+	Message string    `json:"message"`
 }
 
 // JobLock serialises analyze and index work for one material across instances.

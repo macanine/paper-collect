@@ -1,8 +1,8 @@
-import { Button, Table, Tooltip } from 'antd';
+import { Button, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { ReplicaStatusTag, ShareStatusTag, VerificationTag } from '../../shared/ui/StatusTags';
-import { formatBytes, formatDateTime, shortId } from '../../shared/lib/format';
+import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import type { Replica, StorageProvider } from '../../shared/api/types';
 
 interface ReplicaTableProps {
@@ -22,7 +22,7 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       render: (_: unknown, record) => {
         const provider = providers?.get(record.provider_id);
         if (!provider) {
-          return <span className="font-mono text-xs text-slate-500">端点 {shortId(record.provider_id)}</span>;
+          return <span className="text-slate-500">存储端点</span>;
         }
         return <span>{provider.name}</span>;
       },
@@ -62,13 +62,14 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       title: '分享',
       key: 'share',
       width: 320,
-      render: (_: unknown, record) => (
-        <div className="flex flex-col gap-1">
-          <ShareStatusTag status={record.share_status} />
-          {record.share_url ? (
+      render: (_: unknown, record) => {
+        const expired = Boolean(record.share_expires_at && new Date(record.share_expires_at).getTime() <= Date.now());
+        return <div className="flex flex-col gap-1">
+          {expired ? <Tag color="warning">链接已过期</Tag> : <ShareStatusTag status={record.share_status} />}
+          {record.share_url && !expired ? (
             <div className="flex min-w-0 items-center gap-2">
               <a href={record.share_url} target="_blank" rel="noreferrer noopener" className="min-w-0 truncate text-xs">
-                {record.share_url}
+                打开分享链接
               </a>
               <CopyButton value={record.share_url} label="复制链接" />
             </div>
@@ -81,8 +82,8 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
           {record.share_expires_at ? (
             <span className="text-xs text-slate-500">过期时间：{formatDateTime(record.share_expires_at)}</span>
           ) : null}
-        </div>
-      ),
+        </div>;
+      },
     },
     {
       title: '更新时间',

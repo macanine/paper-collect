@@ -1,27 +1,28 @@
-import type { ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { Route, Routes } from 'react-router';
 import { useAuth } from './features/auth/AuthContext';
 import { LoginPage } from './features/auth/LoginPage';
-import { ApiKeysPage } from './features/apiKeys/ApiKeysPage';
-import { AuditLogsPage } from './features/audit/AuditLogsPage';
-import { AiModelsPage } from './features/ai/AiModelsPage';
-import { SearchPage } from './features/search/SearchPage';
-import { AiSettingsPage } from './features/ai/AiSettingsPage';
-import { CollectionDetailPage } from './features/collections/CollectionDetailPage';
-import { CollectionsListPage } from './features/collections/CollectionsListPage';
-import { DashboardPage } from './features/dashboard/DashboardPage';
-import { JobDetailPage } from './features/jobs/JobDetailPage';
-import { JobsListPage } from './features/jobs/JobsListPage';
-import { MaterialDetailPage } from './features/materials/MaterialDetailPage';
-import { MaterialsListPage } from './features/materials/MaterialsListPage';
-import { StoragePage } from './features/storage/StoragePage';
-import { NewUploadPage } from './features/uploads/NewUploadPage';
-import { UploadSessionPage } from './features/uploads/UploadSessionPage';
-import { UsersPage } from './features/users/UsersPage';
-import { AuthenticatedLayout } from './layouts/AppLayout';
 import { hasScope } from './features/auth/permissions';
 import type { Scope } from './shared/api/types';
-import { ForbiddenState, NotFoundPage } from './shared/ui/States';
+import { ForbiddenState, FullPageLoading, NotFoundPage } from './shared/ui/States';
+
+const ApiKeysPage = lazy(() => import('./features/apiKeys/ApiKeysPage').then((module) => ({ default: module.ApiKeysPage })));
+const AuditLogsPage = lazy(() => import('./features/audit/AuditLogsPage').then((module) => ({ default: module.AuditLogsPage })));
+const AiModelsPage = lazy(() => import('./features/ai/AiModelsPage').then((module) => ({ default: module.AiModelsPage })));
+const SearchPage = lazy(() => import('./features/search/SearchPage').then((module) => ({ default: module.SearchPage })));
+const AiSettingsPage = lazy(() => import('./features/ai/AiSettingsPage').then((module) => ({ default: module.AiSettingsPage })));
+const CollectionDetailPage = lazy(() => import('./features/collections/CollectionDetailPage').then((module) => ({ default: module.CollectionDetailPage })));
+const CollectionsListPage = lazy(() => import('./features/collections/CollectionsListPage').then((module) => ({ default: module.CollectionsListPage })));
+const DashboardPage = lazy(() => import('./features/dashboard/DashboardPage').then((module) => ({ default: module.DashboardPage })));
+const JobDetailPage = lazy(() => import('./features/jobs/JobDetailPage').then((module) => ({ default: module.JobDetailPage })));
+const JobsListPage = lazy(() => import('./features/jobs/JobsListPage').then((module) => ({ default: module.JobsListPage })));
+const MaterialDetailPage = lazy(() => import('./features/materials/MaterialDetailPage').then((module) => ({ default: module.MaterialDetailPage })));
+const MaterialsListPage = lazy(() => import('./features/materials/MaterialsListPage').then((module) => ({ default: module.MaterialsListPage })));
+const StoragePage = lazy(() => import('./features/storage/StoragePage').then((module) => ({ default: module.StoragePage })));
+const NewUploadPage = lazy(() => import('./features/uploads/NewUploadPage').then((module) => ({ default: module.NewUploadPage })));
+const UploadSessionPage = lazy(() => import('./features/uploads/UploadSessionPage').then((module) => ({ default: module.UploadSessionPage })));
+const UsersPage = lazy(() => import('./features/users/UsersPage').then((module) => ({ default: module.UsersPage })));
+const AuthenticatedLayout = lazy(() => import('./layouts/AppLayout').then((module) => ({ default: module.AuthenticatedLayout })));
 
 /** 路由级权限镜像。服务端仍会逐请求重新检查角色与 scope。 */
 function ScopeGuard({ scope, children }: { scope: Scope; children: ReactNode }) {
@@ -34,7 +35,13 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route element={<AuthenticatedLayout />}>
+      <Route
+        element={
+          <Suspense fallback={<FullPageLoading />}>
+            <AuthenticatedLayout />
+          </Suspense>
+        }
+      >
         <Route index element={<DashboardPage />} />
         <Route
           path="search"

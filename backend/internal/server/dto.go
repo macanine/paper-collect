@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/model"
@@ -28,9 +29,25 @@ type apiKeyDTO struct {
 type auditDTO struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
+	Username  string    `json:"username"`
 	Action    string    `json:"action"`
 	TargetID  string    `json:"target_id"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type materialStatsDTO struct {
+	Total          int64 `json:"total"`
+	PendingStorage int64 `json:"pending_storage"`
+	Archived       int64 `json:"archived"`
+	Degraded       int64 `json:"degraded"`
+}
+
+type jobStatsDTO struct {
+	Total     int64 `json:"total"`
+	Pending   int64 `json:"pending"`
+	Running   int64 `json:"running"`
+	Succeeded int64 `json:"succeeded"`
+	Failed    int64 `json:"failed"`
 }
 
 type materialDTO struct {
@@ -126,16 +143,20 @@ type uploadDTO struct {
 }
 
 type jobDTO struct {
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
-	Status     string    `json:"status"`
-	UploadID   string    `json:"upload_id"`
-	ReplicaID  string    `json:"replica_id"`
-	MaterialID string    `json:"material_id"`
-	Attempts   int       `json:"attempts"`
-	Error      string    `json:"error"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID              string         `json:"id"`
+	Kind            string         `json:"kind"`
+	Status          string         `json:"status"`
+	UploadID        string         `json:"upload_id"`
+	ReplicaID       string         `json:"replica_id"`
+	MaterialID      string         `json:"material_id"`
+	Attempts        int            `json:"attempts"`
+	Error           string         `json:"error"`
+	ProgressMessage string         `json:"progress_message"`
+	ProgressCurrent int            `json:"progress_current"`
+	ProgressTotal   int            `json:"progress_total"`
+	Logs            []model.JobLog `json:"logs,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
 type providerDTO struct {
@@ -162,11 +183,6 @@ type loginDTO struct {
 	RefreshToken string  `json:"refresh_token"`
 	ExpiresIn    int     `json:"expires_in"`
 	User         userDTO `json:"user"`
-}
-
-type agentTokenDTO struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
 }
 
 type createKeyDTO struct {
@@ -213,7 +229,7 @@ func toAPIKey(k model.APIKey) apiKeyDTO {
 }
 
 func toAudit(a model.Audit) auditDTO {
-	return auditDTO{ID: a.ID, UserID: a.UserID, Action: a.Action, TargetID: a.TargetID, CreatedAt: a.CreatedAt}
+	return auditDTO{ID: a.ID, UserID: a.UserID, Username: a.Username, Action: a.Action, TargetID: a.TargetID, CreatedAt: a.CreatedAt}
 }
 
 func toMaterial(m model.Material, subjects []string) materialDTO {
@@ -332,17 +348,25 @@ func toUpload(v service.UploadView) uploadDTO {
 }
 
 func toJob(j model.Job) jobDTO {
+	var logs []model.JobLog
+	if j.LogJSON != "" {
+		_ = json.Unmarshal([]byte(j.LogJSON), &logs)
+	}
 	return jobDTO{
-		ID:         j.ID,
-		Kind:       j.Kind,
-		Status:     j.Status,
-		UploadID:   j.UploadID,
-		ReplicaID:  j.ReplicaID,
-		MaterialID: j.MaterialID,
-		Attempts:   j.Attempts,
-		Error:      j.Error,
-		CreatedAt:  j.CreatedAt,
-		UpdatedAt:  j.UpdatedAt,
+		ID:              j.ID,
+		Kind:            j.Kind,
+		Status:          j.Status,
+		UploadID:        j.UploadID,
+		ReplicaID:       j.ReplicaID,
+		MaterialID:      j.MaterialID,
+		Attempts:        j.Attempts,
+		Error:           j.Error,
+		ProgressMessage: j.ProgressMessage,
+		ProgressCurrent: j.ProgressCurrent,
+		ProgressTotal:   j.ProgressTotal,
+		Logs:            logs,
+		CreatedAt:       j.CreatedAt,
+		UpdatedAt:       j.UpdatedAt,
 	}
 }
 

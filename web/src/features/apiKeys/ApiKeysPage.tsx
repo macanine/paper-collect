@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd';
+import { Alert, App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,22 +11,14 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { createKey, listKeys, revokeKey } from './api';
+import { buildCreateKeyBody, type KeyFormValues } from './keyForm';
 
-// 代理密钥的 scope 不能包含密钥管理与用户管理，这是服务端规则，也是前端的可选范围。
-const KEY_SCOPE_OPTIONS = SCOPES.filter(
-  (scope) => scope !== 'keys:manage' && scope !== 'users:manage' && scope !== 'ai:read' && scope !== 'ai:write',
-).map((scope) => ({
+const KEY_SCOPE_OPTIONS = SCOPES.map((scope) => ({
   value: scope,
   label: SCOPE_LABELS[scope],
 }));
 
 const PAGE_SIZE = 20;
-
-interface KeyFormValues {
-  name: string;
-  scopes: Scope[];
-  expires_at: string;
-}
 
 export function ApiKeysPage() {
   const { message } = App.useApp();
@@ -55,7 +47,7 @@ export function ApiKeysPage() {
   const revoke = useMutation({
     mutationFn: revokeKey,
     onSuccess: () => {
-      message.success('密钥已撤销，绑定它的令牌会立即失效');
+      message.success('密钥已撤销，使用它的请求会立即失效');
       void queryClient.invalidateQueries({ queryKey: ['api-keys'] });
     },
     onError: (error) => message.error(describeError(error).title),
@@ -128,12 +120,7 @@ export function ApiKeysPage() {
 
   const handleCreate = async () => {
     const values = await form.validateFields();
-    const expires = values.expires_at.trim();
-    create.mutate({
-      name: values.name.trim(),
-      scopes: values.scopes,
-      ...(expires ? { expires_at: expires } : {}),
-    });
+    create.mutate(buildCreateKeyBody(values));
   };
 
   return (
@@ -146,6 +133,8 @@ export function ApiKeysPage() {
           </Button>
         }
       />
+
+      <Alert type="info" showIcon message="密钥默认长期有效，可直接用于 API 和 MCP。" description="在请求头填写 Authorization: Bearer 加上密钥；有效权限由授权范围和所属用户的角色共同决定。管理权限可用于创建用户或密钥。" />
 
       {query.isPending ? <LoadingState /> : null}
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : null}
@@ -200,7 +189,7 @@ export function ApiKeysPage() {
               },
             ]}
           >
-            <Input placeholder="2026-12-31T00:00:00Z" />
+            <Input placeholder="留空长期有效，或填写 RFC3339 时间" />
           </Form.Item>
         </Form>
       </Modal>
@@ -214,6 +203,7 @@ export function ApiKeysPage() {
         cancelButtonProps={{ style: { display: 'none' } }}
         maskClosable={false}
       >
+        <Typography.Paragraph>密钥仅在创建时显示一次。请妥善保存，随后可直接作为 Bearer 凭据使用。</Typography.Paragraph>
         <div className="mb-3 rounded-md bg-gray-50 p-3 font-mono text-sm break-all">{created?.secret}</div>
         {created ? <CopyButton value={created.secret} label="复制密钥" /> : null}
       </Modal>

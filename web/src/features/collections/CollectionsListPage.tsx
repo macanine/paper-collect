@@ -4,7 +4,6 @@ import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router';
 import type { Collection, CollectionKind, SubjectCode } from '../../shared/api/types';
-import { shortId } from '../../shared/lib/format';
 import { formatDateTime } from '../../shared/lib/format';
 import { useListSearch } from '../../shared/lib/listSearch';
 import { PageHeader } from '../../shared/ui/PageHeader';
@@ -72,8 +71,8 @@ export function CollectionsListPage() {
       width: 120,
       render: (parentId: string) =>
         parentId ? (
-          <Link to={`/collections/${parentId}`} className="font-mono text-xs">
-            {shortId(parentId)}
+          <Link to={`/collections/${parentId}`}>
+            查看父合集
           </Link>
         ) : (
           <span className="text-slate-400">顶层</span>

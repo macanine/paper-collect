@@ -3,7 +3,7 @@ import { App, Button, Card, Descriptions, Popconfirm, Space, Typography } from '
 import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
-import { formatDateTime, shortId } from '../../shared/lib/format';
+import { formatDateTime } from '../../shared/lib/format';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { CollectionKindTag, SubjectTags } from '../../shared/ui/StatusTags';
@@ -89,8 +89,8 @@ export function CollectionDetailPage() {
               key: 'parent',
               label: '父合集',
               children: collection.parent_id ? (
-                <Link to={`/collections/${collection.parent_id}`} className="font-mono text-xs">
-                  {shortId(collection.parent_id)}
+                <Link to={`/collections/${collection.parent_id}`}>
+                  查看父合集
                 </Link>
               ) : (
                 '顶层合集'
@@ -102,11 +102,6 @@ export function CollectionDetailPage() {
               children: <SubjectTags codes={collection.subject_codes} />,
             },
             { key: 'count', label: '条目数', children: `${collection.items.length} 条` },
-            {
-              key: 'id',
-              label: '合集编号',
-              children: <span className="mono-text">{collection.id}</span>,
-            },
             { key: 'created', label: '创建时间', children: formatDateTime(collection.created_at) },
             { key: 'updated', label: '更新时间', children: formatDateTime(collection.updated_at) },
             {

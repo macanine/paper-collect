@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Upload, UploadEntry } from '../../shared/api/types';
 import { uploadEntryFile } from './api';
 import type { SelectedFile } from './fileSources';
+import { matchFiles } from './matchFiles';
 import { clearStashedFiles, getStashedFiles, stashFiles } from './stash';
 import { uploadKeys } from './queries';
 import { AUTO_RETRY_DELAYS_MS, UPLOAD_CONCURRENCY, isRetryableUploadError, runPool, sleep, uploadFailureText } from './transfer';
@@ -21,37 +22,6 @@ export interface TransferRow {
   status: RowStatus;
   loaded: number;
   error: string | undefined;
-}
-
-export interface MatchResult {
-  matched: Map<string, File>;
-  /** 本次新匹配到的条目数量。 */
-  added: number;
-}
-
-/**
- * 将选择的文件与尚未接收的清单条目按「相对路径 + 字节数」匹配。
- * 已接收的条目被跳过；同一路径重复时只使用第一个未使用的文件。
- */
-export function matchFiles(entries: readonly UploadEntry[], selected: readonly SelectedFile[], existing: ReadonlyMap<string, File>): MatchResult {
-  const matched = new Map(existing);
-  const used = new Set<number>();
-  let added = 0;
-  for (const entry of entries) {
-    if (entry.status === 'received' || matched.has(entry.id)) continue;
-    const index = selected.findIndex(
-      (candidate, position) =>
-        !used.has(position) && candidate.relativePath === entry.relative_path && candidate.sizeBytes === entry.size_bytes,
-    );
-    if (index === -1) continue;
-    used.add(index);
-    const candidate = selected[index];
-    if (candidate) {
-      matched.set(entry.id, candidate.file);
-      added += 1;
-    }
-  }
-  return { matched, added };
 }
 
 function isAbortError(error: unknown): boolean {
@@ -132,9 +102,10 @@ export function useUploadTransfer(upload: Upload) {
     (entryIds?: string[]) => {
       if (runningRef.current) return;
       const work: { entry: UploadEntry; file: File }[] = [];
+      const selectedIds = entryIds ? new Set(entryIds) : null;
       for (const entry of upload.entries) {
         if (entry.status === 'received') continue;
-        if (entryIds && !entryIds.includes(entry.id)) continue;
+        if (selectedIds && !selectedIds.has(entry.id)) continue;
         const file = files.get(entry.id);
         if (file) work.push({ entry, file });
       }
@@ -144,16 +115,20 @@ export function useUploadTransfer(upload: Upload) {
       controllerRef.current = controller;
       runningRef.current = true;
       setRunning(true);
-      for (const item of work) {
-        patchRuntime(item.entry.id, { status: 'queued', loaded: 0, error: undefined });
-      }
+      setRuntime((previous) => {
+        const next = { ...previous };
+        for (const { entry } of work) {
+          next[entry.id] = { ...next[entry.id], status: 'queued', loaded: 0, error: undefined };
+        }
+        return next;
+      });
       void runPool(work, UPLOAD_CONCURRENCY, (item) => runEntry(item.entry, item.file, controller.signal), controller.signal).finally(() => {
         runningRef.current = false;
         controllerRef.current = null;
         setRunning(false);
       });
     },
-    [files, patchRuntime, runEntry, upload.entries],
+    [files, runEntry, upload.entries],
   );
 
   const cancel = useCallback(() => {
@@ -207,23 +182,31 @@ export function useUploadTransfer(upload: Upload) {
   );
 
   const stats = useMemo(() => {
-    const totalBytes = upload.entries.reduce((sum, entry) => sum + entry.size_bytes, 0);
-    const doneBytes = rows.reduce((sum, row) => sum + row.loaded, 0);
-    const receivedCount = rows.filter((row) => row.status === 'received').length;
-    const failedCount = rows.filter((row) => row.status === 'failed').length;
-    const missingCount = rows.filter((row) => row.status === 'missing-file').length;
-    const readyToStart = rows.some((row) => row.status === 'queued' || row.status === 'failed');
+    let totalBytes = 0;
+    let doneBytes = 0;
+    let receivedCount = 0;
+    let failedCount = 0;
+    let missingCount = 0;
+    let readyToStart = false;
+    for (const row of rows) {
+      totalBytes += row.entry.size_bytes;
+      doneBytes += row.loaded;
+      if (row.status === 'received') receivedCount += 1;
+      if (row.status === 'failed') failedCount += 1;
+      if (row.status === 'missing-file') missingCount += 1;
+      if (row.status === 'queued' || row.status === 'failed') readyToStart = true;
+    }
     return {
       totalBytes,
       doneBytes: Math.min(doneBytes, totalBytes),
       receivedCount,
-      total: upload.entries.length,
+      total: rows.length,
       failedCount,
       missingCount,
-      allReceived: upload.entries.length > 0 && receivedCount === upload.entries.length,
+      allReceived: rows.length > 0 && receivedCount === rows.length,
       readyToStart,
     };
-  }, [rows, upload.entries]);
+  }, [rows]);
 
   return { rows, stats, running, start, cancel, attachFiles };
 }

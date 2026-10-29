@@ -13,15 +13,15 @@ import {
 } from '@ant-design/icons';
 import { Link } from 'react-router';
 import type { Job, Material } from '../../shared/api/types';
-import { formatDateTime, shortId } from '../../shared/lib/format';
+import { formatDateTime } from '../../shared/lib/format';
 import { STORAGE_MODE_LABELS } from '../../shared/lib/labels';
 import { usePolicy, useProviders } from '../storage/queries';
 import { InlineError } from '../../shared/ui/States';
 import { JobKindTag, JobStatusTag, MaterialStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import {
-  useJobStatusCount,
-  useMaterialStatusCount,
+  useJobStats,
+  useMaterialStats,
   useRecentJobs,
   useRecentMaterials,
 } from './queries';
@@ -38,47 +38,20 @@ export function DashboardPage() {
   const canJobs = can('jobs:read');
   const canStorage = can('storage:read');
 
-  const archived = useMaterialStatusCount('archived', canMaterials);
-  const pending = useMaterialStatusCount('pending_storage', canMaterials);
-  const degraded = useMaterialStatusCount('degraded', canMaterials);
+  const materialStats = useMaterialStats(canMaterials);
   const recentMaterials = useRecentMaterials(canMaterials);
-
-  const jobsPending = useJobStatusCount('pending', canJobs);
-  const jobsRunning = useJobStatusCount('running', canJobs);
-  const jobsFailed = useJobStatusCount('failed', canJobs);
-  const jobsSucceeded = useJobStatusCount('succeeded', canJobs);
+  const jobStats = useJobStats(canJobs);
   const recentJobs = useRecentJobs(canJobs);
-
   const providers = useProviders(canStorage);
   const policy = usePolicy(canStorage);
 
-  const materialCounts = {
-    archived: archived.data?.total,
-    pending_storage: pending.data?.total,
-    degraded: degraded.data?.total,
-  };
-  const materialTotal = useMemo(() => {
-    const values = Object.values(materialCounts);
-    if (values.some((value) => value === undefined)) return undefined;
-    return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
-  }, [materialCounts]);
-
-  const problems: { label: string; error: unknown; retry: () => void }[] = [];
-  if (canMaterials) {
-    if (archived.error) problems.push({ label: '资料状态汇总', error: archived.error, retry: () => void archived.refetch() });
-    if (pending.error) problems.push({ label: '资料状态汇总', error: pending.error, retry: () => void pending.refetch() });
-    if (degraded.error) problems.push({ label: '资料状态汇总', error: degraded.error, retry: () => void degraded.refetch() });
-  }
-  if (canJobs) {
-    if (jobsPending.error) problems.push({ label: '任务汇总', error: jobsPending.error, retry: () => void jobsPending.refetch() });
-    if (jobsRunning.error) problems.push({ label: '任务汇总', error: jobsRunning.error, retry: () => void jobsRunning.refetch() });
-    if (jobsFailed.error) problems.push({ label: '任务汇总', error: jobsFailed.error, retry: () => void jobsFailed.refetch() });
-    if (jobsSucceeded.error) problems.push({ label: '任务汇总', error: jobsSucceeded.error, retry: () => void jobsSucceeded.refetch() });
-  }
-  if (canStorage) {
-    if (providers.error) problems.push({ label: '存储端点', error: providers.error, retry: () => void providers.refetch() });
-    if (policy.error) problems.push({ label: '存储策略', error: policy.error, retry: () => void policy.refetch() });
-  }
+  const materialCounts = materialStats.data;
+  const problems = [
+    ...(canMaterials && materialStats.error ? [materialStats.error] : []),
+    ...(canJobs && jobStats.error ? [jobStats.error] : []),
+    ...(canStorage && providers.error ? [providers.error] : []),
+    ...(canStorage && policy.error ? [policy.error] : []),
+  ];
 
   const providerStats = useMemo(() => {
     const list = providers.data ?? [];
@@ -91,9 +64,18 @@ export function DashboardPage() {
   }, [providers.data]);
 
   const refreshAll = () => {
-    for (const problem of problems) problem.retry();
-    void recentMaterials.refetch();
-    void recentJobs.refetch();
+    if (canMaterials) {
+      void materialStats.refetch();
+      void recentMaterials.refetch();
+    }
+    if (canJobs) {
+      void jobStats.refetch();
+      void recentJobs.refetch();
+    }
+    if (canStorage) {
+      void providers.refetch();
+      void policy.refetch();
+    }
   };
 
   const materialColumns: ColumnsType<Material> = [
@@ -128,8 +110,8 @@ export function DashboardPage() {
       key: 'job',
       render: (_: unknown, record) => (
         <div className="flex items-center gap-2">
-          <Link to={`/jobs/${record.id}`} className="font-mono text-xs">
-            {shortId(record.id)}
+          <Link to={`/jobs/${record.id}`}>
+            查看详情
           </Link>
           <JobKindTag kind={record.kind} />
         </div>
@@ -203,8 +185,8 @@ export function DashboardPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <CountCard
               title="资料总数"
-              value={materialTotal}
-              loading={archived.isPending || pending.isPending || degraded.isPending}
+              value={materialCounts?.total}
+              loading={materialStats.isPending}
               icon={<FileTextOutlined />}
               footer="全部逻辑文件"
             />
@@ -212,7 +194,7 @@ export function DashboardPage() {
               <CountCard
                 key={item.key}
                 title={item.title}
-                value={materialCounts[item.key]}
+                value={materialCounts?.[item.key]}
                 icon={
                   item.key === 'archived' ? (
                     <CheckCircleOutlined />
@@ -230,9 +212,7 @@ export function DashboardPage() {
                       ? '等待存储任务处理'
                       : '部分副本不可用'
                 }
-                loading={
-                  item.key === 'archived' ? archived.isPending : item.key === 'pending_storage' ? pending.isPending : degraded.isPending
-                }
+                loading={materialStats.isPending}
               />
             ))}
           </div>
@@ -246,10 +226,10 @@ export function DashboardPage() {
             <span className="section-heading__meta">后台 worker 运行状态</span>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <CountCard title="排队中" value={jobsPending.data?.total} icon={<ClockCircleOutlined />} footer="等待 worker 领取" loading={jobsPending.isPending} />
-            <CountCard title="执行中" value={jobsRunning.data?.total} icon={<ReloadOutlined />} footer="正在处理" loading={jobsRunning.isPending} />
-            <CountCard title="失败" value={jobsFailed.data?.total} icon={<ExclamationCircleOutlined />} tone="error" footer="需要人工检查" loading={jobsFailed.isPending} />
-            <CountCard title="已完成" value={jobsSucceeded.data?.total} icon={<CheckCircleOutlined />} tone="success" footer="累计成功任务" loading={jobsSucceeded.isPending} />
+            <CountCard title="排队中" value={jobStats.data?.pending} icon={<ClockCircleOutlined />} footer="等待 worker 领取" loading={jobStats.isPending} />
+            <CountCard title="执行中" value={jobStats.data?.running} icon={<ReloadOutlined />} footer="正在处理" loading={jobStats.isPending} />
+            <CountCard title="失败" value={jobStats.data?.failed} icon={<ExclamationCircleOutlined />} tone="error" footer="需要人工检查" loading={jobStats.isPending} />
+            <CountCard title="已完成" value={jobStats.data?.succeeded} icon={<CheckCircleOutlined />} tone="success" footer="累计成功任务" loading={jobStats.isPending} />
           </div>
         </section>
       ) : null}

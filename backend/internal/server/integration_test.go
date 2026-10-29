@@ -4,10 +4,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,9 +20,11 @@ import (
 	"github.com/nic/paper-collect/backend/internal/blob"
 	"github.com/nic/paper-collect/backend/internal/cryptobox"
 	"github.com/nic/paper-collect/backend/internal/db"
+	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/server"
 	"github.com/nic/paper-collect/backend/internal/service"
 	"github.com/nic/paper-collect/backend/internal/storage"
+	"gorm.io/gorm"
 )
 
 const (
@@ -28,10 +33,12 @@ const (
 )
 
 type testEnv struct {
-	base   string
-	svc    *service.Service
-	client *http.Client
-	token  string
+	base    string
+	svc     *service.Service
+	client  *http.Client
+	token   string
+	dataDir string
+	db      *gorm.DB
 }
 
 func newEnv(t *testing.T) *testEnv {
@@ -74,7 +81,7 @@ func newEnv(t *testing.T) *testEnv {
 	}
 	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
-	env := &testEnv{base: ts.URL, svc: svc, client: ts.Client()}
+	env := &testEnv{base: ts.URL, svc: svc, client: ts.Client(), dataDir: dir, db: conn}
 	env.token = env.login(t)
 	return env
 }
@@ -230,7 +237,20 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 		"试卷/学生版.pdf": pdf,
 		"整套资料.zip":   packageZip,
 	})
+	zipHash := sha256.Sum256(packageZip)
+	zipSHA := fmt.Sprintf("%x", zipHash)
+	zipCAS := filepath.Join(env.dataDir, "blobs", zipSHA[:2], zipSHA)
+	if _, err := os.Stat(zipCAS); !os.IsNotExist(err) {
+		t.Fatalf("new ZIP must not be stored in CAS: %v", err)
+	}
+	staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
+	if err != nil || len(staged) != 1 {
+		t.Fatalf("uploaded ZIP was not staged: %v", err)
+	}
 	env.finalizeAndWait(t, uploadID)
+	if _, err := os.Stat(staged[0]); !os.IsNotExist(err) {
+		t.Fatalf("successful ingest must remove temporary ZIP: %v", err)
+	}
 
 	status, body := env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=50", nil, nil)
 	if status != http.StatusOK {
@@ -251,11 +271,14 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(body, &list); err != nil {
 		t.Fatalf("list body: %s", body)
 	}
-	if list.Data.Total < 3 {
-		t.Fatalf("expected parent pdf, zip and extracted members, got %d: %s", list.Data.Total, body)
+	if list.Data.Total != 3 {
+		t.Fatalf("expected only three documents, got %d: %s", list.Data.Total, body)
 	}
 	foundZipMember := false
 	for _, item := range list.Data.Items {
+		if strings.HasSuffix(item.FileName, ".zip") {
+			t.Fatalf("ZIP original should not become a material: %s", body)
+		}
 		if item.Status != "archived" {
 			t.Fatalf("material %s status %s, want archived (replica not ready)", item.FileName, item.Status)
 		}
@@ -273,6 +296,48 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=20", nil, nil)
 	if status != http.StatusOK || !strings.Contains(string(body), "\"zip\"") {
 		t.Fatalf("expected a zip collection: %d %s", status, body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/uploads/"+uploadID, nil, nil)
+	var upload struct {
+		Data struct {
+			CollectionID string `json:"collection_id"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &upload) != nil || upload.Data.CollectionID == "" {
+		t.Fatalf("load root collection id: %s", body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+upload.Data.CollectionID, nil, nil)
+	var root struct {
+		Data struct {
+			Items []struct {
+				RelativePath string `json:"relative_path"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &root) != nil || len(root.Data.Items) != 1 || root.Data.Items[0].RelativePath != "试卷/学生版.pdf" {
+		t.Fatalf("root should contain only the ordinary top-level file: %s", body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/collections?parent_id="+upload.Data.CollectionID, nil, nil)
+	var children struct {
+		Data struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &children) != nil || len(children.Data.Items) != 1 {
+		t.Fatalf("expected one ZIP child: %s", body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+children.Data.Items[0].ID, nil, nil)
+	var child struct {
+		Data struct {
+			Items []struct {
+				RelativePath string `json:"relative_path"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &child) != nil || len(child.Data.Items) != 2 {
+		t.Fatalf("ZIP child should contain its two members: %s", body)
 	}
 }
 
@@ -292,6 +357,10 @@ func TestMaliciousZipFailsJobWithoutPublishing(t *testing.T) {
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20&q=evil", nil, nil)
 	if status != http.StatusOK || strings.Contains(string(body), "\"total\":1") {
 		t.Fatalf("path traversal member must not be published: %s", body)
+	}
+	staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
+	if err != nil || len(staged) != 1 {
+		t.Fatalf("failed upload must remain available for retry: %v", err)
 	}
 }
 
@@ -314,39 +383,27 @@ func TestAgentBearerAndRevocation(t *testing.T) {
 	var keyBody struct {
 		Data struct {
 			Key struct {
-				ID string `json:"id"`
+				ID        string     `json:"id"`
+				ExpiresAt *time.Time `json:"expires_at"`
 			} `json:"key"`
 			Secret string `json:"secret"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &keyBody); err != nil || keyBody.Data.Secret == "" {
-		t.Fatalf("key body: %s", body)
+	if err := json.Unmarshal(body, &keyBody); err != nil || !strings.HasPrefix(keyBody.Data.Secret, "sk-") || keyBody.Data.Key.ExpiresAt != nil {
+		t.Fatal("key should use the new format and be non-expiring by default")
 	}
 	apiKey := keyBody.Data.Secret
 
-	status, body = env.do(t, http.MethodPost, "/api/v1/auth/agent-token", nil, map[string]string{"X-API-Key": apiKey})
-	if status != http.StatusOK {
-		t.Fatalf("agent token %d: %s", status, body)
-	}
-	var agentBody struct {
-		Data struct {
-			AccessToken string `json:"access_token"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &agentBody); err != nil || agentBody.Data.AccessToken == "" {
-		t.Fatalf("agent token body: %s", body)
-	}
-
 	rpc := map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials", nil, map[string]string{
-		"Authorization": "Bearer " + agentBody.Data.AccessToken,
+		"Authorization": "Bearer " + apiKey,
 	})
 	if status != http.StatusOK {
-		t.Fatalf("agent JWT must authenticate REST without X-API-Key: %d %s", status, body)
+		t.Fatalf("API key must authenticate REST directly: %d %s", status, body)
 	}
 
 	status, body = env.do(t, http.MethodPost, "/mcp", rpc, map[string]string{
-		"Authorization": "Bearer " + agentBody.Data.AccessToken,
+		"Authorization": "Bearer " + apiKey,
 	})
 	if status != http.StatusOK || !strings.Contains(string(body), "materials_search") {
 		t.Fatalf("MCP tools/list failed: %d %s", status, body)
@@ -357,10 +414,65 @@ func TestAgentBearerAndRevocation(t *testing.T) {
 		t.Fatalf("revoke key %d: %s", status, body)
 	}
 	status, _ = env.do(t, http.MethodPost, "/mcp", rpc, map[string]string{
-		"Authorization": "Bearer " + agentBody.Data.AccessToken,
+		"Authorization": "Bearer " + apiKey,
 	})
 	if status != http.StatusUnauthorized {
 		t.Fatalf("revoked key must be rejected immediately, got %d", status)
+	}
+	status, _ = env.do(t, http.MethodGet, "/api/v1/materials", nil, map[string]string{"Authorization": "Bearer " + apiKey})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("revoked key must not access REST, got %d", status)
+	}
+}
+
+func TestDirectKeyEnforcesScopesAndMCPToolVisibility(t *testing.T) {
+	env := newEnv(t)
+	status, body := env.do(t, http.MethodPost, "/api/v1/api-keys", map[string]any{"name": "read-only", "scopes": []string{"materials:read"}}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("create key: %d", status)
+	}
+	var created struct {
+		Data struct {
+			Secret string `json:"secret"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || created.Data.Secret == "" {
+		t.Fatal("missing key")
+	}
+	headers := map[string]string{"Authorization": "Bearer " + created.Data.Secret}
+	status, body = env.do(t, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-11-25"}}, headers)
+	if status != http.StatusOK || !strings.Contains(string(body), `"instructions"`) {
+		t.Fatalf("MCP initialize: %d %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers)
+	if status != http.StatusOK || !strings.Contains(string(body), "materials_search") || !strings.Contains(string(body), `"readOnlyHint":true`) || strings.Contains(string(body), "collections_list") || strings.Contains(string(body), "jobs_get") {
+		t.Fatalf("unexpected visible tools: %d %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": "collections_list", "arguments": map[string]any{}}}, headers)
+	if status != http.StatusOK || !strings.Contains(string(body), `"isError":true`) {
+		t.Fatalf("tool scope not enforced: %d %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPost, "/mcp", map[string]any{"jsonrpc": "2.0", "method": "ping"}, headers)
+	if status != http.StatusAccepted || len(body) != 0 {
+		t.Fatalf("notification returned a response: %d", status)
+	}
+	for _, path := range []string{"/api/v1/collections", "/api/v1/api-keys", "/api/v1/users"} {
+		status, _ = env.do(t, http.MethodGet, path, nil, headers)
+		if status != http.StatusForbidden {
+			t.Fatalf("key may not read %s: %d", path, status)
+		}
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/api-keys", nil, nil)
+	if status != http.StatusOK || strings.Contains(string(body), created.Data.Secret) {
+		t.Fatal("key list disclosed a secret")
+	}
+	status, _ = env.do(t, http.MethodGet, "/api/v1/materials", nil, map[string]string{"Authorization": "Bearer sk-invalid"})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("invalid key accepted: %d", status)
+	}
+	status, _ = env.do(t, http.MethodPost, "/api/v1/auth/agent-token", nil, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("key exchange endpoint should no longer exist: %d", status)
 	}
 }
 
@@ -398,12 +510,16 @@ func TestDeleteCollectionsAndMaterials(t *testing.T) {
 	rootID := roots.Data.Items[0].ID
 
 	// Deleting the root collection cascades into the ZIP child but keeps materials.
+	status, body = env.do(t, http.MethodDelete, "/api/v1/collections/"+rootID, nil, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("expected a conflict for the ZIP child collection: %d %s", status, body)
+	}
 	status, body = env.do(t, http.MethodDelete, "/api/v1/collections/"+rootID+"?cascade=true", nil, nil)
 	if status != http.StatusNoContent {
 		t.Fatalf("delete collection %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), "\"total\":3") {
+	if status != http.StatusOK || !strings.Contains(string(body), "\"total\":2") {
 		t.Fatalf("materials must survive collection deletion: %s", body)
 	}
 	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=20", nil, nil)
@@ -411,7 +527,21 @@ func TestDeleteCollectionsAndMaterials(t *testing.T) {
 		t.Fatalf("collections not deleted: %s", body)
 	}
 
-	// Find the ZIP container and require explicit cascade for its children.
+	// Simulate a ZIP material and children from an older version.
+	var saved []model.Material
+	if err := env.db.Find(&saved).Error; err != nil || len(saved) != 2 {
+		t.Fatalf("load members: %v", err)
+	}
+	parent := saved[0]
+	parent.ID, parent.FileName, parent.Title, parent.SourcePath = "legacy-parent", "旧资料.zip", "旧资料", "旧资料.zip"
+	parent.MediaType = "application/zip"
+	if err := env.db.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := env.db.Model(&model.Material{}).Where("id IN ?", []string{saved[0].ID, saved[1].ID}).Update("parent_material_id", parent.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Find the historical ZIP container and require explicit cascade for its children.
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20", nil, nil)
 	var list struct {
 		Data struct {
@@ -519,5 +649,168 @@ func TestMaterialRoleSyncsCollectionItems(t *testing.T) {
 	status, body = env.do(t, http.MethodPatch, "/api/v1/materials/"+materialID, map[string]any{"title": "改名后的资料"}, nil)
 	if status != http.StatusOK || !strings.Contains(string(body), `"file_name":"改名后的资料.pdf"`) {
 		t.Fatalf("filename not synced with title: %s", body)
+	}
+}
+
+func TestZIPReportsUnsupportedMembers(t *testing.T) {
+	env := newEnv(t)
+	packageZip := zipWith(t, map[string][]byte{"资料.pdf": minimalPDF(), "说明.txt": []byte("unsupported")})
+	id, _ := env.upload(t, "压缩包", map[string][]byte{"资料.zip": packageZip})
+	env.finalizeAndWait(t, id)
+	status, body := env.do(t, http.MethodGet, "/api/v1/jobs?kind=ingest", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list jobs %d", status)
+	}
+	var jobs struct {
+		Data struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &jobs); err != nil || len(jobs.Data.Items) != 1 {
+		t.Fatalf("find ingest job: %s", body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/jobs/"+jobs.Data.Items[0].ID, nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), "1 个不支持的文件，已跳过，未归档") {
+		t.Fatalf("skipped files should be reported: %s", body)
+	}
+}
+
+func TestZIPWithNoSupportedMembersDoesNotPublish(t *testing.T) {
+	env := newEnv(t)
+	id, _ := env.upload(t, "压缩包", map[string][]byte{"空.zip": zipWith(t, map[string][]byte{"说明.txt": []byte("unsupported")})})
+	env.finalizeAndWait(t, id)
+	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"status":"failed"`) {
+		t.Fatalf("unsupported-only ZIP must fail: %s", body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10", nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":0`) {
+		t.Fatalf("unsupported-only ZIP must not publish: %s", body)
+	}
+}
+
+func TestPreviouslyReceivedZIPInCASCanStillBeProcessed(t *testing.T) {
+	env := newEnv(t)
+	packageZip := zipWith(t, map[string][]byte{"资料.pdf": minimalPDF()})
+	id, _ := env.upload(t, "旧上传", map[string][]byte{"资料.zip": packageZip})
+	staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
+	if err != nil || len(staged) != 1 {
+		t.Fatalf("find staged ZIP: %v", err)
+	}
+	store, err := blob.NewStore(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(packageZip)
+	sha := fmt.Sprintf("%x", sum)
+	if err := store.Publish(staged[0], sha); err != nil {
+		t.Fatal(err)
+	}
+	env.finalizeAndWait(t, id)
+	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"status":"completed"`) {
+		t.Fatalf("legacy ZIP upload did not complete: %s", body)
+	}
+	if !store.Exists(sha) {
+		t.Fatal("old CAS file may belong to a historical material and must be preserved")
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10", nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":1`) || strings.Contains(string(body), `"file_name":"资料.zip"`) {
+		t.Fatalf("legacy ZIP created an unexpected material: %s", body)
+	}
+}
+
+type gatedReader struct {
+	data    []byte
+	ready   chan<- struct{}
+	release <-chan struct{}
+	read    bool
+}
+
+func (r *gatedReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	r.ready <- struct{}{}
+	<-r.release
+	return copy(p, r.data), io.EOF
+}
+
+func TestConcurrentZIPUploadsDoNotReplaceWinningContent(t *testing.T) {
+	env := newEnv(t)
+	makePackage := func(comment string) []byte {
+		var out bytes.Buffer
+		w := zip.NewWriter(&out)
+		if err := w.SetComment(comment); err != nil {
+			t.Fatal(err)
+		}
+		file, err := w.Create("试卷.pdf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(minimalPDF()); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return out.Bytes()
+	}
+	first, second := makePackage("A"), makePackage("B")
+	if len(first) != len(second) || bytes.Equal(first, second) {
+		t.Fatal("test ZIPs must have different content and the same length")
+	}
+	principal, err := env.svc.Authenticate(t.Context(), env.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := env.svc.CreateUpload(t.Context(), principal, service.UploadInput{
+		Title: "竞争上传", CollectionKind: "zip", Entries: []service.UploadEntryInput{{RelativePath: "资料.zip", SizeBytes: int64(len(first))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, release := make(chan struct{}, 2), make(chan struct{})
+	results := make(chan error, 2)
+	for _, data := range [][]byte{first, second} {
+		go func(content []byte) {
+			_, err := env.svc.PutEntry(t.Context(), principal, upload.Upload.ID, upload.Entries[0].ID, &gatedReader{data: content, ready: ready, release: release}, int64(len(content)))
+			results <- err
+		}(data)
+	}
+	<-ready
+	<-ready
+	close(release)
+	ok := 0
+	for range 2 {
+		if <-results == nil {
+			ok++
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("exactly one different ZIP must win, got %d", ok)
+	}
+	view, err := env.svc.GetUpload(t.Context(), principal, upload.Upload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected exactly one winning staged ZIP: %v", err)
+	}
+	content, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	if fmt.Sprintf("%x", sum) != view.Entries[0].SHA256 {
+		t.Fatal("staged ZIP differs from the received content")
+	}
+	env.finalizeAndWait(t, upload.Upload.ID)
+	if _, err := os.Stat(files[0]); !os.IsNotExist(err) {
+		t.Fatalf("successful ingest should clean staged ZIP: %v", err)
 	}
 }

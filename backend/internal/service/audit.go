@@ -39,6 +39,25 @@ func (s *Service) ListAudit(pg PageQuery) (Page[model.Audit], error) {
 	if err != nil {
 		return Page[model.Audit]{}, wrap("list audit", err)
 	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.UserID != "" {
+			ids = append(ids, item.UserID)
+		}
+	}
+	if len(ids) > 0 {
+		var users []model.User
+		if err := s.db.Select("id", "username").Where("id IN ?", ids).Find(&users).Error; err != nil {
+			return Page[model.Audit]{}, wrap("list audit users", err)
+		}
+		names := make(map[string]string, len(users))
+		for _, user := range users {
+			names[user.ID] = user.Username
+		}
+		for i := range items {
+			items[i].Username = names[items[i].UserID]
+		}
+	}
 	return newPage(items, total, pg), nil
 }
 

@@ -33,9 +33,6 @@ func (s *Service) ListUsers(ctx context.Context, pg PageQuery) (Page[model.User]
 
 // CreateUser adds an account. Only administrators can call it (checked by the caller).
 func (s *Service) CreateUser(ctx context.Context, p auth.Principal, username, password, role string) (model.User, error) {
-	if p.IsAgent() {
-		return model.User{}, apperr.Forbidden("代理密钥不能创建用户")
-	}
 	if !usernamePattern.MatchString(username) {
 		return model.User{}, apperr.Validation("用户名只允许 3-64 位字母、数字、下划线或连字符")
 	}
@@ -44,6 +41,16 @@ func (s *Service) CreateUser(ctx context.Context, p auth.Principal, username, pa
 	}
 	if !isOneOf(role, model.RoleAdmin, model.RoleEditor, model.RoleViewer) {
 		return model.User{}, apperr.Validation("角色只能是 admin、editor 或 viewer")
+	}
+	if p.IsAgent() {
+		if !p.Has(model.ScopeUsersManage) {
+			return model.User{}, apperr.Forbidden("缺少用户管理权限")
+		}
+		for _, scope := range auth.RoleScopes(role) {
+			if !p.Has(scope) {
+				return model.User{}, apperr.Forbidden("不能创建权限超出当前密钥的用户")
+			}
+		}
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -91,10 +98,10 @@ func (s *Service) ListKeys(ctx context.Context, pg PageQuery) (Page[model.APIKey
 }
 
 // CreateKey issues an API key. The full secret is returned exactly once and only its hash is stored.
-// Scopes must be known, must belong to the creator's role, and may never include keys:manage or users:manage.
+// Scopes must be known and may not exceed the caller's effective privileges.
 func (s *Service) CreateKey(ctx context.Context, p auth.Principal, name string, scopes []string, expiresAt *time.Time) (model.APIKey, string, error) {
-	if p.IsAgent() {
-		return model.APIKey{}, "", apperr.Forbidden("代理密钥不能创建或升级密钥")
+	if p.IsAgent() && !p.Has(model.ScopeKeysManage) {
+		return model.APIKey{}, "", apperr.Forbidden("缺少密钥管理权限")
 	}
 	trimmed := strings.TrimSpace(name)
 	if n := runeLen(trimmed); n < 1 || n > 128 {
@@ -112,10 +119,7 @@ func (s *Service) CreateKey(ctx context.Context, p auth.Principal, name string, 
 		if !auth.IsKnownScope(sc) {
 			return model.APIKey{}, "", apperr.Validation("存在未知 scope")
 		}
-		if auth.IsForbiddenForKeys(sc) {
-			return model.APIKey{}, "", apperr.Validation("API Key 不能包含 keys:manage 或 users:manage")
-		}
-		if !allowed[sc] {
+		if !allowed[sc] || (p.IsAgent() && !p.Has(sc)) {
 			return model.APIKey{}, "", apperr.Validation("scope 必须是创建者权限的子集")
 		}
 		if seen[sc] {
@@ -156,8 +160,8 @@ func (s *Service) CreateKey(ctx context.Context, p auth.Principal, name string, 
 
 // RevokeKey revokes an API key immediately. Revocation is idempotent.
 func (s *Service) RevokeKey(ctx context.Context, p auth.Principal, id string) error {
-	if p.IsAgent() {
-		return apperr.Forbidden("代理密钥不能撤销密钥")
+	if p.IsAgent() && !p.Has(model.ScopeKeysManage) {
+		return apperr.Forbidden("缺少密钥管理权限")
 	}
 	db := s.db.WithContext(ctx)
 	return db.Transaction(func(tx *gorm.DB) error {

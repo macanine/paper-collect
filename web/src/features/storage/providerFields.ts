@@ -122,12 +122,12 @@ export const PROVIDER_FIELD_SPECS: Record<ProviderKind, KindSpec> = {
       },
       {
         key: 'verify_remote_hash',
-        label: '远端 SHA 校验',
+        label: '远端完整性校验',
         required: false,
         input: 'select',
         options: [
           { value: '', label: '默认（false）' },
-          { value: 'true', label: 'true（下载重算 SHA）' },
+          { value: 'true', label: '开启（需重新下载文件）' },
           { value: 'false', label: 'false' },
         ],
         validate: validateBooleanText,
@@ -166,6 +166,41 @@ export const PROVIDER_FIELD_SPECS: Record<ProviderKind, KindSpec> = {
     secret: [
       { key: 'client_id', label: 'Client ID', required: true, secret: true },
       { key: 'client_secret', label: 'Client Secret', required: true, secret: true },
+    ],
+  },
+  onedrive: {
+    kind: 'onedrive', label: 'OneDrive',
+    config: [
+      { key: 'auth_mode', label: '授权方式', required: false, defaultValue: 'openlist', input: 'select', options: [
+        { value: 'openlist', label: '使用 OpenList 提供的应用' }, { value: 'direct', label: '使用自己的微软应用' },
+      ] },
+      { key: 'client_id', label: '应用程序 ID', required: true },
+      { key: 'tenant', label: '租户', required: false, defaultValue: 'common', placeholder: 'common' },
+      { key: 'path_prefix', label: '文件夹路径', required: false, placeholder: 'paper-collect' },
+      { key: 'share_scope', label: '分享范围', required: false, defaultValue: 'anonymous', input: 'select', options: [
+        { value: 'anonymous', label: '持链接可查看' }, { value: 'organization', label: '仅组织内可查看' }, { value: 'disabled', label: '不创建分享链接' },
+      ] },
+    ],
+    secret: [
+      { key: 'refresh_token', label: '刷新令牌', required: true, secret: true },
+      { key: 'client_secret', label: '应用程序密钥', required: false, secret: true },
+      { key: 'share_url', label: '共享文件夹链接', required: false, secret: true },
+    ],
+  },
+  s3: {
+    kind: 's3', label: 'S3 / 兼容对象存储',
+    config: [
+      { key: 'bucket', label: '存储桶', required: true },
+      { key: 'region', label: '区域', required: true, placeholder: 'us-east-1' },
+      { key: 'endpoint', label: '服务地址', required: false, placeholder: '留空使用 AWS 默认地址', validate: validateHttpUrl },
+      { key: 'path_prefix', label: '路径前缀', required: false, placeholder: 'paper-collect' },
+      { key: 'path_style', label: '路径式访问', required: false, defaultValue: 'false', input: 'select', options: [{ value: 'false', label: '关闭' }, { value: 'true', label: '开启（兼容服务常用）' }] },
+      { key: 'share_expires_seconds', label: '分享有效期（秒）', required: false, defaultValue: '3600', validate: validateInteger(60, 604800) },
+    ],
+    secret: [
+      { key: 'access_key_id', label: '访问密钥', required: true, secret: true },
+      { key: 'secret_access_key', label: '密钥密码', required: true, secret: true },
+      { key: 'session_token', label: '会话令牌', required: false, secret: true },
     ],
   },
 };
@@ -219,6 +254,22 @@ function isBlank(value: string | undefined): boolean {
   return value === undefined || value.trim() === '';
 }
 
+export function oneDriveAuthMode(config: Record<string, string>): 'openlist' | 'direct' {
+  return config.auth_mode === 'openlist' ? 'openlist' : 'direct';
+}
+
+export function visibleConfigFields(kind: ProviderKind, config: Record<string, string>): FieldSpec[] {
+  return PROVIDER_FIELD_SPECS[kind].config.filter((field) =>
+    kind !== 'onedrive' || oneDriveAuthMode(config) !== 'openlist' || !['client_id', 'tenant'].includes(field.key),
+  );
+}
+
+export function visibleSecretFields(kind: ProviderKind, config: Record<string, string>): FieldSpec[] {
+  return PROVIDER_FIELD_SPECS[kind].secret.filter((field) =>
+    kind !== 'onedrive' || oneDriveAuthMode(config) !== 'openlist' || field.key !== 'client_secret',
+  );
+}
+
 /** 某类型端点的 config 初始值（合同默认值；留空表示由服务端取默认）。 */
 export function configDefaultsForKind(kind: ProviderKind): Record<string, string> {
   const config: Record<string, string> = {};
@@ -230,7 +281,6 @@ export function configDefaultsForKind(kind: ProviderKind): Record<string, string
 
 /** 校验表单。mode=edit 时，secret 全部留空代表保留原凭据。 */
 export function validateProviderForm(values: ProviderFormValues, mode: 'create' | 'edit'): ProviderValidation {
-  const spec = PROVIDER_FIELD_SPECS[values.kind];
   const errors: Record<string, string> = {};
 
   if (isBlank(values.name)) errors.name = '请输入端点名称';
@@ -243,7 +293,7 @@ export function validateProviderForm(values: ProviderFormValues, mode: 'create' 
     errors.weight = '权重取值为 1 至 1000';
   }
 
-  for (const field of spec.config) {
+  for (const field of visibleConfigFields(values.kind, values.config)) {
     const raw = values.config[field.key] ?? '';
     if (isBlank(raw)) {
       if (field.required) errors[`config.${field.key}`] = `请输入${field.label}`;
@@ -253,10 +303,11 @@ export function validateProviderForm(values: ProviderFormValues, mode: 'create' 
     if (message) errors[`config.${field.key}`] = message;
   }
 
-  const secretTouched = spec.secret.some((field) => !isBlank(values.secret[field.key]));
+  const secretFields = visibleSecretFields(values.kind, values.config);
+  const secretTouched = secretFields.some((field) => !isBlank(values.secret[field.key]));
   const requireSecret = mode === 'create' || secretTouched;
   if (requireSecret) {
-    for (const field of spec.secret) {
+    for (const field of secretFields) {
       if (field.required && isBlank(values.secret[field.key])) {
         errors[`secret.${field.key}`] = mode === 'edit' ? `更换凭据时需重新填写${field.label}` : `请输入${field.label}`;
       }
@@ -266,9 +317,9 @@ export function validateProviderForm(values: ProviderFormValues, mode: 'create' 
   return { errors, valid: Object.keys(errors).length === 0 };
 }
 
-function collectSecret(spec: KindSpec, source: Record<string, string>): Record<string, string> {
+function collectSecret(kind: ProviderKind, config: Record<string, string>, source: Record<string, string>): Record<string, string> {
   const secret: Record<string, string> = {};
-  for (const field of spec.secret) {
+  for (const field of visibleSecretFields(kind, config)) {
     const raw = source[field.key] ?? '';
     // 凭据保留用户输入的原始值（包括可能的空格）；全空白视为未填写。
     if (!isBlank(raw)) secret[field.key] = raw;
@@ -276,9 +327,9 @@ function collectSecret(spec: KindSpec, source: Record<string, string>): Record<s
   return secret;
 }
 
-function collectConfig(spec: KindSpec, source: Record<string, string>): Record<string, string> {
+function collectConfig(kind: ProviderKind, source: Record<string, string>): Record<string, string> {
   const config: Record<string, string> = {};
-  for (const field of spec.config) {
+  for (const field of visibleConfigFields(kind, source)) {
     const raw = (source[field.key] ?? '').trim();
     if (raw !== '') config[field.key] = raw;
   }
@@ -289,7 +340,6 @@ function collectConfig(spec: KindSpec, source: Record<string, string>): Record<s
  * 构造创建载荷。config 按字段表收集（留空的合同默认字段省略，由服务端取默认）；secret 必填项全部提交。
  */
 export function buildCreatePayload(values: ProviderFormValues): ProviderDraft {
-  const spec = PROVIDER_FIELD_SPECS[values.kind];
   return {
     name: values.name.trim(),
     kind: values.kind,
@@ -297,8 +347,8 @@ export function buildCreatePayload(values: ProviderFormValues): ProviderDraft {
     enabled: values.enabled,
     priority: values.priority,
     weight: values.weight,
-    config: collectConfig(spec, values.config),
-    secret: collectSecret(spec, values.secret),
+    config: collectConfig(values.kind, values.config),
+    secret: collectSecret(values.kind, values.config, values.secret),
   };
 }
 
@@ -308,19 +358,18 @@ export function buildCreatePayload(values: ProviderFormValues): ProviderDraft {
  * - secret：未填写则省略（保留原凭据）；需要更换时须整体重新填写；clearSecret 时提交空对象清空。
  */
 export function buildPatchPayload(values: ProviderFormValues): ProviderPatch {
-  const spec = PROVIDER_FIELD_SPECS[values.kind];
   const patch: ProviderPatch = {
     name: values.name.trim(),
     role: values.role,
     enabled: values.enabled,
     priority: values.priority,
     weight: values.weight,
-    config: collectConfig(spec, values.config),
+    config: collectConfig(values.kind, values.config),
   };
   if (values.clearSecret) {
     patch.secret = {};
-  } else if (spec.secret.some((field) => !isBlank(values.secret[field.key]))) {
-    patch.secret = collectSecret(spec, values.secret);
+  } else if (visibleSecretFields(values.kind, values.config).some((field) => !isBlank(values.secret[field.key]))) {
+    patch.secret = collectSecret(values.kind, values.config, values.secret);
   }
   return patch;
 }
@@ -333,6 +382,7 @@ export function initialProviderValues(provider: StorageProvider | null): Provide
   for (const field of spec.config) {
     config[field.key] = provider?.config[field.key] ?? field.defaultValue ?? '';
   }
+  if (provider?.kind === 'onedrive' && !provider.config.auth_mode) config.auth_mode = 'direct';
   return {
     name: provider?.name ?? '',
     kind,

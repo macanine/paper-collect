@@ -11,8 +11,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// APIKeyPrefix starts every API key secret: pc_<key_id>.<secret>.
-const APIKeyPrefix = "pc_"
+// New API keys are opaque 256-bit secrets. Legacy keys remain valid after upgrades.
+const (
+	APIKeyPrefix       = "sk-"
+	LegacyAPIKeyPrefix = "pc_"
+)
 
 // NewRefreshToken returns an opaque refresh token and its SHA-256 hash.
 // Only the hash is stored on the server.
@@ -31,8 +34,7 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// NewAPIKey returns a new key id, the full secret shown once, and the secret hash.
-// The secret uses base64url, which contains no '.', so the separator is unambiguous.
+// NewAPIKey returns a new internal id, an opaque secret shown once, and its hash.
 func NewAPIKey() (id, full, secretHash string, err error) {
 	id = uuid.NewString()
 	b := make([]byte, 32)
@@ -40,19 +42,31 @@ func NewAPIKey() (id, full, secretHash string, err error) {
 		return "", "", "", err
 	}
 	secret := base64.RawURLEncoding.EncodeToString(b)
-	full = APIKeyPrefix + id + "." + secret
+	full = APIKeyPrefix + secret
 	return id, full, HashToken(secret), nil
 }
 
 // ErrInvalidAPIKey is returned for any malformed API key. It carries no detail.
 var ErrInvalidAPIKey = errors.New("auth: invalid api key")
 
-// ParseAPIKey splits pc_<id>.<secret> into its id and secret.
+// ParseAPIKey accepts current opaque keys and the legacy pc_<id>.<secret> form.
+// Opaque keys return an empty id and are looked up by their secret hash.
 func ParseAPIKey(full string) (id, secret string, err error) {
-	if !strings.HasPrefix(full, APIKeyPrefix) {
+	if strings.HasPrefix(full, APIKeyPrefix) {
+		secret = strings.TrimPrefix(full, APIKeyPrefix)
+		if len(secret) != base64.RawURLEncoding.EncodedLen(32) {
+			return "", "", ErrInvalidAPIKey
+		}
+		decoded, decodeErr := base64.RawURLEncoding.DecodeString(secret)
+		if decodeErr != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != secret {
+			return "", "", ErrInvalidAPIKey
+		}
+		return "", secret, nil
+	}
+	if !strings.HasPrefix(full, LegacyAPIKeyPrefix) {
 		return "", "", ErrInvalidAPIKey
 	}
-	rest := strings.TrimPrefix(full, APIKeyPrefix)
+	rest := strings.TrimPrefix(full, LegacyAPIKeyPrefix)
 	dot := strings.IndexByte(rest, '.')
 	if dot <= 0 || dot == len(rest)-1 {
 		return "", "", ErrInvalidAPIKey

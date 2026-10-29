@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -42,7 +43,7 @@ func (s *Service) ListJobs(ctx context.Context, f JobFilter, pg PageQuery) (Page
 		return Page[model.Job]{}, apperr.Internal(err)
 	}
 	items := []model.Job{}
-	if err := build().Order("created_at DESC").Order("id DESC").
+	if err := build().Omit("log_json").Order("created_at DESC").Order("id DESC").
 		Limit(pg.PageSize).Offset(pg.offset()).Find(&items).Error; err != nil {
 		return Page[model.Job]{}, apperr.Internal(err)
 	}
@@ -126,7 +127,8 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 			return apperr.Conflict("未知任务类型")
 		}
 		if err := tx.Model(&model.Job{}).Where("id = ?", job.ID).
-			Updates(map[string]any{"status": model.JobPending, "error": "", "updated_at": now}).Error; err != nil {
+			Updates(map[string]any{"status": model.JobPending, "error": "", "progress_message": "已重新排队，等待执行", "progress_current": 0, "progress_total": 0,
+				"log_json": appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: "info", Message: "已重新排队，等待执行"}), "updated_at": now}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("id = ?", job.ID).First(&result).Error; err != nil {
@@ -349,12 +351,16 @@ func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error
 	res := tx.Model(&model.Job{}).
 		Where("id = ? AND status = ?", job.ID, model.JobPending).
 		Updates(map[string]any{
-			"status":       model.JobRunning,
-			"attempts":     gorm.Expr("attempts + 1"),
-			"lease_owner":  s.worker.InstanceID,
-			"lease_until":  until,
-			"heartbeat_at": now,
-			"updated_at":   now,
+			"status":           model.JobRunning,
+			"attempts":         gorm.Expr("attempts + 1"),
+			"progress_message": "任务已开始，正在准备处理",
+			"progress_current": 0,
+			"progress_total":   0,
+			"log_json":         appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: "info", Message: "任务已开始，正在准备处理"}),
+			"lease_owner":      s.worker.InstanceID,
+			"lease_until":      until,
+			"heartbeat_at":     now,
+			"updated_at":       now,
 		})
 	if res.Error != nil {
 		return res.Error
@@ -517,12 +523,25 @@ func (s *Service) lockJobLease(tx *gorm.DB, jobID, owner string) error {
 // either the result or a stale terminal state.
 func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string) error {
 	now := s.now()
+	message = redact(message)
+	var job model.Job
+	if err := tx.Select("id", "log_json").Where("id = ?", jobID).First(&job).Error; err != nil {
+		return err
+	}
+	progress, level := "处理完成", "info"
+	if status == model.JobFailed {
+		progress, level = "处理失败："+redact(message), "error"
+	} else if status == model.JobPending {
+		progress = "处理已中断，等待重新执行"
+	}
 	res := tx.Model(&model.Job{}).
 		Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",
 			jobID, model.JobRunning, owner, now).
 		Updates(map[string]any{
 			"status": status, "error": message, "lease_owner": "",
 			"lease_until": nil, "heartbeat_at": nil, "updated_at": now,
+			"progress_message": progress,
+			"log_json":         appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: level, Message: progress}),
 		})
 	if res.Error != nil {
 		return res.Error
@@ -534,6 +553,38 @@ func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string)
 		return err
 	}
 	return nil
+}
+
+// appendJobLog bounds retained progress history, including across retries.
+func appendJobLog(raw string, entry model.JobLog) string {
+	var logs []model.JobLog
+	_ = json.Unmarshal([]byte(raw), &logs)
+	logs = append(logs, entry)
+	if len(logs) > 200 {
+		logs = logs[len(logs)-200:]
+	}
+	encoded, _ := json.Marshal(logs)
+	return string(encoded)
+}
+
+// jobProgress only accepts fixed, application-generated messages; never pass secrets or URLs.
+func (s *Service) jobProgress(ctx context.Context, job model.Job, message string, current, total int) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
+			return err
+		}
+		var latest model.Job
+		if err := tx.Select("id", "log_json").Where("id = ?", job.ID).First(&latest).Error; err != nil {
+			return err
+		}
+		now := s.now()
+		return tx.Model(&model.Job{}).Where("id = ? AND status = ? AND lease_owner = ?", job.ID, model.JobRunning, job.LeaseOwner).
+			Updates(map[string]any{"progress_message": message, "progress_current": current, "progress_total": total,
+				"log_json": appendJobLog(latest.LogJSON, model.JobLog{Time: now, Level: "info", Message: message}), "updated_at": now}).Error
+	})
+	if err != nil && !errors.Is(err, errLeaseLost) && ctx.Err() == nil {
+		s.logf("record job progress failed")
+	}
 }
 
 // succeedJob completes a job without a caller-owned projection. Production
