@@ -284,10 +284,10 @@ Index:    pending ──> running ──> succeeded | failed
 | `webdav` | 可用 | 可用 | 条件可用 | PUT/MKCOL/HEAD/GET/PROPFIND；配置 `public_base_url` 才返回公开目录拼接链接，不代表匿名可访问；提供 SHA 时上传后完整下载重算 |
 | `lanzou` | 可用（非官方协议） | 可用 | 可用 | Cookie 会话；单文件 100 MiB；默认 verification=uploaded，`verify_remote_hash=true` 才做远端校验；未对真实服务联调 |
 | `123pan` | 不可用 | 不可用 | 不可用 | 只实现 access_token 与 Health；Put/Open/Share 返回 unsupported（如 `123pan_upload_unverified`），Capabilities 全 false |
-| `onedrive` | 可用 | 可用 | 可配置 | Graph 委派授权；可使用自有应用或 OpenList 在线应用；分段上传和只读分享，刷新令牌加密轮换；未对真实服务联调 |
+| `onedrive` | 可用 | 可用 | 可配置 | Graph 委派授权；可使用自有应用或 OpenList 在线应用；小文件直传、大文件分段上传和只读分享，刷新令牌加密轮换；未对真实服务联调 |
 | `s3` | 可用 | 可用 | 可用 | AWS SDK 分段并行上传，HEAD 比对大小，签名链接按配置过期；兼容服务需实际验证 |
 
-适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported 等）；存储错误写入 Job/Replica 前会脱敏。蓝奏有内部重试，S3 使用 SDK 自带的请求重试；服务层没有自动重试循环。
+适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported 等）；存储错误写入 Job/Replica 前会脱敏。OneDrive 对冲突、限流和 5xx 做有限重试，并在上传会话冲突时清理中断留下的 0 字节占位文件；蓝奏有内部重试，S3 使用 SDK 自带的请求重试；服务层没有自动重试循环。
 
 ## 9. AI 识别
 

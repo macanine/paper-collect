@@ -16,12 +16,14 @@ import (
 )
 
 const oneDriveChunkSize = 10 << 20 // 32 × 320 KiB, below Graph's 60 MiB limit.
+const oneDriveSimpleUploadLimit = 250 << 20
 const oneDriveOpenListRenewURL = "https://api.oplist.org/onedrive/renewapi"
 
 type oneDriveAdapter struct {
 	client                                                                  *http.Client
 	clientID, clientSecret, tenant, refreshToken, shareURL, scope, authMode string
 	prefix                                                                  []string
+	simpleUploadLimit                                                       int64
 	saveRefresh                                                             func(context.Context, string, string) error
 	mu                                                                      sync.Mutex
 	accessToken                                                             string
@@ -94,7 +96,7 @@ func NewOneDrive(cfg Config, client *http.Client) (Adapter, error) {
 		}
 		return nil
 	}
-	return &oneDriveAdapter{client: &copyClient, clientID: id, clientSecret: cfg.Secrets["client_secret"], tenant: tenant, refreshToken: refresh, shareURL: shareURL, scope: scope, authMode: authMode, prefix: prefix, saveRefresh: cfg.SaveRefreshToken}, nil
+	return &oneDriveAdapter{client: &copyClient, clientID: id, clientSecret: cfg.Secrets["client_secret"], tenant: tenant, refreshToken: refresh, shareURL: shareURL, scope: scope, authMode: authMode, prefix: prefix, simpleUploadLimit: oneDriveSimpleUploadLimit, saveRefresh: cfg.SaveRefreshToken}, nil
 }
 
 func microsoftShareHost(host string) bool {
@@ -318,25 +320,89 @@ func (a *oneDriveAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 		return Stored{}, err
 	}
 	name := oneDriveName(segments[len(segments)-1])
-	payloadJSON, _ := json.Marshal(map[string]any{"item": map[string]string{"@microsoft.graph.conflictBehavior": "replace", "name": name}})
-	payload := bytes.NewReader(payloadJSON)
-	resp, err := a.graph(ctx, http.MethodPost, graphItemPath(drive, parent)+":/"+url.PathEscape(name)+":/createUploadSession", payload, "onedrive_upload_session")
+	if obj.Size <= a.simpleUploadLimit {
+		return a.simpleUpload(ctx, drive, parent, name, f, obj)
+	}
+	stored, err := a.resumableUpload(ctx, drive, parent, name, f, obj)
 	if err != nil {
 		return Stored{}, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	return stored, nil
+}
+
+func (a *oneDriveAdapter) simpleUpload(ctx context.Context, drive, parent, name string, f *os.File, obj Object) (Stored, error) {
+	token, err := a.token(ctx)
+	if err != nil {
+		return Stored{}, err
+	}
+	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name) + ":/content?@microsoft.graph.conflictBehavior=replace"
+	lastStatus := 0
+	for attempt := 0; attempt < 3; attempt++ {
+		requestCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPut, "https://graph.microsoft.com/v1.0"+target, &progressReader{
+			r: io.NewSectionReader(f, 0, obj.Size), total: obj.Size, report: obj.Progress,
+		})
+		if err != nil {
+			cancel()
+			return Stored{}, newCloudError(ClassConfig, "onedrive_upload_request_invalid", false)
+		}
+		req.ContentLength = obj.Size
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		resp, err := a.client.Do(req)
+		if err != nil {
+			cancel()
+			return Stored{}, transportError(ctx, err, "onedrive_upload")
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			item, err := graphReadItem(resp, "onedrive_upload")
+			cancel()
+			if err != nil {
+				return Stored{}, err
+			}
+			if item.ID == "" || item.Size == nil || *item.Size != obj.Size {
+				return Stored{}, newCloudError(ClassSizeMismatch, "onedrive_upload_size_mismatch", false)
+			}
+			return storedOneDriveItem(drive, item, obj.Size), nil
+		}
 		status := resp.StatusCode
+		lastStatus = status
 		resp.Body.Close()
-		return Stored{}, statusError("onedrive_upload_session", status)
+		cancel()
+		if status == http.StatusConflict {
+			if cleanupErr := a.removeZeroByteUploadStub(ctx, drive, parent, name); cleanupErr != nil {
+				return Stored{}, cleanupErr
+			}
+		} else if status != http.StatusTooManyRequests && status < 500 {
+			return Stored{}, statusError("onedrive_upload", status)
+		}
+		if attempt < 2 {
+			if err := waitOneDriveRetry(ctx, attempt); err != nil {
+				return Stored{}, err
+			}
+		}
 	}
-	var session struct {
-		UploadURL string `json:"uploadUrl"`
+	if lastStatus != http.StatusConflict {
+		return Stored{}, statusError("onedrive_upload", lastStatus)
 	}
-	err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&session)
-	resp.Body.Close()
-	u, parseErr := url.Parse(session.UploadURL)
-	if err != nil || parseErr != nil || u.Scheme != "https" || u.User != nil || !microsoftUploadHost(u.Hostname()) {
-		return Stored{}, newCloudError(ClassUnavailable, "onedrive_upload_session_invalid", false)
+	return Stored{}, newCloudError(ClassUnavailable, "onedrive_upload_conflict", true)
+}
+
+func (a *oneDriveAdapter) resumableUpload(ctx context.Context, drive, parent, name string, f *os.File, obj Object) (Stored, error) {
+	payloadJSON, _ := json.Marshal(map[string]any{"item": map[string]string{"@microsoft.graph.conflictBehavior": "replace", "name": name}})
+	sessionURL, err := a.createUploadSession(ctx, drive, parent, name, payloadJSON)
+	if err != nil {
+		return Stored{}, err
+	}
+	u, parseErr := url.Parse(sessionURL)
+	if sessionURL == "" {
+		return Stored{}, newCloudError(ClassUnavailable, "onedrive_upload_session_url_missing", false)
+	}
+	if parseErr != nil || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
+		return Stored{}, newCloudError(ClassUnavailable, "onedrive_upload_session_url_invalid", false)
+	}
+	if !microsoftUploadHost(u.Hostname()) {
+		return Stored{}, newCloudError(ClassUnavailable, "onedrive_upload_session_host_invalid", false)
 	}
 	var item graphItem
 	for start := int64(0); start < obj.Size; {
@@ -383,7 +449,95 @@ func (a *oneDriveAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 	if item.ID == "" || item.Size == nil || *item.Size != obj.Size {
 		return Stored{}, newCloudError(ClassSizeMismatch, "onedrive_upload_size_mismatch", false)
 	}
-	return Stored{RemoteID: base64.RawURLEncoding.EncodeToString([]byte(drive)) + "." + base64.RawURLEncoding.EncodeToString([]byte(item.ID)), Size: obj.Size, Verification: "size"}, nil
+	return storedOneDriveItem(drive, item, obj.Size), nil
+}
+
+func (a *oneDriveAdapter) createUploadSession(ctx context.Context, drive, parent, name string, payload []byte) (string, error) {
+	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name) + ":/createUploadSession"
+	lastStatus := 0
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err := a.graph(ctx, http.MethodPost, target, bytes.NewReader(payload), "onedrive_upload_session")
+		if err != nil {
+			return "", err
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			var session struct {
+				UploadURL string `json:"uploadUrl"`
+			}
+			err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&session)
+			resp.Body.Close()
+			if err != nil {
+				return "", newCloudError(ClassUnavailable, "onedrive_upload_session_response_invalid", false)
+			}
+			return session.UploadURL, nil
+		}
+		status := resp.StatusCode
+		lastStatus = status
+		resp.Body.Close()
+		if status == http.StatusConflict {
+			if cleanupErr := a.removeZeroByteUploadStub(ctx, drive, parent, name); cleanupErr != nil {
+				return "", cleanupErr
+			}
+		} else if status != http.StatusTooManyRequests && status < 500 {
+			return "", statusError("onedrive_upload_session", status)
+		}
+		if attempt < 2 {
+			if err := waitOneDriveRetry(ctx, attempt); err != nil {
+				return "", err
+			}
+		}
+	}
+	if lastStatus != http.StatusConflict {
+		return "", statusError("onedrive_upload_session", lastStatus)
+	}
+	return "", newCloudError(ClassUnavailable, "onedrive_upload_session_conflict", true)
+}
+
+func waitOneDriveRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt+1) * 250 * time.Millisecond
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return transportError(ctx, ctx.Err(), "onedrive_retry")
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (a *oneDriveAdapter) removeZeroByteUploadStub(ctx context.Context, drive, parent, name string) error {
+	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name)
+	resp, err := a.graph(ctx, http.MethodGet, target, nil, "onedrive_upload_stub")
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return nil
+	}
+	item, err := graphReadItem(resp, "onedrive_upload_stub")
+	if err != nil {
+		return err
+	}
+	if item.Size == nil || *item.Size != 0 {
+		return nil
+	}
+	resp, err = a.graph(ctx, http.MethodDelete, graphItemPath(drive, item.ID), nil, "onedrive_upload_stub_delete")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return statusError("onedrive_upload_stub_delete", resp.StatusCode)
+	}
+	return nil
+}
+
+func storedOneDriveItem(drive string, item graphItem, size int64) Stored {
+	return Stored{RemoteID: base64.RawURLEncoding.EncodeToString([]byte(drive)) + "." + base64.RawURLEncoding.EncodeToString([]byte(item.ID)), Size: size, Verification: "size"}
 }
 
 func decodeOneDriveID(remote string) (string, string, error) {

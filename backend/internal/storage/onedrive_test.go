@@ -81,6 +81,7 @@ func TestOneDriveSharedFolderUploadAndShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.(*oneDriveAdapter).simpleUploadLimit = 0
 	stored, err := a.Put(context.Background(), Object{Key: "folder/file.pdf", Path: file, Size: size, Progress: func(done, total int64) {
 		if done > 0 && total == size {
 			progress++
@@ -104,6 +105,149 @@ func TestOneDriveSharedFolderUploadAndShare(t *testing.T) {
 	content, _ := io.ReadAll(reader)
 	if string(content) != "file contents" {
 		t.Fatal("download content mismatch")
+	}
+}
+
+func TestOneDriveSmallFileUsesSimpleUpload(t *testing.T) {
+	const content = "small-file"
+	file := filepath.Join(t.TempDir(), "source.pdf")
+	if err := os.WriteFile(file, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var uploads, progress int
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.URL.Host == "login.microsoftonline.com":
+			return fakeResponse(r, 200, `{"access_token":"access-value","expires_in":3600}`), nil
+		case r.URL.Host == "graph.microsoft.com" && r.URL.Path == "/v1.0/me/drive/root":
+			return fakeResponse(r, 200, `{"id":"root","folder":{},"parentReference":{"driveId":"drive"}}`), nil
+		case r.URL.Host == "graph.microsoft.com" && r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, ":/content"):
+			uploads++
+			if r.URL.Query().Get("@microsoft.graph.conflictBehavior") != "replace" ||
+				r.Header.Get("Authorization") != "Bearer access-value" ||
+				r.Header.Get("Content-Type") != "application/octet-stream" ||
+				r.ContentLength != int64(len(content)) {
+				t.Error("simple upload request is invalid")
+			}
+			data, _ := io.ReadAll(r.Body)
+			if string(data) != content {
+				t.Errorf("unexpected simple upload content: %q", data)
+			}
+			return fakeResponse(r, 201, fmt.Sprintf(`{"id":"simple-id","size":%d}`, len(content))), nil
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		return fakeResponse(r, 404, `{}`), nil
+	})}
+	a, err := NewOneDrive(Config{Settings: map[string]string{"client_id": "app"}, Secrets: map[string]string{"refresh_token": "refresh"}}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := a.Put(context.Background(), Object{Key: "paper.pdf", Path: file, Size: int64(len(content)), Progress: func(done, total int64) {
+		if done > 0 && total == int64(len(content)) {
+			progress++
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drive, item, err := decodeOneDriveID(stored.RemoteID)
+	if err != nil || drive != "drive" || item != "simple-id" || uploads != 1 || progress == 0 {
+		t.Fatalf("unexpected simple upload result: drive=%q item=%q uploads=%d progress=%d err=%v", drive, item, uploads, progress, err)
+	}
+}
+
+func TestOneDriveUploadSessionRemovesZeroByteStubOnConflict(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "source.pdf")
+	if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var sessions, stubReads, stubDeletes, uploads int
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Host {
+		case "login.microsoftonline.com":
+			return fakeResponse(r, 200, `{"access_token":"access-value","expires_in":3600}`), nil
+		case "graph.microsoft.com":
+			switch {
+			case r.URL.Path == "/v1.0/me/drive/root":
+				return fakeResponse(r, 200, `{"id":"root","folder":{},"parentReference":{"driveId":"drive"}}`), nil
+			case strings.HasSuffix(r.URL.Path, ":/createUploadSession"):
+				sessions++
+				if sessions == 1 {
+					return fakeResponse(r, http.StatusConflict, `{"error":{"code":"nameAlreadyExists"}}`), nil
+				}
+				return fakeResponse(r, 201, `{"uploadUrl":"https://upload.1drv.com/session?key=private"}`), nil
+			case r.URL.Path == "/v1.0/drives/drive/items/root:/paper.pdf" && r.Method == http.MethodGet:
+				stubReads++
+				return fakeResponse(r, 200, `{"id":"stub-id","size":0}`), nil
+			case r.URL.Path == "/v1.0/drives/drive/items/stub-id" && r.Method == http.MethodDelete:
+				stubDeletes++
+				return fakeResponse(r, http.StatusNoContent, ""), nil
+			}
+		case "upload.1drv.com":
+			if r.Header.Get("Authorization") != "" {
+				t.Error("upload session received bearer token")
+			}
+			data, _ := io.ReadAll(r.Body)
+			uploads++
+			if string(data) != "x" {
+				t.Errorf("unexpected upload content: %q", data)
+			}
+			return fakeResponse(r, 201, `{"id":"file-id","size":1}`), nil
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		return fakeResponse(r, 404, `{}`), nil
+	})}
+	a, err := NewOneDrive(Config{Settings: map[string]string{"client_id": "app"}, Secrets: map[string]string{"refresh_token": "refresh"}}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.(*oneDriveAdapter).simpleUploadLimit = 0
+	stored, err := a.Put(context.Background(), Object{Key: "paper.pdf", Path: file, Size: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, item, err := decodeOneDriveID(stored.RemoteID)
+	if err != nil || item != "file-id" || sessions != 2 || stubReads != 1 || stubDeletes != 1 || uploads != 1 {
+		t.Fatalf("stub cleanup did not recover upload: item=%q sessions=%d reads=%d deletes=%d uploads=%d err=%v", item, sessions, stubReads, stubDeletes, uploads, err)
+	}
+}
+
+func TestOneDriveRejectsInvalidUploadSessionURLs(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "source.pdf")
+	if err := os.WriteFile(file, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, response, detail string
+	}{
+		{name: "missing", response: `{}`, detail: "onedrive_upload_session_url_missing"},
+		{name: "malformed", response: `{"uploadUrl":"://private-value"}`, detail: "onedrive_upload_session_url_invalid"},
+		{name: "insecure", response: `{"uploadUrl":"http://upload.1drv.com/private-value"}`, detail: "onedrive_upload_session_url_invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				switch {
+				case r.URL.Host == "login.microsoftonline.com":
+					return fakeResponse(r, 200, `{"access_token":"access-value","expires_in":3600}`), nil
+				case r.URL.Path == "/v1.0/me/drive/root":
+					return fakeResponse(r, 200, `{"id":"root","folder":{},"parentReference":{"driveId":"drive"}}`), nil
+				case strings.HasSuffix(r.URL.Path, ":/createUploadSession"):
+					return fakeResponse(r, 201, tt.response), nil
+				}
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				return fakeResponse(r, 404, `{}`), nil
+			})}
+			a, err := NewOneDrive(Config{Settings: map[string]string{"client_id": "app"}, Secrets: map[string]string{"refresh_token": "refresh"}}, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.(*oneDriveAdapter).simpleUploadLimit = 0
+			_, err = a.Put(context.Background(), Object{Key: "paper.pdf", Path: file, Size: 1})
+			if err == nil || AsCloudError(err).Detail != tt.detail || strings.Contains(err.Error(), "private-value") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -158,8 +302,9 @@ func TestOneDriveRejectsUntrustedUploadSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.(*oneDriveAdapter).simpleUploadLimit = 0
 	_, err = a.Put(context.Background(), Object{Key: "file.pdf", Path: file, Size: 1})
-	if err == nil || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "attacker") {
+	if err == nil || AsCloudError(err).Detail != "onedrive_upload_session_host_invalid" || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "attacker") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -209,6 +354,7 @@ func TestOneDriveOpenListAuthorizationUploadAndShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.(*oneDriveAdapter).simpleUploadLimit = 0
 	stored, err := a.Put(context.Background(), Object{Key: "test.pdf", Path: file, Size: 9})
 	if err != nil {
 		t.Fatal(err)
