@@ -19,3 +19,6 @@ backend/server
 *.out
 *.cover
 .DS_Store
+._*
+__pycache__
+*.pyc
