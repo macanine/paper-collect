@@ -683,11 +683,15 @@ func (s *Service) ApplyMaterialAnalysis(ctx context.Context, p auth.Principal, m
 			Update("applied_at", s.now()).Error; err != nil {
 			return err
 		}
+		if err := s.autoEnqueueExamAssignmentTx(tx, materialID); err != nil {
+			return err
+		}
 		return s.audit(tx, p, "material.ai_apply", materialID)
 	})
 	if err != nil {
 		return MaterialView{}, err
 	}
+	s.notify()
 	if newFileName != "" && newFileName != oldFileName {
 		s.renameLocalReplicaFiles(ctx, materialID, newFileName)
 	}
@@ -829,6 +833,9 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 				return err
 			}
 		}
+		if err := s.autoEnqueueExamAssignmentTx(tx, job.MaterialID); err != nil {
+			return err
+		}
 		if err := s.auditSystem(tx, "material.ai_auto_apply", job.MaterialID); err != nil {
 			return err
 		}
@@ -848,6 +855,7 @@ func (s *Service) RunAnalyze(ctx context.Context, jobID string) {
 		})
 		return
 	}
+	s.notify()
 	if result.AutoFileName != "" {
 		s.renameLocalReplicaFiles(context.WithoutCancel(ctx), job.MaterialID, result.AutoFileName)
 	}

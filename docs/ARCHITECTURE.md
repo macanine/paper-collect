@@ -158,7 +158,7 @@ web/src/
 | MaterialSubject | `material_subjects` | `(material_id, code)` 主键；用于列表/搜索筛选 |
 | Collection / CollectionItem | `collections`、`collection_items` | 合集中同一资料唯一；条目角色读取时取资料角色；父级禁止循环 |
 | Upload / UploadEntry | `uploads`、`upload_entries` | 清单先声明；条目 `received` 需字节数、SHA、真实格式和 CAS 全部通过 |
-| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index；租约领取，PostgreSQL 多实例、SQLite 单实例 |
+| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index/group；租约领取，PostgreSQL 多实例、SQLite 单实例 |
 | StorageProvider | `storage_providers` | kind 不可改；secret 只写不读；local 根目录由服务端固定 |
 | Replica | `replicas` | `(blob_id, provider_id)` 唯一；目标在规划时冻结；上传与分享状态分离 |
 | StoragePolicy | `storage_policies` | 单例 `id=1`；模式与 `minimum_replicas(1..20)` |
@@ -206,7 +206,7 @@ Index:    pending ──> running ──> succeeded | failed
 Eligible: exam / questions_answers only; other roles are not_applicable
 ```
 
-`RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时四类任务都会在租约仍然有效时回到 pending。
+`RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时相关任务都会在租约仍然有效时回到 pending。
 
 任务行保存当前阶段、当前阶段的计数、本次执行开始/结束时间和 `duration_ms`，并保存最多 200 条带时间的处理记录；领取时开始计时，终态或重新排队时结束或清零。日志可带相对执行开始的 `elapsed_ms`、步骤 `duration_ms` 和有界 `metrics`（数据量、吞吐、页数、文件数、模型、校验级别、分享状态等），传输进度最多约每 5 秒写一次。进度更新受租约约束，旧 worker 不能覆盖新执行者的记录。列表省略历史日志，详情读取历史记录；旧任务允许没有新字段。日志不写令牌、分享链接、URL 或文件内容。
 
@@ -258,7 +258,7 @@ Eligible: exam / questions_answers only; other roles are not_applicable
 - 资料标题由文件名去掉扩展名生成；批次/合集的标题使用清单 `title`。学科、年级、学年、标签来自清单，服务端不从文件名推断学科。
 - 角色有且只有 `exam`（试卷，只有题）、`answer`（答案）、`questions_answers`（试卷+答案，先试卷后集中答案）、`teacher_edition`（每题后紧跟答案解析）、`lecture`（讲义，教程型材料，讲解与例题/练习混杂）、`other`（无法判断）。归档时服务端按文件名关键词给出建议，默认 `other`；归档后 AI 自动应用及人工修改均走同一角色校验。合集条目自动跟随资料角色。
 - 归档角色只由服务端 `suggestRole` 决定；清单不提交 `role`，上传页也不显示角色预览，避免前端提示与最终结果不一致。
-- 同一事务中还写入：每个 Blob 的 Replica 目标、每个 pending Replica 的 replicate Job、自动 analyze/index 任务（若启用）、Upload 的最终 `material_id`/`collection_id`、ingest Job 成功状态和系统审计。
+- 同一事务中还写入：每个 Blob 的 Replica 目标、每个 pending Replica 的 replicate Job、自动 analyze/index 任务（若启用）、Upload 的最终 `material_id`/`collection_id`、ingest Job 成功状态和系统审计。单文件资料在 AI 识别为 `exam` 后由独立的 `group` 任务追加到已有 series/exam 合集，归档事务本身不创建该任务。
 
 ## 8. 多点存储与复制
 
@@ -342,6 +342,7 @@ worker RunAnalyze
 - DOCX 原生解析由 `internal/docx` 完成：读取 `word/document.xml` 与关系表，按段落/表格/文本框/公式生成 Markdown 和逐页文本，识别显式分页与 `lastRenderedPageBreak`；嵌入的 PNG/JPEG/GIF/BMP/TIFF/WebP 按引用顺序记录，最多 20 张、单张 12 MiB、总计 64 MiB，图片 OCR 失败只记录日志，不影响正文。页码依赖文档保存的分页提示，连续文档没有提示时按第 1 页处理。自建 RapidOCR 的 DOCX 不再经过 LibreOffice 转换或 OCR 文字层，因此分析/搜题不依赖 `soffice`，也不依赖 RapidOCR 镜像版本同步；MinerU/PaddleOCR 仍按各自协议接收原件。
 - DOCX 预览仍由 `internal/office` 调用 LibreOffice Writer 生成 PDF，使用独立配置、最高宏安全级别、内容寻址缓存 `previews/docx-v1/<sha前两位>/<sha>.pdf`；每个应用实例最多同时转换一个文档。非容器部署需自行安装 Writer 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
 - 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
+- 自动归类采用保守规则：仅处理无目录层级的单文件上传、已完成、无现有合集且角色为 `exam` 的资料；候选限定为 `series`/`exam`，按归一化标题、学科、年级、学年和答案类成员评分。学科/年级/学年冲突、重复内容或同标题试卷、低置信度及接近并列候选都不自动处理。成功只追加合集条目并回写 `Upload.collection_id`；任务不会自动创建、合并、移动或拆分合集。无匹配仍是成功终态，手动重新分析会重新尝试；审计写 `collection.auto_assign`。
 - 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
 - 关键超时：OCR 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
 
@@ -503,10 +504,10 @@ DATA_DIR/
 
 - **事务**：资料发布、合集条目替换、副本计划/状态刷新、分析/索引最终写入、策略/密钥更新均在数据库事务中；网络上传、OCR、模型调用不在事务内。
 - **非事务副作用**：CAS、临时文件、远端对象和数据库更新不能原子提交。失败可能留下孤儿 CAS、远端对象或已上传但未记库的副本；当前没有自动 GC/远端删除。
-- **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；Replica 规划复用已有行；Analysis/Index 重跑覆盖自身结果。
+- **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；Replica 规划复用已有行；Analysis/Index 重跑覆盖自身结果；group 任务不会重复追加同一资料。
 - **恢复与领取**：SQLite 启动时将遗留 `running` 改回 `pending`；PostgreSQL 仅回收过期租约。worker 按类型领取 pending Job，`attempts` 递增。
-- **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index 由 `job_locks` 串行化，不同资料可并行。
-- **取消**：ingest/replicate/analyze 在进程 context 取消时回到 pending；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
+- **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index/group 由 `job_locks` 串行化，不同资料可并行。
+- **取消**：ingest/replicate/analyze/group 在进程 context 取消时回到 pending；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
 - **部署边界**：SQLite 单连接、单 writer、WAL，只支持单实例。PostgreSQL 支持多实例；内置 Compose 运行两个应用实例，并共享 `DATA_DIR`（CAS 与本地存储）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。RapidOCR 容器与 PostgreSQL 一样只在 Compose 内网监听，不直接暴露公网；其默认 CPU 上限为 1 核，推理线程数为 1，避免 OCR 长时间挤占应用和数据库资源。
 - **增长**：`material_texts`、`question_terms`、`material_analyses`、`audits`、`jobs` 和孤儿 CAS 会持续增长；没有保留期/清理任务。`AutoMigrate` 不会删除旧表/旧列。
 - **迁移**：没有版本化 migration；升级前先备份，启动时由 `AutoMigrate` 增量建表/加列。已删除功能留下的表和列不会自动清理。

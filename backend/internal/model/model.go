@@ -72,10 +72,15 @@ const (
 )
 
 // Collection kinds.
-var CollectionKinds = []string{"series", "exam", "folder", "zip", "custom"}
+const (
+	KindSeries = "series"
+	KindExam   = "exam"
+	KindFolder = "folder"
+	KindZip    = "zip"
+	KindCustom = "custom"
+)
 
-// Collection kind used for ZIP child collections.
-const KindZip = "zip"
+var CollectionKinds = []string{KindSeries, KindExam, KindFolder, KindZip, KindCustom}
 
 // Grade values.
 var Grades = []string{"", "grade10", "grade11", "grade12"}
@@ -97,6 +102,7 @@ const (
 	JobReplicate = "replicate"
 	JobAnalyze   = "analyze"
 	JobIndex     = "index"
+	JobGroup     = "group"
 
 	JobPending   = "pending"
 	JobRunning   = "running"

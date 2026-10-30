@@ -49,7 +49,7 @@ export type Verification = (typeof VERIFICATIONS)[number];
 export const SHARE_STATUSES = ['pending', 'ready', 'unsupported', 'failed'] as const;
 export type ShareStatus = (typeof SHARE_STATUSES)[number];
 
-export const JOB_KINDS = ['ingest', 'replicate', 'analyze', 'index'] as const;
+export const JOB_KINDS = ['ingest', 'replicate', 'analyze', 'index', 'group'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'succeeded', 'failed'] as const;

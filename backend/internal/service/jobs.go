@@ -27,7 +27,7 @@ func (s *Service) ListJobs(ctx context.Context, f JobFilter, pg PageQuery) (Page
 	if f.Status != "" && !isOneOf(f.Status, model.JobPending, model.JobRunning, model.JobSucceeded, model.JobFailed) {
 		return Page[model.Job]{}, apperr.Validation("status 不在允许范围内")
 	}
-	if f.Kind != "" && !isOneOf(f.Kind, model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex) {
+	if f.Kind != "" && !isOneOf(f.Kind, model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex, model.JobGroup) {
 		return Page[model.Job]{}, apperr.Validation("kind 不在允许范围内")
 	}
 	db := s.db.WithContext(ctx)
@@ -121,6 +121,10 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 				Updates(map[string]any{"status": "pending", "error": "", "job_id": job.ID, "updated_at": now}).Error; err != nil {
 				return err
 			}
+		case model.JobGroup:
+			if job.MaterialID == "" {
+				return apperr.Conflict("归类任务缺少资料")
+			}
 		case model.JobReplicate:
 			if job.ReplicaID == "" {
 				return apperr.Conflict("复制任务缺少副本")
@@ -172,8 +176,9 @@ func (s *Service) StartWorker(ctx context.Context) {
 		model.JobReplicate: s.worker.ReplicateConcurrency,
 		model.JobAnalyze:   s.worker.AnalyzeConcurrency,
 		model.JobIndex:     s.worker.IndexConcurrency,
+		model.JobGroup:     s.worker.AnalyzeConcurrency,
 	}
-	for _, kind := range []string{model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex} {
+	for _, kind := range []string{model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex, model.JobGroup} {
 		for i := 0; i < limits[kind]; i++ {
 			go s.workerLoop(ctx, kind)
 		}
@@ -403,7 +408,7 @@ var (
 )
 
 func jobLockKey(job model.Job) string {
-	if job.MaterialID == "" || (job.Kind != model.JobAnalyze && job.Kind != model.JobIndex) {
+	if job.MaterialID == "" || (job.Kind != model.JobAnalyze && job.Kind != model.JobIndex && job.Kind != model.JobGroup) {
 		return ""
 	}
 	return "material:" + job.MaterialID
@@ -455,6 +460,8 @@ func (s *Service) executeJob(ctx context.Context, job model.Job) {
 		s.RunAnalyze(runCtx, job.ID)
 	case model.JobIndex:
 		s.RunIndex(runCtx, job.ID)
+	case model.JobGroup:
+		s.RunGroup(runCtx, job.ID)
 	default:
 		s.failJob(job.ID, job.LeaseOwner, "未知任务类型")
 	}
@@ -541,6 +548,10 @@ func (s *Service) lockJobLease(tx *gorm.DB, jobID, owner string) error {
 // rows and this update in one transaction, so a reclaimed worker cannot commit
 // either the result or a stale terminal state.
 func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string) error {
+	return s.finishJobTxWithMetrics(tx, jobID, owner, status, message, nil)
+}
+
+func (s *Service) finishJobTxWithMetrics(tx *gorm.DB, jobID, owner, status, message string, metrics map[string]any) error {
 	now := s.now()
 	message = redact(message)
 	var job model.Job
@@ -560,21 +571,29 @@ func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string)
 		durationMS = 0
 	}
 	progress, level := "处理完成", "info"
-	if status == model.JobFailed {
+	if status == model.JobSucceeded && message != "" {
+		progress = redact(message)
+	} else if status == model.JobFailed {
 		progress, level = "处理失败："+redact(message), "error"
 	} else if status == model.JobPending {
 		progress = "处理已中断，等待重新执行"
+	}
+	jobError := ""
+	if status == model.JobFailed {
+		jobError = message
 	}
 	res := tx.Model(&model.Job{}).
 		Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",
 			jobID, model.JobRunning, owner, now).
 		Updates(map[string]any{
-			"status": status, "error": message, "lease_owner": "",
+			"status": status, "error": jobError, "lease_owner": "",
 			"lease_until": nil, "heartbeat_at": nil, "updated_at": now,
 			"finished_at":      finishedAt,
 			"duration_ms":      durationMS,
 			"progress_message": progress,
-			"log_json":         appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: level, Message: progress, DurationMS: durationMS}),
+			"log_json": appendJobLog(job.LogJSON, model.JobLog{
+				Time: now, Level: level, Message: progress, DurationMS: durationMS, Metrics: metrics,
+			}),
 		})
 	if res.Error != nil {
 		return res.Error

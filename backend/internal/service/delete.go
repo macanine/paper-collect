@@ -73,7 +73,8 @@ func (s *Service) DeleteMaterial(ctx context.Context, p auth.Principal, id strin
 		if err := tx.Where("material_id IN ?", ids).Delete(&model.MaterialAnalysis{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("kind = ? AND material_id IN ?", model.JobAnalyze, ids).Delete(&model.Job{}).Error; err != nil {
+		if err := tx.Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobGroup}, ids).
+			Delete(&model.Job{}).Error; err != nil {
 			return err
 		}
 		if err := deleteSearchDataForMaterials(tx, toDelete); err != nil {

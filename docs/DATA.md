@@ -29,7 +29,7 @@
 | `uploads` | `Upload` | 上传清单；`user_id`、`status`、`job_id` 索引；标题/类型/学科/年级/学年/标签；完成后记录 `collection_id`/`material_id` |
 | `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status` |
 | `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
-| `job_locks` | `JobLock` | 同资料 analyze/index 互斥；资源键、任务 ID、租约到期时间 |
+| `job_locks` | `JobLock` | 同资料 analyze/index/group 互斥；资源键、任务 ID、租约到期时间 |
 | `storage_providers` | `StorageProvider` | 存储端点；`enabled`、`priority` 索引；kind/role/weight/config JSON/加密 secret；kind 不可改 |
 | `replicas` | `Replica` | Blob×Provider 副本；唯一索引 `(blob_id, provider_id)`；`status` 索引；verification、分享字段、远端标识、`plan_mode` |
 | `storage_policies` | `Policy` | 单例 `id=1`；mode 与 `minimum_replicas` |
@@ -63,7 +63,7 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 - `Replica` 与 `Material` 不直接关联，而是挂在 Blob 上；共享 Blob 的资料看到同一组副本和同一归档状态。
 - `CollectionItem` 与 `Material` 是多对多（带 position/relative_path/缓存角色）；同一资料可在多个合集。
 - `MaterialAnalysis`、`MaterialText`、`MaterialIndexState` 都是每资料最多一行；重跑覆盖自身。
-- Job 的关联是弱引用：ingest 带 `upload_id`，replicate 带 `replica_id`，analyze/index 带 `material_id`；没有数据库外键。
+- Job 的关联是弱引用：ingest 带 `upload_id`，replicate 带 `replica_id`，analyze/index/group 带 `material_id`；没有数据库外键。
 
 ### 2.2 状态与派生字段
 
@@ -71,7 +71,7 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 - `Material.role` 是唯一角色来源；`CollectionItem.role` 是写入时缓存，读取时被资料角色覆盖；资料角色变化时会同步仍等于旧默认值的条目。
 - `Material.title` 与 `file_name` 合一：改名会更新文件名和本地副本名；云盘远端保留上传时名字。
 - `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received。
-- `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；启动时把遗留 running 改回 pending。
+- `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；`group` 无匹配时记为 succeeded 并在进度/日志说明原因，手动重新分析可重新入队；启动时把遗留 running 改回 pending。
 - `Replica.status`：pending → uploading → ready/failed；failed 可重试回 pending；分享状态独立为 pending/ready/unsupported/failed。
 - `MaterialAnalysis.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
 - `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。

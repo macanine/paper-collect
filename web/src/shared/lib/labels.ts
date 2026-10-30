@@ -96,6 +96,7 @@ export const JOB_KIND_LABELS: Record<JobKind, string> = {
   replicate: '副本复制',
   analyze: 'AI 识别',
   index: '题目索引',
+  group: '自动归类',
 };
 
 export const ANALYSIS_STATUS_LABELS: Record<AnalysisStatus, string> = {

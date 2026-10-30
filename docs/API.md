@@ -21,9 +21,9 @@
 
 `Collection`：`id,title(1..255),description(<=4000),kind:series|exam|folder|zip|custom,parent_id:string(无则空串),subject_codes:string[],created_at,updated_at`。详情额外含 `items:CollectionItem[]`。`CollectionItem`：`id,collection_id,material_id,position:integer(>=0),role:Role,relative_path:string,material?:Material`。`role` 永远取自资料本身，写入时忽略客户端传值，读取时按资料角色返回；同合集同资料唯一；禁止父级循环。
 
-`Upload`：`id,title,collection_kind,subject_codes,grade,academic_year,tags,status:pending|processing|completed|failed,collection_id,material_id,job_id,created_at,entries:UploadEntry[]`。`UploadEntry`：`id,relative_path,size_bytes,sha256:string(可空),status:pending|received`。status=received 表示字节数、内容签名和 SHA 已验证。单个普通文件归档后返回 `material_id`，批次返回 `collection_id`；folder 使用 `webkitRelativePath`，不上传操作系统路径。
+`Upload`：`id,title,collection_kind,subject_codes,grade,academic_year,tags,status:pending|processing|completed|failed,collection_id,material_id,job_id,created_at,entries:UploadEntry[]`。`UploadEntry`：`id,relative_path,size_bytes,sha256:string(可空),status:pending|received`。status=received 表示字节数、内容签名和 SHA 已验证。单个普通文件归档后返回 `material_id`，批次返回 `collection_id`；单个文件随后被自动归入合集中时，`collection_id` 会更新。folder 使用 `webkitRelativePath`，不上传操作系统路径。
 
-`Job`：`id,kind:ingest|replicate|analyze|index,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message,elapsed_ms?:integer,duration_ms?:integer,metrics?:object}],started_at:date-time|null,finished_at:date-time|null,duration_ms:integer,created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。`duration_ms` 是最近一次执行从领取到终态的耗时；运行中可按 `started_at` 计算当前耗时。日志的 `elapsed_ms` 是相对本次执行开始的偏移，`duration_ms` 表示当前记录覆盖步骤的耗时，`metrics` 只保存应用可控的非敏感事实（端点名、字节数、吞吐、页数、模型名、校验级别、分享状态等）。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录或新指标。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。PostgreSQL 支持带租约和心跳的多实例领取；SQLite 仅支持单实例。
+`Job`：`id,kind:ingest|replicate|analyze|index|group,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message,elapsed_ms?:integer,duration_ms?:integer,metrics?:object}],started_at:date-time|null,finished_at:date-time|null,duration_ms:integer,created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。`duration_ms` 是最近一次执行从领取到终态的耗时；运行中可按 `started_at` 计算当前耗时。日志的 `elapsed_ms` 是相对本次执行开始的偏移，`duration_ms` 表示当前记录覆盖步骤的耗时，`metrics` 只保存应用可控的非敏感事实（端点名、字节数、吞吐、页数、模型名、校验级别、分享状态等）。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录或新指标。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。PostgreSQL 支持带租约和心跳的多实例领取；SQLite 仅支持单实例。
 
 `StorageProvider`：`id,name(1..128),kind:local|webdav|lanzou|123pan|onedrive|s3,role:primary|backup,enabled:boolean,priority:integer(0..1000),weight:integer(1..1000),config:object<string,string>,secret_configured:boolean,created_at,updated_at`。任何 GET 不返回 secret。`Replica`：`id,blob_id,provider_id,status:pending|uploading|ready|failed,size_bytes,verification:uploaded|size|sha256,error,share_status:pending|ready|unsupported|failed,share_url:string,share_password:string,share_expires_at:date-time|null,created_at,updated_at`。远端对象 ID 不开放给普通资料接口。
 
@@ -99,7 +99,7 @@ GET page、page_size、`q`（标题/描述，<=200）、`roots=true`（仅顶层
 
 ### DELETE /materials/{id}（materials:write）
 
-默认 204。若资料是 ZIP 容器且存在 `parent_material_id` 指向它的子资料，必须显式 `?cascade=true`，否则 409；级联删除会移除子资料、合集条目、分析记录、对应 `analyze` 任务，以及题目/倒排/解析缓存，并把引用它的上传记录 `material_id` 置空。无剩余资料引用的 Blob 会删除本地 CAS 文件与本地端点副本。**云盘适配器没有删除接口，远端对象不会被删除**，其副本行会被移除；需要删除远端文件时请自行处理。审计记录 `material.delete`。
+默认 204。若资料是 ZIP 容器且存在 `parent_material_id` 指向它的子资料，必须显式 `?cascade=true`，否则 409；级联删除会移除子资料、合集条目、分析记录、对应 `analyze`/`group` 任务，以及题目/倒排/解析缓存，并把引用它的上传记录 `material_id` 置空。无剩余资料引用的 Blob 会删除本地 CAS 文件与本地端点副本。**云盘适配器没有删除接口，远端对象不会被删除**，其副本行会被移除；需要删除远端文件时请自行处理。审计记录 `material.delete`。
 
 ### DELETE /collections/{id}（collections:write）
 
@@ -241,11 +241,13 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `GET /materials/{id}/analysis`（materials:read）：200 MaterialAnalysis；尚无分析时返回 404 `not_found`。
 - `POST /materials/{id}/analysis/apply`（materials:write）：重新应用已成功完成的建议。请求可覆盖白名单字段 `{"title":"","subject_codes":[],"grade":"","academic_year":0,"role":"","tags":[]}`，省略字段取建议值；显式提供的白名单字段也可覆盖或补充建议。应用前与资料 PATCH 使用同一套校验；200 更新后的 **Material + replicas**，不能修改 blob/状态/路径。写审计 `material.ai_apply`。
 
-分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验建议 → **在同一事务中自动应用白名单字段、同步文件名和分析已应用标记**。归类以正文（或页面图像）为依据，文件名和来源路径只作辅助；提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准。长文档最多发送 12000 字符，保留开头约 2/3 与末尾约 1/3，并标注中间省略，以免漏掉卷末答案区；未解析出任何正文或页面图像时任务失败，不退回文件名猜测。自动应用只接受 `parseSuggestions` 校验后的字段，标题会同步为下载名和本地副本名；模型原文、未知字段和非法值不会写入。自动应用写审计 `material.ai_auto_apply`，人工重应用写 `material.ai_apply`。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
+分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 容器本身不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验建议 → **在同一事务中自动应用白名单字段、同步文件名、分析已应用标记，并在条件满足时创建 `group` 任务**。归类以正文（或页面图像）为依据，文件名和来源路径只作辅助；提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准。长文档最多发送 12000 字符，保留开头约 2/3 与末尾约 1/3，并标注中间省略，以免漏掉卷末答案区；未解析出任何正文或页面图像时任务失败，不退回文件名猜测。自动应用只接受 `parseSuggestions` 校验后的字段，标题会同步为下载名和本地副本名；模型原文、未知字段和非法值不会写入。自动应用写审计 `material.ai_auto_apply`，人工重应用写 `material.ai_apply`，两者都会在满足条件时尝试入队自动归类。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
 
 题目索引链路：解析文本按 `batch_pages`（默认 10）与 `batch_chars`（默认 12000）分组，最多 3 个批次并发切题；模型输出上限 128000 token，并请求 `reasoning_effort=high`。单批发生空响应或非法 JSON 时按页、再按正文二分重试；上游 5xx/限流最多额外重试一次，超时、鉴权等错误直接失败，不通过递归重试放大调用量。批次结果按原顺序合并去重后在同一事务写入题目与检索词。
 
-Job 的 `material_id` 关联 analyze/index 等任务资料；`kind` 包含 `analyze`、`index`。
+自动归类链路：`group` 任务只处理“上传清单恰好一个无目录层级的普通非 ZIP 文件、上传已完成、资料不属于任何合集、资料角色为 `exam`”的资料；答案类资料不会自动入队。候选只包括 `series` 和 `exam` 合集；标题会移除“答案/解析/教师版/学生版/试卷/答题卡”等角色词与标点，再结合合集标题或成员标题、学科、年级、学年和答案类成员评分。存在学科/年级/学年冲突、同内容文件、同标题试卷重复、`exam` 合集已有试卷类成员，或首选分数不足、与第二名差距过小时，不改动合集。成功时只向唯一匹配的合集末尾追加条目，并更新 `Upload.collection_id`；不会自动创建、合并、移动或拆分合集，也不会自动把资料移出原合集。无匹配时 `group` 任务仍以 succeeded 结束并记录原因，便于人工处理；人工重新分析成功的资料会重新尝试。审计记录 `collection.auto_assign`。
+
+Job 的 `material_id` 关联 analyze/index/group 等任务资料；`kind` 包含 `analyze`、`index`、`group`。
 
 ## 搜题（纯文本）
 
