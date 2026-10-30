@@ -27,6 +27,7 @@ func (s *Server) handleListCollections(c *gin.Context) {
 		filter.RootsOnly = true
 	}
 	filter.ParentID = strings.TrimSpace(c.Query("parent_id"))
+	filter.MaterialID = strings.TrimSpace(c.Query("material_id"))
 	page, err := s.svc.ListCollections(c.Request.Context(), filter, pg)
 	if err != nil {
 		respondError(c, err)

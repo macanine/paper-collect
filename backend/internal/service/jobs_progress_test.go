@@ -20,7 +20,13 @@ func TestJobProgressIsLeaseFencedAndRedactsFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc.jobProgress(context.Background(), claimed, "已检查 2 / 3 个上传文件", 2, 3)
+	if claimed.StartedAt == nil {
+		t.Fatal("claimed job should record a start time")
+	}
+	svc.jobProgressWithMetrics(context.Background(), claimed, "已检查 2 / 3 个上传文件", 2, 3, map[string]any{
+		"file_count": 3,
+		"size_bytes": int64(1024),
+	})
 	stale := claimed
 	stale.LeaseOwner = "other-worker"
 	svc.jobProgress(context.Background(), stale, "不应出现", 3, 3)
@@ -37,6 +43,9 @@ func TestJobProgressIsLeaseFencedAndRedactsFailure(t *testing.T) {
 	}
 	if got.ProgressCurrent != 2 || got.ProgressTotal != 3 || len(logs) != 3 || logs[2].Level != "error" {
 		t.Fatalf("unexpected progress: %#v %#v", got, logs)
+	}
+	if got.FinishedAt == nil || got.DurationMS < 0 || logs[1].Metrics["file_count"] != float64(3) {
+		t.Fatalf("unexpected timing metrics: %#v", got)
 	}
 	if strings.Contains(got.LogJSON, "example.com") || strings.Contains(got.LogJSON, "不应出现") {
 		t.Fatal("logs leaked a URL or accepted a stale worker")

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Card, Form, InputNumber, Radio, Space, Table, Tag } from 'antd';
+import { Alert, App, Button, Card, Form, InputNumber, Radio, Space, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { ProviderKind, ProviderRole, StorageMode, StorageProvider } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
@@ -27,7 +28,9 @@ function connectionMessage(provider: StorageProvider, healthy: boolean, detail: 
 export function StoragePage() {
   const { can } = useAuth();
   const { message, modal } = App.useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
   const canWrite = can('storage:write');
+  const selectedProvider = searchParams.get('provider') ?? '';
 
   const providers = useProviders();
   const policy = usePolicy(can('storage:read'));
@@ -39,6 +42,9 @@ export function StoragePage() {
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState<StorageMode>('mirror_all');
   const [minimum, setMinimum] = useState(1);
+  const visibleProviders = selectedProvider
+    ? (providers.data ?? []).filter((provider) => provider.id === selectedProvider)
+    : providers.data ?? [];
 
   useEffect(() => {
     if (policy.data) {
@@ -202,6 +208,26 @@ export function StoragePage() {
         ) : null}
       </Card>
 
+      {selectedProvider ? (
+        <Alert
+          type="info"
+          showIcon
+          message="仅显示所选的存储端点"
+          action={
+            <Button
+              size="small"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete('provider');
+                setSearchParams(next);
+              }}
+            >
+              显示全部
+            </Button>
+          }
+        />
+      ) : null}
+
       <Card title="存储端点" styles={{ body: { padding: 0 } }}>
         {providers.isPending ? <LoadingState /> : null}
         {providers.isError ? <ErrorState error={providers.error} onRetry={() => void providers.refetch()} /> : null}
@@ -209,7 +235,7 @@ export function StoragePage() {
           <Table<StorageProvider>
             rowKey="id"
             size="middle"
-            dataSource={providers.data}
+            dataSource={visibleProviders}
             columns={columns}
             locale={{ emptyText: <EmptyState /> }}
             pagination={false}

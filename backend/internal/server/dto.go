@@ -73,7 +73,8 @@ type materialDTO struct {
 
 type materialDetailDTO struct {
 	materialDTO
-	Replicas []replicaDTO `json:"replicas"`
+	Replicas    []replicaDTO    `json:"replicas"`
+	Collections []collectionDTO `json:"collections"`
 }
 
 type replicaDTO struct {
@@ -155,6 +156,9 @@ type jobDTO struct {
 	ProgressCurrent int            `json:"progress_current"`
 	ProgressTotal   int            `json:"progress_total"`
 	Logs            []model.JobLog `json:"logs,omitempty"`
+	StartedAt       *time.Time     `json:"started_at"`
+	FinishedAt      *time.Time     `json:"finished_at"`
+	DurationMS      int64          `json:"duration_ms"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
@@ -263,7 +267,15 @@ func toMaterialDetail(v service.MaterialView) materialDetailDTO {
 	for _, r := range v.Replicas {
 		replicas = append(replicas, toReplica(r))
 	}
-	return materialDetailDTO{materialDTO: toMaterial(v.Material, v.Subjects), Replicas: replicas}
+	collections := make([]collectionDTO, 0, len(v.Collections))
+	for _, collection := range v.Collections {
+		collections = append(collections, toCollection(collection))
+	}
+	return materialDetailDTO{
+		materialDTO: toMaterial(v.Material, v.Subjects),
+		Replicas:    replicas,
+		Collections: collections,
+	}
 }
 
 func toReplica(r model.Replica) replicaDTO {
@@ -365,6 +377,9 @@ func toJob(j model.Job) jobDTO {
 		ProgressCurrent: j.ProgressCurrent,
 		ProgressTotal:   j.ProgressTotal,
 		Logs:            logs,
+		StartedAt:       j.StartedAt,
+		FinishedAt:      j.FinishedAt,
+		DurationMS:      j.DurationMS,
 		CreatedAt:       j.CreatedAt,
 		UpdatedAt:       j.UpdatedAt,
 	}

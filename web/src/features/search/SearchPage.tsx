@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { App, Button, Card, Collapse, Form, Input, Select, Space, Tag, Typography } from 'antd';
 import { FileSearchOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { errorMessage } from '../../shared/api/errors';
 import type { Grade, SearchHit, SubjectCode } from '../../shared/api/types';
 import { downloadMaterial } from '../materials/api';
@@ -22,7 +22,17 @@ interface SearchFormValues {
 export function SearchPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const [params, setParams] = useState<{ query: string; subject?: string; grade?: string } | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [form] = Form.useForm<SearchFormValues>();
+  const params = useMemo(() => {
+    const query = (searchParams.get('q') ?? '').trim();
+    if (!query) return null;
+    return {
+      query,
+      subject: searchParams.get('subject') || undefined,
+      grade: searchParams.get('grade') || undefined,
+    };
+  }, [searchParams]);
   const query = useQuery({
     queryKey: ['search', params],
     queryFn: ({ signal }) =>
@@ -30,13 +40,25 @@ export function SearchPage() {
     enabled: params !== null && (params?.query.trim().length ?? 0) > 0,
   });
 
+  useEffect(() => {
+    form.setFieldsValue({
+      query: params?.query ?? '',
+      subject: (params?.subject as SubjectCode | undefined) ?? undefined,
+      grade: (params?.grade as Grade | undefined) ?? undefined,
+    });
+  }, [form, params]);
+
   const handleSearch = (values: SearchFormValues) => {
     const q = values.query.trim();
     if (!q) {
       message.warning('请输入要搜索的题干');
       return;
     }
-    setParams({ query: q, subject: values.subject || undefined, grade: values.grade || undefined });
+    const next = new URLSearchParams();
+    next.set('q', q);
+    if (values.subject) next.set('subject', values.subject);
+    if (values.grade) next.set('grade', values.grade);
+    setSearchParams(next);
   };
 
   const handleOpenPage = async (hit: SearchHit) => {
@@ -60,7 +82,7 @@ export function SearchPage() {
       <PageHeader title="搜题" />
 
       <Card>
-        <Form<SearchFormValues> layout="vertical" onFinish={handleSearch}>
+        <Form<SearchFormValues> form={form} layout="vertical" onFinish={handleSearch}>
           <Form.Item name="query" rules={[{ required: true, message: '请输入题干' }]}>
             <Input.TextArea
               autoSize={{ minRows: 2, maxRows: 5 }}
@@ -86,6 +108,13 @@ export function SearchPage() {
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} title="搜索失败" /> : null}
       {query.isSuccess ? (
         <>
+          <div className="search-summary">
+            <span>
+              找到 <strong>{query.data.total}</strong> 条结果
+              {query.data.items.length < query.data.total ? `，当前显示 ${query.data.items.length} 条` : ''}
+            </span>
+            <span>服务端检索 {query.data.took_ms} ms</span>
+          </div>
           {query.data.items.length === 0 ? (
             <EmptyState description="没有找到匹配的题目" />
           ) : (

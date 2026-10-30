@@ -368,7 +368,10 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		SHA256: blob.SHA256,
 		Size:   blob.SizeBytes,
 	}
-	s.jobProgress(ctx, job, "正在上传文件并验证远端副本", 0, 0)
+	s.jobProgressWithMetrics(ctx, job, "正在上传文件并验证远端副本", 0, 0, map[string]any{
+		"provider":   provider.Name,
+		"size_bytes": blob.SizeBytes,
+	})
 	type uploadProgress struct{ done, total int64 }
 	updatesProgress := make(chan uploadProgress, 1)
 	progressDone := make(chan struct{})
@@ -389,7 +392,9 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		default:
 		}
 	}
+	uploadStarted := time.Now()
 	stored, err := adapter.Put(ctx, obj)
+	uploadDuration := time.Since(uploadStarted)
 	close(updatesProgress)
 	<-progressDone
 	if err != nil {
@@ -409,19 +414,37 @@ func (s *Service) replicate(ctx context.Context, job model.Job) error {
 		"remote_name":  obj.Name,
 		"updated_at":   now,
 	}
-	s.jobProgress(ctx, job, "副本上传完成，正在处理分享链接", 0, 0)
+	throughput := float64(0)
+	if uploadDuration > 0 {
+		throughput = float64(size) / uploadDuration.Seconds()
+	}
+	s.jobProgressWithMetrics(ctx, job, "副本上传完成，正在处理分享链接", 0, 0, map[string]any{
+		"provider":               provider.Name,
+		"size_bytes":             size,
+		"duration_ms":            uploadDuration.Milliseconds(),
+		"throughput_bytes_per_s": throughput,
+		"verification":           stored.Verification,
+	})
+	shareStarted := time.Now()
 	shareURL, sharePassword, shareExpires, shareStatus, shareErr := s.shareReplica(ctx, adapter, stored.RemoteID)
+	shareDuration := time.Since(shareStarted)
 	updates["share_status"] = shareStatus
 	updates["share_url"] = shareURL
 	updates["share_password"] = sharePassword
 	updates["share_expires_at"] = shareExpires
 	if shareErr != "" {
 		updates["error"] = shareErr
-		s.jobProgress(ctx, job, "副本已保存，分享链接创建失败，可稍后重试", 0, 0)
+		s.jobProgressWithMetrics(ctx, job, "副本已保存，分享链接创建失败，可稍后重试", 0, 0, map[string]any{
+			"provider": provider.Name, "duration_ms": shareDuration.Milliseconds(), "share_status": shareStatus,
+		})
 	} else if shareStatus == model.ShareStatusUnsupported {
-		s.jobProgress(ctx, job, "副本已保存，此端点不支持分享链接", 0, 0)
+		s.jobProgressWithMetrics(ctx, job, "副本已保存，此端点不支持分享链接", 0, 0, map[string]any{
+			"provider": provider.Name, "duration_ms": shareDuration.Milliseconds(), "share_status": shareStatus,
+		})
 	} else {
-		s.jobProgress(ctx, job, "副本已保存，分享链接已生成", 0, 0)
+		s.jobProgressWithMetrics(ctx, job, "副本已保存，分享链接已生成", 0, 0, map[string]any{
+			"provider": provider.Name, "duration_ms": shareDuration.Milliseconds(), "share_status": shareStatus,
+		})
 	}
 	return s.completeReplicateInTx(job, replica, updates)
 }

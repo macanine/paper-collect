@@ -1,5 +1,6 @@
-import { ApiError, codeFromStatus } from './errors';
+import { ApiError, codeFromStatus, isApiError } from './errors';
 import { type SessionStore, sessionStore } from './session';
+import { networkTelemetry } from './telemetry';
 import type { AuthSession } from './types';
 
 export const API_BASE = '/api/v1';
@@ -67,6 +68,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function responseBytes(res: Response): number | undefined {
+  const value = res.headers.get('Content-Length');
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function finishNetwork(
+  finish: (result: {
+    status: number;
+    requestId?: string;
+    bytes?: number;
+    errorCode?: string;
+    ok?: boolean;
+  }) => void,
+  error: unknown,
+  response?: Response,
+  bytes?: number,
+) {
+  const apiError = isApiError(error) ? error : undefined;
+  finish({
+    status: apiError?.status ?? response?.status ?? 0,
+    requestId: apiError?.requestId ?? response?.headers.get('X-Request-ID') ?? undefined,
+    bytes,
+    errorCode: apiError?.code,
+  });
 }
 
 /**
@@ -191,38 +220,64 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
   async function request<T = void>(path: string, options: JsonRequestOptions = {}): Promise<T> {
     const url = `${base}${path}${buildQuery(options.query)}`;
     const hasBody = options.body !== undefined;
-    const res = await execute(
-      (token) =>
-        doFetch(url, {
-          method: options.method ?? 'GET',
-          headers: {
-            Accept: 'application/json',
-            ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-            ...authHeaders(token),
-          },
-          body: hasBody ? JSON.stringify(options.body) : undefined,
-          signal: options.signal,
-        }),
-      { public: options.public },
-    );
-    return readEnvelope<T>(res);
+    const method = options.method ?? 'GET';
+    const finish = networkTelemetry.begin(method, path, 'request');
+    let res: Response | undefined;
+    try {
+      res = await execute(
+        (token) =>
+          doFetch(url, {
+            method,
+            headers: {
+              Accept: 'application/json',
+              ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+              ...authHeaders(token),
+            },
+            body: hasBody ? JSON.stringify(options.body) : undefined,
+            signal: options.signal,
+          }),
+        { public: options.public },
+      );
+      const data = await readEnvelope<T>(res);
+      finish({
+        status: res.status,
+        requestId: res.headers.get('X-Request-ID') ?? undefined,
+        bytes: responseBytes(res),
+      });
+      return data;
+    } catch (error) {
+      finishNetwork(finish, error, res, res ? responseBytes(res) : undefined);
+      throw error;
+    }
   }
 
   async function download(path: string, options: { signal?: AbortSignal } = {}): Promise<DownloadResult> {
-    const res = await execute(
-      (token) =>
-        doFetch(`${base}${path}`, {
-          method: 'GET',
-          headers: { ...authHeaders(token) },
-          signal: options.signal,
-        }),
-      {},
-    );
-    if (!res.ok) {
-      await readEnvelope<never>(res);
+    const finish = networkTelemetry.begin('GET', path, 'download');
+    let res: Response | undefined;
+    try {
+      res = await execute(
+        (token) =>
+          doFetch(`${base}${path}`, {
+            method: 'GET',
+            headers: { ...authHeaders(token) },
+            signal: options.signal,
+          }),
+        {},
+      );
+      if (!res.ok) {
+        await readEnvelope<never>(res);
+      }
+      const blob = await res.blob();
+      finish({
+        status: res.status,
+        requestId: res.headers.get('X-Request-ID') ?? undefined,
+        bytes: blob.size,
+      });
+      return { blob, filename: parseContentDispositionFilename(res.headers.get('Content-Disposition')) };
+    } catch (error) {
+      finishNetwork(finish, error, res);
+      throw error;
     }
-    const blob = await res.blob();
-    return { blob, filename: parseContentDispositionFilename(res.headers.get('Content-Disposition')) };
   }
 
   /** 使用 XHR 发送单文件原始字节，以获得上传进度；返回 Response 以复用 envelope 解析。 */
@@ -240,10 +295,15 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
         }
       };
       xhr.onload = () => {
+        const requestId =
+          typeof xhr.getResponseHeader === 'function' ? xhr.getResponseHeader('X-Request-ID') : null;
         resolve(
           new Response(xhr.status === 204 ? null : xhr.responseText, {
             status: xhr.status,
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...(requestId ? { 'X-Request-ID': requestId } : {}),
+            },
           }),
         );
       };
@@ -262,8 +322,22 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
 
   async function uploadBinary<T>(path: string, body: Blob, options: BinaryUploadOptions = {}): Promise<T> {
     const url = `${base}${path}`;
-    const res = await execute((token) => sendBinaryXhr(url, token, body, options), {});
-    return readEnvelope<T>(res);
+    const method = options.method ?? 'PUT';
+    const finish = networkTelemetry.begin(method, path, 'upload');
+    let res: Response | undefined;
+    try {
+      res = await execute((token) => sendBinaryXhr(url, token, body, options), {});
+      const data = await readEnvelope<T>(res);
+      finish({
+        status: res.status,
+        requestId: res.headers.get('X-Request-ID') ?? undefined,
+        bytes: body.size,
+      });
+      return data;
+    } catch (error) {
+      finishNetwork(finish, error, res, body.size);
+      throw error;
+    }
   }
 
   return {

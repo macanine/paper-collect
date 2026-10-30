@@ -905,9 +905,17 @@ func (s *Service) analyzeMaterial(ctx context.Context, analysis *model.MaterialA
 		}
 		// Visual analysis still needs images, which are deliberately not persisted.
 		var ocrProvider model.OCRProvider
+		parseStarted := time.Now()
 		parsed, ocrProvider, err = s.parseWithOCR(ctx, settings, material)
+		parseDuration := time.Since(parseStarted)
 		if err != nil {
 			return analyzeResult{}, err
+		}
+		if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+			s.jobProgressWithMetrics(ctx, job, "文档解析完成", 0, 0, map[string]any{
+				"page_count": parsed.PageCount, "duration_ms": parseDuration.Milliseconds(),
+				"ocr_provider": ocrProvider.Name,
+			})
 		}
 		pages, _ := json.Marshal(parsedPages(parsed))
 		now := s.now()
@@ -996,13 +1004,17 @@ func (s *Service) generateSuggestions(ctx context.Context, markdown, fileName, s
 			messages = buildAnalysisMessages(markdown, fileName, sourcePath, nil)
 		}
 		callCtx, callCancel := context.WithTimeout(ctx, analysisLLMTimeout)
+		callStarted := time.Now()
 		content, err := client.Chat(callCtx, modelName, messages)
+		callDuration := time.Since(callStarted)
 		callCancel()
 		if err != nil {
 			lastErr = err
 			s.logf("analysis provider %s failed: %s", provider.Name, ai.Sanitize(err.Error()))
 			if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
-				s.jobProgress(ctx, job, fmt.Sprintf("第 %d / %d 个模型服务未完成", index+1, len(providers)), index+1, len(providers))
+				s.jobProgressWithMetrics(ctx, job, fmt.Sprintf("第 %d / %d 个模型服务未完成", index+1, len(providers)), index+1, len(providers), map[string]any{
+					"provider": provider.Name, "model": modelName, "duration_ms": callDuration.Milliseconds(),
+				})
 			}
 			continue
 		}
@@ -1010,6 +1022,11 @@ func (s *Service) generateSuggestions(ctx context.Context, markdown, fileName, s
 		if err != nil {
 			lastErr = err
 			continue
+		}
+		if job, ok := ctx.Value(progressJobKey{}).(model.Job); ok {
+			s.jobProgressWithMetrics(ctx, job, fmt.Sprintf("模型 %s 已生成编目建议", provider.Name), index+1, len(providers), map[string]any{
+				"provider": provider.Name, "model": modelName, "duration_ms": callDuration.Milliseconds(),
+			})
 		}
 		return provider.ID, provider.Name, modelName, suggestions, confidence, nil
 	}

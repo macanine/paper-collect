@@ -319,15 +319,21 @@ type Job struct {
 	LeaseOwner      string `gorm:"size:128;index"`
 	LeaseUntil      *time.Time
 	HeartbeatAt     *time.Time
+	StartedAt       *time.Time
+	FinishedAt      *time.Time
+	DurationMS      int64 `gorm:"not null;default:0"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
 
 // JobLog contains only application-generated, non-secret progress information.
 type JobLog struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
+	Time       time.Time      `json:"time"`
+	Level      string         `json:"level"`
+	Message    string         `json:"message"`
+	ElapsedMS  int64          `json:"elapsed_ms,omitempty"`
+	DurationMS int64          `json:"duration_ms,omitempty"`
+	Metrics    map[string]any `json:"metrics,omitempty"`
 }
 
 // JobLock serialises analyze and index work for one material across instances.

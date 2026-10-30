@@ -69,6 +69,37 @@ RapidOCR 首次启动会下载并加载中文模型，健康检查通过后应�
 
 首次保存的 `JWT_SECRET` 与 `MASTER_KEY` 必须保留；更换 `MASTER_KEY` 会导致已保存的云盘、模型和 OCR 凭据无法解密。
 
+### GitHub Actions 镜像发布与云端部署
+
+`.github/workflows/ci.yml` 在 Pull Request 和 `main` 分支执行后端测试/vet、前端测试/typecheck/build，并校验本地与生产 Compose。`.github/workflows/docker.yml` 在 `main`、`v*` 标签和手动触发时构建并推送两个 GHCR 镜像：
+
+- `ghcr.io/<owner>/<repo>:sha-<commit>`
+- `ghcr.io/<owner>/<repo>-rapidocr:sha-<commit>`
+
+手动运行 `Docker Build and Deploy` 并勾选 `deploy` 后，工作流会通过 SSH 上传 `deploy/docker-compose.prod.yml`、网关配置和部署脚本，在远端拉取同一提交的镜像、运行迁移、更新两个应用实例，并以网关健康检查作为成功条件；失败会恢复上一版镜像。云端目录只需预先创建 `.env`，工作流不会覆盖其中的口令、密钥和其他配置。
+
+首次部署前，在 GitHub 仓库的 `production` Environment 或 Actions Secrets 中配置：
+
+| Secret | 说明 |
+| --- | --- |
+| `DEPLOY_HOST` | 云端 SSH 地址 |
+| `DEPLOY_USER` | 具备 Docker/Compose 权限的 SSH 用户 |
+| `DEPLOY_PATH` | 云端绝对路径，例如 `/opt/paper-collect` |
+| `DEPLOY_SSH_KEY` | SSH 私钥 |
+| `DEPLOY_KNOWN_HOSTS` | `ssh-keyscan -H <host>` 的完整输出 |
+| `GHCR_USERNAME` | 可读取 GHCR 包的 GitHub 用户名 |
+| `GHCR_READ_TOKEN` | 具备 `read:packages` 的 PAT |
+
+云端主机只需安装 Docker Engine 与 Compose 插件，并准备部署目录和 `.env`：
+
+```bash
+sudo install -d -o "$USER" -g "$USER" /opt/paper-collect
+cp .env.example /opt/paper-collect/.env
+# 编辑 /opt/paper-collect/.env，设置 ADMIN_PASSWORD、JWT_SECRET、MASTER_KEY 和 POSTGRES_PASSWORD
+```
+
+之后在 GitHub Actions 手动触发 `Docker Build and Deploy`。本地开发仍使用根目录 `docker-compose.yml` 从源码构建；云端使用 `deploy/docker-compose.prod.yml` 中固定的镜像标签，不在服务器上编译。
+
 ## 配置
 
 | 变量 | 默认 | 说明 |
@@ -138,6 +169,13 @@ ZIP 内的 PDF、DOC、DOCX、PPTX 和嵌套 ZIP 成员独立归档；其他格�
 - 索引（默认启用）：仅角色为“试卷”或“试卷+答案”的资料会自动入队 `index` 任务；AI 识别应用角色或人工修改角色后也会同步入队/清理，关闭索引期间归档的试卷资料会在重新启用后由启动补建。OCR 只取逐页文本，LLM 默认每批 10 页/12000 字（可配置）完成 OCR 纠错与切题并标注页码；长页按段落切块，输出截断时自动对半拆批。题目保存完整题干（含选项/小问），纯文本倒排检索。
 - 资料详情「题目索引」可查看页码/题目/置信度；有资料写权限的用户可重建索引。
 - 索引失败不影响归档与下载；重建失败时旧索引仍可查，搜索只返回已有题目且资料状态为 `archived`/`degraded` 的记录。
+
+## 观测与数据下钻
+
+- 顶栏「网络」会在当前浏览器会话内采集最近的 API、下载和上传：P95/平均/中位延迟、成功率、累计传输量、在途请求、每次请求的耗时、响应大小和 request ID。采样只存在内存，不记录正文、凭据或查询参数；「清空」会重置历史聚合。
+- 后端对每个 `/api/*` 与 `/mcp` 请求输出 `method/path/status/duration_ms/response_bytes/request_id`，可用于把页面上的 request ID 与运行日志直接对应。查询参数、请求体和响应正文不写入该日志。
+- 仪表盘统计卡可进入对应资料或任务筛选；资料详情可跳到所在合集、相关任务、同内容资料和存储端点，合集与任务列表也保留反向查询。
+- 内容指纹只用于 Blob 去重：相同文件不会重复占用存储，但不同文件名/归档来源仍是独立逻辑资料。资料详情可直接查看所有同 SHA-256 的逻辑资料。
 
 ## 鉴权
 

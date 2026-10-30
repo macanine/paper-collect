@@ -55,9 +55,10 @@ const maxCycleDepth = 10000
 // CollectionFilter narrows a collection list. ParentID and RootsOnly are
 // mutually exclusive; RootsOnly lists top-level collections only.
 type CollectionFilter struct {
-	Q         string
-	ParentID  string
-	RootsOnly bool
+	Q          string
+	ParentID   string
+	RootsOnly  bool
+	MaterialID string
 }
 
 // ListCollections returns paginated collections, newest first.
@@ -73,6 +74,10 @@ func (s *Service) ListCollections(ctx context.Context, f CollectionFilter, pg Pa
 			tx = tx.Where("parent_id = ?", f.ParentID)
 		} else if f.RootsOnly {
 			tx = tx.Where("parent_id = ?", "")
+		}
+		if f.MaterialID != "" {
+			itemIDs := db.Model(&model.CollectionItem{}).Select("collection_id").Where("material_id = ?", f.MaterialID)
+			tx = tx.Where("id IN (?)", itemIDs)
 		}
 		return tx
 	}

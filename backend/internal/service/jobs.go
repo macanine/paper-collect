@@ -15,8 +15,11 @@ import (
 
 // JobFilter narrows a job list. Empty fields are ignored.
 type JobFilter struct {
-	Status string
-	Kind   string
+	Status     string
+	Kind       string
+	MaterialID string
+	UploadID   string
+	ReplicaID  string
 }
 
 // ListJobs returns jobs newest first.
@@ -35,6 +38,15 @@ func (s *Service) ListJobs(ctx context.Context, f JobFilter, pg PageQuery) (Page
 		}
 		if f.Kind != "" {
 			tx = tx.Where("kind = ?", f.Kind)
+		}
+		if f.MaterialID != "" {
+			tx = tx.Where("material_id = ?", f.MaterialID)
+		}
+		if f.UploadID != "" {
+			tx = tx.Where("upload_id = ?", f.UploadID)
+		}
+		if f.ReplicaID != "" {
+			tx = tx.Where("replica_id = ?", f.ReplicaID)
 		}
 		return tx
 	}
@@ -128,6 +140,7 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 		}
 		if err := tx.Model(&model.Job{}).Where("id = ?", job.ID).
 			Updates(map[string]any{"status": model.JobPending, "error": "", "progress_message": "已重新排队，等待执行", "progress_current": 0, "progress_total": 0,
+				"started_at": nil, "finished_at": nil, "duration_ms": 0,
 				"log_json": appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: "info", Message: "已重新排队，等待执行"}), "updated_at": now}).Error; err != nil {
 			return err
 		}
@@ -360,6 +373,9 @@ func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error
 			"lease_owner":      s.worker.InstanceID,
 			"lease_until":      until,
 			"heartbeat_at":     now,
+			"started_at":       now,
+			"finished_at":      nil,
+			"duration_ms":      0,
 			"updated_at":       now,
 		})
 	if res.Error != nil {
@@ -373,6 +389,9 @@ func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error
 	job.LeaseOwner = s.worker.InstanceID
 	job.LeaseUntil = &until
 	job.HeartbeatAt = &now
+	job.StartedAt = &now
+	job.FinishedAt = nil
+	job.DurationMS = 0
 	job.UpdatedAt = now
 	*claimed = job
 	return nil
@@ -525,8 +544,20 @@ func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string)
 	now := s.now()
 	message = redact(message)
 	var job model.Job
-	if err := tx.Select("id", "log_json").Where("id = ?", jobID).First(&job).Error; err != nil {
+	if err := tx.Select("id", "log_json", "started_at").Where("id = ?", jobID).First(&job).Error; err != nil {
 		return err
+	}
+	durationMS := int64(0)
+	if job.StartedAt != nil && !job.StartedAt.IsZero() {
+		durationMS = now.Sub(*job.StartedAt).Milliseconds()
+		if durationMS < 0 {
+			durationMS = 0
+		}
+	}
+	var finishedAt any = now
+	if status == model.JobPending {
+		finishedAt = nil
+		durationMS = 0
 	}
 	progress, level := "处理完成", "info"
 	if status == model.JobFailed {
@@ -540,8 +571,10 @@ func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string)
 		Updates(map[string]any{
 			"status": status, "error": message, "lease_owner": "",
 			"lease_until": nil, "heartbeat_at": nil, "updated_at": now,
+			"finished_at":      finishedAt,
+			"duration_ms":      durationMS,
 			"progress_message": progress,
-			"log_json":         appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: level, Message: progress}),
+			"log_json":         appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: level, Message: progress, DurationMS: durationMS}),
 		})
 	if res.Error != nil {
 		return res.Error
@@ -569,6 +602,12 @@ func appendJobLog(raw string, entry model.JobLog) string {
 
 // jobProgress only accepts fixed, application-generated messages; never pass secrets or URLs.
 func (s *Service) jobProgress(ctx context.Context, job model.Job, message string, current, total int) {
+	s.jobProgressWithMetrics(ctx, job, message, current, total, nil)
+}
+
+// jobProgressWithMetrics stores bounded, non-secret timing and transfer facts so
+// the UI can explain what the worker actually measured.
+func (s *Service) jobProgressWithMetrics(ctx context.Context, job model.Job, message string, current, total int, metrics map[string]any) {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
 			return err
@@ -578,9 +617,18 @@ func (s *Service) jobProgress(ctx context.Context, job model.Job, message string
 			return err
 		}
 		now := s.now()
+		elapsedMS := int64(0)
+		if job.StartedAt != nil && !job.StartedAt.IsZero() {
+			elapsedMS = now.Sub(*job.StartedAt).Milliseconds()
+			if elapsedMS < 0 {
+				elapsedMS = 0
+			}
+		}
 		return tx.Model(&model.Job{}).Where("id = ? AND status = ? AND lease_owner = ?", job.ID, model.JobRunning, job.LeaseOwner).
 			Updates(map[string]any{"progress_message": message, "progress_current": current, "progress_total": total,
-				"log_json": appendJobLog(latest.LogJSON, model.JobLog{Time: now, Level: "info", Message: message}), "updated_at": now}).Error
+				"log_json": appendJobLog(latest.LogJSON, model.JobLog{
+					Time: now, Level: "info", Message: message, ElapsedMS: elapsedMS, Metrics: metrics,
+				}), "updated_at": now}).Error
 	})
 	if err != nil && !errors.Is(err, errLeaseLost) && ctx.Err() == nil {
 		s.logf("record job progress failed")

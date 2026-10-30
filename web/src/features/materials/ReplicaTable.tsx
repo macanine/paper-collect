@@ -1,5 +1,6 @@
 import { Button, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { Link } from 'react-router';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { ReplicaStatusTag, ShareStatusTag, VerificationTag } from '../../shared/ui/StatusTags';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
@@ -24,7 +25,7 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
         if (!provider) {
           return <span className="text-slate-500">存储端点</span>;
         }
-        return <span>{provider.name}</span>;
+        return <Link to={`/storage?provider=${provider.id}`}>{provider.name}</Link>;
       },
     },
     {
@@ -86,6 +87,12 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       },
     },
     {
+      title: '任务',
+      key: 'job',
+      width: 100,
+      render: (_: unknown, record) => <Link to={`/jobs?replica_id=${record.id}`}>复制任务</Link>,
+    },
+    {
       title: '更新时间',
       dataIndex: 'updated_at',
       key: 'updated_at',
@@ -121,7 +128,7 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       columns={columns}
       dataSource={replicas}
       pagination={false}
-      scroll={{ x: 1100 }}
+      scroll={{ x: 1200 }}
       locale={{ emptyText: '暂无副本' }}
     />
   );

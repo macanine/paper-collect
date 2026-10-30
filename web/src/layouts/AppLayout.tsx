@@ -17,13 +17,13 @@ import {
   LogoutOutlined,
   MenuOutlined,
   RobotOutlined,
-  SafetyCertificateOutlined,
   SearchOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../features/auth/AuthContext';
 import type { Scope } from '../shared/api/types';
 import { USER_ROLE_LABELS } from '../shared/lib/labels';
+import { NetworkActivity } from '../shared/ui/NetworkActivity';
 import { FullPageLoading, LoadingState } from '../shared/ui/States';
 
 interface NavigationItem {
@@ -37,7 +37,6 @@ interface NavigationItem {
 interface NavigationSection {
   key: string;
   label: string;
-  index: string;
   items: NavigationItem[];
 }
 
@@ -45,7 +44,6 @@ const NAVIGATION: NavigationSection[] = [
   {
     key: 'workspace',
     label: '资料工作台',
-    index: '01',
     items: [
       { key: '/', path: '/', label: '仪表盘', icon: <DashboardOutlined /> },
       { key: '/search', path: '/search', label: '搜题', icon: <SearchOutlined />, scope: 'materials:read' },
@@ -58,13 +56,11 @@ const NAVIGATION: NavigationSection[] = [
   {
     key: 'infrastructure',
     label: '存储与运行',
-    index: '02',
     items: [{ key: '/storage', path: '/storage', label: '存储端点', icon: <CloudServerOutlined />, scope: 'storage:read' }],
   },
   {
     key: 'system',
     label: '系统管理',
-    index: '03',
     items: [
       { key: '/admin/ai-models', path: '/admin/ai-models', label: 'AI 模型', icon: <RobotOutlined />, scope: 'ai:read' },
       { key: '/admin/ai-settings', path: '/admin/ai-settings', label: 'AI 解析', icon: <ExperimentOutlined />, scope: 'ai:read' },
@@ -127,10 +123,7 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
       <nav className="app-nav" aria-label="主导航">
         {sections.map((section) => (
           <section key={section.key} className="app-nav__section">
-            <div className="app-nav__heading">
-              <span>{section.label}</span>
-              <span>{section.index}</span>
-            </div>
+            <div className="app-nav__heading">{section.label}</div>
             <div className="app-nav__items">
               {section.items.map((item) => {
                 const active = item.key === activeKey;
@@ -152,10 +145,6 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
           </section>
         ))}
       </nav>
-      <div className="app-sidebar__footer">
-        <SafetyCertificateOutlined className="app-sidebar__footer-icon" />
-        <span>相同资料自动去重归档</span>
-      </div>
     </div>
   );
 }
@@ -177,6 +166,11 @@ function AuthenticatedAppLayout() {
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const current = detail ?? activeItem?.label ?? '管理台';
+    document.title = `${current} · 高中资料归档`;
+  }, [activeItem?.label, detail]);
 
   const handleLogout = async () => {
     try {
@@ -231,7 +225,7 @@ function AuthenticatedAppLayout() {
               <MenuOutlined />
             </button>
             <nav className="app-breadcrumb" aria-label="当前位置">
-              <span className="app-breadcrumb__root">资料库</span>
+              <span className="app-breadcrumb__root">工作台</span>
               <span className="app-breadcrumb__separator" aria-hidden="true">
                 /
               </span>
@@ -248,6 +242,7 @@ function AuthenticatedAppLayout() {
           </div>
 
           <div className="app-header__actions">
+            <NetworkActivity />
             {can('materials:read') ? (
               <Link to="/search" className="app-header__search">
                 <SearchOutlined />

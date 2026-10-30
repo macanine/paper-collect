@@ -5,8 +5,9 @@ import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
 import type { Job, JobStatus, Upload } from '../../shared/api/types';
-import { formatBytes } from '../../shared/lib/format';
+import { formatBytes, formatDuration, formatRate } from '../../shared/lib/format';
 import { UPLOAD_STATUS_LABELS } from '../../shared/lib/labels';
+import { useCompactViewport } from '../../shared/lib/useCompactViewport';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { JobStatusTag, UploadStatusTag } from '../../shared/ui/StatusTags';
@@ -44,6 +45,7 @@ const ROW_STATUS: Record<RowStatus, { color: string; text: string }> = {
 
 function UploadSessionPanel({ upload }: { upload: Upload }) {
   const { can } = useAuth();
+  const compact = useCompactViewport();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const transfer = useUploadTransfer(upload);
@@ -51,11 +53,26 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
   const job = useJob(upload.job_id);
   const [resumeRequested, setResumeRequested] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [transferSpeed, setTransferSpeed] = useState(0);
   const autoSubmitted = useRef(false);
+  const speedSample = useRef({ bytes: 0, at: Date.now() });
 
   const isSubmitted = upload.job_id !== '';
   const canTransfer = upload.status === 'pending' && !isSubmitted;
   const { stats, rows, running } = transfer;
+
+  useEffect(() => {
+    const now = Date.now();
+    const previous = speedSample.current;
+    const deltaBytes = stats.doneBytes - previous.bytes;
+    const elapsed = now - previous.at;
+    if (running && deltaBytes > 0 && elapsed > 0) {
+      setTransferSpeed(deltaBytes / (elapsed / 1000));
+    } else if (!running) {
+      setTransferSpeed(0);
+    }
+    speedSample.current = { bytes: stats.doneBytes, at: now };
+  }, [running, stats.doneBytes]);
 
   useEffect(() => {
     if (resumeRequested && !running) {
@@ -107,8 +124,17 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
   };
 
   const percent = stats.totalBytes > 0 ? Math.round((stats.doneBytes / stats.totalBytes) * 100) : 0;
+  const remainingBytes = Math.max(0, stats.totalBytes - stats.doneBytes);
+  const etaMs = transferSpeed > 0 ? (remainingBytes / transferSpeed) * 1000 : undefined;
 
-  const columns: ColumnsType<TransferRow> = [
+  const retryRow = (row: TransferRow) =>
+    row.status === 'failed' && !running && canTransfer ? (
+      <Button size="small" onClick={() => transfer.start([row.entry.id])}>
+        重试
+      </Button>
+    ) : null;
+
+  const desktopColumns: ColumnsType<TransferRow> = [
     {
       title: '相对路径',
       key: 'path',
@@ -148,15 +174,37 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
             title: '',
             key: 'actions',
             width: 80,
-            render: (_: unknown, row: TransferRow) =>
-              row.status === 'failed' && !running && canTransfer ? (
-                <Button size="small" onClick={() => transfer.start([row.entry.id])}>
-                  重试
-                </Button>
-              ) : null,
+            render: (_: unknown, row: TransferRow) => retryRow(row),
           },
         ]
       : []),
+  ];
+
+  const compactColumns: ColumnsType<TransferRow> = [
+    {
+      title: '文件',
+      key: 'summary',
+      render: (_: unknown, row) => {
+        const size = row.entry.size_bytes;
+        const value = size > 0 ? Math.min(100, Math.round((row.loaded / size) * 100)) : 0;
+        return (
+          <div className="compact-entity">
+            <span className="compact-entity__title break-all">{row.entry.relative_path}</span>
+            <div className="compact-entity__tags">
+              <Tag color={ROW_STATUS[row.status].color}>{ROW_STATUS[row.status].text}</Tag>
+              <span className="table-subtext">{formatBytes(size)}</span>
+              {retryRow(row)}
+            </div>
+            {row.status === 'missing-file' ? (
+              <span className="compact-entity__error">需要重新选择原文件后才能继续</span>
+            ) : (
+              <Progress percent={row.status === 'received' ? 100 : value} size="small" />
+            )}
+            {row.error ? <span className="compact-entity__error">{row.error}</span> : null}
+          </div>
+        );
+      },
+    },
   ];
 
   return (
@@ -196,9 +244,11 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
       />
 
       <Card>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
           <Statistic title="已接收" value={stats.receivedCount} suffix={`/ ${stats.total}`} />
           <Statistic title="已传输" value={formatBytes(stats.doneBytes)} />
+          <Statistic title="实时速度" value={formatRate(transferSpeed)} />
+          <Statistic title="预计剩余" value={etaMs === undefined ? '—' : formatDuration(etaMs)} />
           <Statistic title="失败" value={stats.failedCount} />
           <Statistic title="待重新选择" value={stats.missingCount} />
         </div>
@@ -235,10 +285,17 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
         <Table<TransferRow>
           rowKey={(row) => row.entry.id}
           size="small"
-          columns={columns}
+          className={compact ? 'compact-list-table' : undefined}
+          columns={compact ? compactColumns : desktopColumns}
           dataSource={rows}
-          pagination={{ pageSize: 50, showSizeChanger: false, showTotal: (total) => `共 ${total} 个文件` }}
-          scroll={{ x: 900 }}
+          showHeader={!compact}
+          pagination={{
+            pageSize: 50,
+            showSizeChanger: false,
+            simple: compact,
+            showTotal: (total) => `共 ${total} 个文件`,
+          }}
+          scroll={compact ? undefined : { x: 900 }}
         />
       </Card>
     </div>

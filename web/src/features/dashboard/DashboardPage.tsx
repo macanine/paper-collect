@@ -3,6 +3,7 @@ import { Alert, Button, Card, Space, Statistic, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   AppstoreOutlined,
+  ArrowRightOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloudServerOutlined,
@@ -14,7 +15,7 @@ import {
 import { Link } from 'react-router';
 import type { Job, Material } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
-import { STORAGE_MODE_LABELS } from '../../shared/lib/labels';
+import { JOB_KIND_LABELS, STORAGE_MODE_LABELS } from '../../shared/lib/labels';
 import { usePolicy, useProviders } from '../storage/queries';
 import { InlineError } from '../../shared/ui/States';
 import { JobKindTag, JobStatusTag, MaterialStatusTag } from '../../shared/ui/StatusTags';
@@ -83,9 +84,12 @@ export function DashboardPage() {
       title: '资料',
       key: 'title',
       render: (_: unknown, record) => (
-        <Link to={`/materials/${record.id}`} className="truncate font-medium">
-          {record.title}
-        </Link>
+        <div className="cell-stack">
+          <Link to={`/materials/${record.id}`} className="truncate font-medium">
+            {record.title}
+          </Link>
+          <span className="table-subtext">{record.file_name}</span>
+        </div>
       ),
     },
     {
@@ -109,11 +113,11 @@ export function DashboardPage() {
       title: '任务',
       key: 'job',
       render: (_: unknown, record) => (
-        <div className="flex items-center gap-2">
-          <Link to={`/jobs/${record.id}`}>
-            查看详情
-          </Link>
+        <div className="flex min-w-0 items-center gap-2">
           <JobKindTag kind={record.kind} />
+          <Link to={`/jobs/${record.id}`} className="truncate">
+            {record.progress_message || JOB_KIND_LABELS[record.kind]}
+          </Link>
         </div>
       ),
     },
@@ -189,6 +193,7 @@ export function DashboardPage() {
               loading={materialStats.isPending}
               icon={<FileTextOutlined />}
               footer="全部逻辑文件"
+              to="/materials"
             />
             {MATERIAL_COUNT_ITEMS.map((item) => (
               <CountCard
@@ -213,6 +218,7 @@ export function DashboardPage() {
                       : '部分副本不可用'
                 }
                 loading={materialStats.isPending}
+                to={`/materials?status=${item.key}`}
               />
             ))}
           </div>
@@ -226,10 +232,10 @@ export function DashboardPage() {
             <span className="section-heading__meta">后台 worker 运行状态</span>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <CountCard title="排队中" value={jobStats.data?.pending} icon={<ClockCircleOutlined />} footer="等待 worker 领取" loading={jobStats.isPending} />
-            <CountCard title="执行中" value={jobStats.data?.running} icon={<ReloadOutlined />} footer="正在处理" loading={jobStats.isPending} />
-            <CountCard title="失败" value={jobStats.data?.failed} icon={<ExclamationCircleOutlined />} tone="error" footer="需要人工检查" loading={jobStats.isPending} />
-            <CountCard title="已完成" value={jobStats.data?.succeeded} icon={<CheckCircleOutlined />} tone="success" footer="累计成功任务" loading={jobStats.isPending} />
+            <CountCard title="排队中" value={jobStats.data?.pending} icon={<ClockCircleOutlined />} footer="等待 worker 领取" loading={jobStats.isPending} to="/jobs?status=pending" />
+            <CountCard title="执行中" value={jobStats.data?.running} icon={<ReloadOutlined />} footer="正在处理" loading={jobStats.isPending} to="/jobs?status=running" />
+            <CountCard title="失败" value={jobStats.data?.failed} icon={<ExclamationCircleOutlined />} tone="error" footer="需要人工检查" loading={jobStats.isPending} to="/jobs?status=failed" />
+            <CountCard title="已完成" value={jobStats.data?.succeeded} icon={<CheckCircleOutlined />} tone="success" footer="累计成功任务" loading={jobStats.isPending} to="/jobs?status=succeeded" />
           </div>
         </section>
       ) : null}
@@ -336,6 +342,7 @@ function CountCard({
   icon,
   tone = 'primary',
   footer,
+  to,
 }: {
   title: string;
   value: number | string | undefined;
@@ -343,15 +350,21 @@ function CountCard({
   icon?: ReactNode;
   tone?: 'primary' | 'success' | 'warning' | 'error';
   footer?: string;
+  to: string;
 }) {
   return (
-    <Card className="metric-card" loading={loading}>
-      <div className="metric-card__top">
-        <span className="metric-card__label">{title}</span>
-        {icon ? <span className={`metric-card__icon is-${tone}`}>{icon}</span> : null}
-      </div>
-      <div className="metric-card__value">{value ?? '—'}</div>
-      {footer ? <div className="metric-card__footer">{footer}</div> : null}
-    </Card>
+    <Link to={to} className="metric-card-link" aria-label={`${title}，查看详情`}>
+      <Card className="metric-card" loading={loading}>
+        <div className="metric-card__top">
+          <span className="metric-card__label">{title}</span>
+          {icon ? <span className={`metric-card__icon is-${tone}`}>{icon}</span> : null}
+        </div>
+        <div className="metric-card__value">{value ?? '—'}</div>
+        <div className="metric-card__footer">
+          <span>{footer}</span>
+          <ArrowRightOutlined />
+        </div>
+      </Card>
+    </Link>
   );
 }

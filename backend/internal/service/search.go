@@ -206,7 +206,9 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 	_ = db.Model(&model.MaterialIndexState{}).Where("material_id = ?", material.ID).
 		Updates(map[string]any{"status": "running", "job_id": job.ID, "error": "", "updated_at": s.now()}).Error
 
+	loadStarted := time.Now()
 	pages, err := s.loadIndexPages(context.WithValue(ctx, progressJobKey{}, job), material, settings)
+	loadDuration := time.Since(loadStarted)
 	originalPageCount := len(pages)
 	if err == nil {
 		pages = splitLongPages(pages, settings.BatchChars/2)
@@ -221,8 +223,12 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 		s.failIndex(job.ID, job.LeaseOwner, material.ID, err.Error())
 		return
 	}
-	s.jobProgress(ctx, job, fmt.Sprintf("已读取 %d 页，正在识别题目", originalPageCount), 0, 0)
+	s.jobProgressWithMetrics(ctx, job, fmt.Sprintf("已读取 %d 页，正在识别题目", originalPageCount), 0, 0, map[string]any{
+		"page_count": originalPageCount, "duration_ms": loadDuration.Milliseconds(),
+	})
+	segmentStarted := time.Now()
 	questions, calls, failedBatches, err := s.segmentQuestions(context.WithValue(ctx, progressJobKey{}, job), provider, modelName, pages, settings)
+	segmentDuration := time.Since(segmentStarted)
 	if err != nil {
 		s.logf("index %s: segmentation: %v (calls=%d failed=%d)", material.ID, err, calls, failedBatches)
 		s.failIndex(job.ID, job.LeaseOwner, material.ID, indexErrorText(err), map[string]any{
@@ -231,7 +237,10 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 		return
 	}
 
-	s.jobProgress(ctx, job, fmt.Sprintf("已识别 %d 道题，正在建立搜索索引", len(questions)), len(questions), len(questions))
+	s.jobProgressWithMetrics(ctx, job, fmt.Sprintf("已识别 %d 道题，正在建立搜索索引", len(questions)), len(questions), len(questions), map[string]any{
+		"question_count": len(questions), "llm_calls": calls, "failed_batches": failedBatches,
+		"duration_ms": segmentDuration.Milliseconds(), "model": modelName, "provider": provider.Name,
+	})
 	now := s.now()
 	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {

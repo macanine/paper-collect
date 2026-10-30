@@ -7,6 +7,9 @@ export type JobListParams = {
   page_size: number;
   status?: JobStatus | '';
   kind?: JobKind | '';
+  material_id?: string;
+  upload_id?: string;
+  replica_id?: string;
 };
 
 export function listJobs(params: JobListParams, signal?: AbortSignal): Promise<Page<Job>> {

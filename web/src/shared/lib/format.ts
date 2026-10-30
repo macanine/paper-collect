@@ -11,6 +11,34 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / GIB).toFixed(2)} GB`;
 }
 
+/** 格式化后台任务耗时，保留用户能感知的精度。 */
+export function formatDuration(milliseconds: number | null | undefined): string {
+  if (milliseconds === null || milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds < 0) {
+    return '—';
+  }
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  const seconds = milliseconds / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.floor(seconds % 60);
+  if (minutes < 60) return `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+/** 格式化网络或磁盘吞吐。 */
+export function formatRate(bytesPerSecond: number | null | undefined): string {
+  if (
+    bytesPerSecond === null ||
+    bytesPerSecond === undefined ||
+    !Number.isFinite(bytesPerSecond) ||
+    bytesPerSecond < 0
+  ) {
+    return '—';
+  }
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
 const dateTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric',
   month: '2-digit',

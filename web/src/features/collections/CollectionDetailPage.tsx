@@ -82,7 +82,7 @@ export function CollectionDetailPage() {
       <Card title="合集信息">
         <Descriptions
           size="small"
-          column={{ xs: 1, md: 2 }}
+          column={{ xs: 1, sm: 1, md: 2 }}
           items={[
             { key: 'kind', label: '类型', children: <CollectionKindTag kind={collection.kind} /> },
             {

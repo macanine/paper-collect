@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { Alert, Button, Empty, Result, Spin } from 'antd';
+import { Alert, Button, Empty, Result, Spin, Typography } from 'antd';
 import { Link } from 'react-router';
-import { describeError } from '../api/errors';
+import { describeError, isApiError } from '../api/errors';
+import { CopyButton } from './CopyButton';
 
 export function LoadingState() {
   return (
@@ -20,12 +21,28 @@ export function EmptyState({ description = '暂无数据', action }: { descripti
 }
 
 export function ErrorState({ error, onRetry, title = '加载失败' }: { error: unknown; onRetry?: () => void; title?: string }) {
-  const { title: message } = describeError(error);
+  const { title: message, requestId } = describeError(error);
+  const code = isApiError(error) ? error.code : undefined;
   return (
     <Result
       status="error"
       title={title}
-      subTitle={message}
+      subTitle={
+        <div className="error-diagnostic">
+          <span>{message}</span>
+          {code || requestId ? (
+            <span className="error-diagnostic__meta">
+              {code ? <Typography.Text code>{code}</Typography.Text> : null}
+              {requestId ? (
+                <>
+                  <span>请求 ID {requestId}</span>
+                  <CopyButton value={requestId} label="复制" />
+                </>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+      }
       extra={
         onRetry ? (
           <Button type="primary" onClick={onRetry}>

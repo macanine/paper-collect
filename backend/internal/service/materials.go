@@ -21,13 +21,15 @@ type MaterialFilter struct {
 	Role    string
 	Status  string
 	Grade   string
+	SHA256  string
 }
 
 // MaterialView is a material with its subject codes and, for detail views, its replicas.
 type MaterialView struct {
-	Material model.Material
-	Subjects []string
-	Replicas []model.Replica
+	Material    model.Material
+	Subjects    []string
+	Replicas    []model.Replica
+	Collections []model.Collection
 }
 
 // MaterialPatch is a partial update. Nil means "leave unchanged".
@@ -64,6 +66,9 @@ func (s *Service) materialQuery(db *gorm.DB, f MaterialFilter) *gorm.DB {
 	}
 	if f.Grade != "" {
 		q = q.Where("grade = ?", f.Grade)
+	}
+	if f.SHA256 != "" {
+		q = q.Where("sha256 = ?", f.SHA256)
 	}
 	return q
 }
@@ -112,7 +117,19 @@ func (s *Service) GetMaterial(ctx context.Context, id string) (MaterialView, err
 	if err := db.Where("blob_id = ?", m.BlobID).Order("created_at ASC").Order("id ASC").Find(&reps).Error; err != nil {
 		return MaterialView{}, wrap("load replicas", err)
 	}
-	return MaterialView{Material: m, Subjects: subjects[m.ID], Replicas: reps}, nil
+	var collectionIDs []string
+	if err := db.Model(&model.CollectionItem{}).Where("material_id = ?", m.ID).
+		Order("collection_id ASC").Pluck("collection_id", &collectionIDs).Error; err != nil {
+		return MaterialView{}, wrap("load material collections", err)
+	}
+	collections := []model.Collection{}
+	if len(collectionIDs) > 0 {
+		if err := db.Where("id IN ?", collectionIDs).Order("created_at DESC").Order("id DESC").
+			Find(&collections).Error; err != nil {
+			return MaterialView{}, wrap("load collections", err)
+		}
+	}
+	return MaterialView{Material: m, Subjects: subjects[m.ID], Replicas: reps, Collections: collections}, nil
 }
 
 // UpdateMaterial applies a partial update. Blob, hash, source path and status are not editable.

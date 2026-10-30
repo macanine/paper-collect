@@ -160,6 +160,7 @@ export interface Replica {
 
 export interface MaterialDetail extends Material {
   replicas: Replica[];
+  collections: Collection[];
 }
 
 export interface MaterialUpdate {
@@ -233,7 +234,17 @@ export interface Job {
   progress_message: string;
   progress_current: number;
   progress_total: number;
-  logs?: { time: string; level: 'info' | 'error'; message: string }[];
+  logs?: {
+    time: string;
+    level: 'info' | 'error';
+    message: string;
+    elapsed_ms?: number;
+    duration_ms?: number;
+    metrics?: Record<string, string | number | boolean>;
+  }[];
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number;
   created_at: string;
   updated_at: string;
 }

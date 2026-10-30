@@ -164,7 +164,8 @@ func (s *Service) RecoverExpiredLeases(ctx context.Context) (int, error) {
 				ids, model.JobRunning, now).
 			Updates(map[string]any{
 				"status": model.JobPending, "lease_owner": "", "lease_until": nil,
-				"heartbeat_at": nil, "progress_message": "任务中断，已重新排队", "progress_current": 0, "progress_total": 0, "updated_at": now,
+				"heartbeat_at": nil, "started_at": nil, "finished_at": nil, "duration_ms": 0,
+				"progress_message": "任务中断，已重新排队", "progress_current": 0, "progress_total": 0, "updated_at": now,
 			})
 		if res.Error != nil {
 			return wrap("recover jobs", res.Error)
@@ -191,7 +192,8 @@ func (s *Service) recoverJobs(db *gorm.DB, now time.Time) error {
 		if err := tx.Model(&model.Job{}).Where("id IN ?", ids).
 			Updates(map[string]any{
 				"status": model.JobPending, "lease_owner": "", "lease_until": nil,
-				"heartbeat_at": nil, "progress_message": "任务中断，已重新排队", "progress_current": 0, "progress_total": 0, "updated_at": now,
+				"heartbeat_at": nil, "started_at": nil, "finished_at": nil, "duration_ms": 0,
+				"progress_message": "任务中断，已重新排队", "progress_current": 0, "progress_total": 0, "updated_at": now,
 			}).Error; err != nil {
 			return wrap("recover jobs", err)
 		}

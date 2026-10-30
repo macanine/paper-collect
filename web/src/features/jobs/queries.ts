@@ -14,10 +14,11 @@ export function isTerminal(job: Pick<Job, 'status'> | undefined): boolean {
   return job?.status === 'succeeded' || job?.status === 'failed';
 }
 
-export function useJobsList(params: JobListParams) {
+export function useJobsList(params: JobListParams, enabled = true) {
   return useQuery({
     queryKey: jobKeys.list(params),
     queryFn: ({ signal }) => listJobs(params, signal),
+    enabled,
     placeholderData: keepPreviousData,
     // 列表中存在排队或执行中的任务时定时刷新，结束后自动停止。
     refetchInterval: (query) => {

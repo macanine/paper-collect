@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { CloudUploadOutlined } from '@ant-design/icons';
-import { Button, Card, Input, Select, Table } from 'antd';
+import { ArrowRightOutlined, CloudUploadOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Input, Select, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Link } from 'react-router';
 import { PageHeader } from '../../shared/ui/PageHeader';
@@ -10,15 +10,18 @@ import { useListSearch } from '../../shared/lib/listSearch';
 import { GRADE_LABELS } from '../../shared/lib/labels';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { GRADE_OPTIONS, MATERIAL_STATUS_OPTIONS, ROLE_OPTIONS, SUBJECT_OPTIONS } from '../../shared/lib/options';
+import { useCompactViewport } from '../../shared/lib/useCompactViewport';
 import type { Grade, Material, MaterialStatus, Role, SubjectCode } from '../../shared/api/types';
 import { useAuth } from '../auth/AuthContext';
+import { CopyButton } from '../../shared/ui/CopyButton';
 import { useMaterialsList } from './queries';
 
-const FILTER_KEYS = ['q', 'subject', 'role', 'status', 'grade'] as const;
+const FILTER_KEYS = ['q', 'subject', 'role', 'status', 'grade', 'sha256'] as const;
 type FilterKey = (typeof FILTER_KEYS)[number];
 
 export function MaterialsListPage() {
   const { can } = useAuth();
+  const compact = useCompactViewport();
   const list = useListSearch<FilterKey>(FILTER_KEYS);
   const [qInput, setQInput] = useState(list.filters.q);
   const { setFilters } = list;
@@ -41,11 +44,12 @@ export function MaterialsListPage() {
     role: (list.filters.role as Role) || undefined,
     status: (list.filters.status as MaterialStatus) || undefined,
     grade: (list.filters.grade as Grade) || undefined,
+    sha256: list.filters.sha256 || undefined,
   });
 
   const hasFilters = FILTER_KEYS.some((key) => list.filters[key] !== '');
 
-  const columns: ColumnsType<Material> = [
+  const desktopColumns: ColumnsType<Material> = [
     {
       title: '标题',
       dataIndex: 'title',
@@ -105,9 +109,35 @@ export function MaterialsListPage() {
     },
   ];
 
+  const compactColumns: ColumnsType<Material> = [
+    {
+      title: '资料',
+      key: 'summary',
+      render: (_: unknown, material) => (
+        <Link to={`/materials/${material.id}`} className="compact-entity">
+          <span className="compact-entity__heading">
+            <span className="compact-entity__title">{material.title}</span>
+            <ArrowRightOutlined className="compact-entity__arrow" />
+          </span>
+          <span className="compact-entity__tags">
+            <MaterialStatusTag status={material.status} />
+            <RoleTag role={material.role} />
+            <SubjectTags codes={material.subject_codes} />
+          </span>
+          <span className="compact-entity__meta">
+            <span>{GRADE_LABELS[material.grade]}</span>
+            {material.academic_year > 0 ? <span>{material.academic_year} 学年</span> : null}
+            <span>{formatBytes(material.size_bytes)}</span>
+            <span>{formatDateTime(material.updated_at)}</span>
+          </span>
+        </Link>
+      ),
+    },
+  ];
+
   const clearFilters = () => {
     setQInput('');
-    setFilters({ q: '', subject: '', role: '', status: '', grade: '' });
+    setFilters({ q: '', subject: '', role: '', status: '', grade: '', sha256: '' });
   };
 
   const emptyAction = hasFilters ? (
@@ -177,6 +207,25 @@ export function MaterialsListPage() {
         />
       </div>
 
+      {list.filters.sha256 ? (
+        <Alert
+          type="info"
+          showIcon
+          message="正在查看相同内容指纹的资料"
+          description={
+            <div className="filter-fingerprint">
+              <Typography.Text code className="inline-code-value">{list.filters.sha256}</Typography.Text>
+              <CopyButton value={list.filters.sha256} label="复制指纹" />
+            </div>
+          }
+          action={
+            <Button size="small" onClick={() => setFilters({ sha256: '' })}>
+              清除
+            </Button>
+          }
+        />
+      ) : null}
+
       {query.isError && !query.data ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="资料列表加载失败" />
       ) : (
@@ -184,10 +233,12 @@ export function MaterialsListPage() {
           <Table<Material>
             rowKey="id"
             size="middle"
-            columns={columns}
+            className={compact ? 'compact-list-table' : undefined}
+            columns={compact ? compactColumns : desktopColumns}
             dataSource={query.data?.items ?? []}
             loading={query.isFetching}
-            scroll={{ x: 960 }}
+            showHeader={!compact}
+            scroll={compact ? undefined : { x: 960 }}
             locale={{
               emptyText: query.isPending ? (
                 '正在加载…'
@@ -202,9 +253,10 @@ export function MaterialsListPage() {
               current: list.page,
               pageSize: list.pageSize,
               total: query.data?.total ?? 0,
-              showSizeChanger: true,
+              showSizeChanger: !compact,
               pageSizeOptions: [10, 20, 50, 100],
               showTotal: (total) => `共 ${total} 条`,
+              simple: compact,
               onChange: (page, size) => list.setPage(page, size),
             }}
           />

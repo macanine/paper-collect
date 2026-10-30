@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,6 +56,18 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 			return
 		}
 		filter.Grade = grade
+	}
+	if sha, ok := c.GetQuery("sha256"); ok && sha != "" {
+		value := strings.ToLower(strings.TrimSpace(sha))
+		if len(value) != 64 {
+			respondError(c, apperr.Validation("sha256 必须是 64 位十六进制字符串"))
+			return
+		}
+		if _, err := hex.DecodeString(value); err != nil {
+			respondError(c, apperr.Validation("sha256 必须是 64 位十六进制字符串"))
+			return
+		}
+		filter.SHA256 = value
 	}
 	page, err := s.svc.ListMaterials(c.Request.Context(), filter, pg)
 	if err != nil {

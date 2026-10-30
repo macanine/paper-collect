@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nic/paper-collect/backend/internal/service"
@@ -13,7 +14,13 @@ func (s *Server) handleListJobs(c *gin.Context) {
 		respondError(c, ae)
 		return
 	}
-	filter := service.JobFilter{Status: c.Query("status"), Kind: c.Query("kind")}
+	filter := service.JobFilter{
+		Status:     strings.TrimSpace(c.Query("status")),
+		Kind:       strings.TrimSpace(c.Query("kind")),
+		MaterialID: strings.TrimSpace(c.Query("material_id")),
+		UploadID:   strings.TrimSpace(c.Query("upload_id")),
+		ReplicaID:  strings.TrimSpace(c.Query("replica_id")),
+	}
 	page, err := s.svc.ListJobs(c.Request.Context(), filter, pg)
 	if err != nil {
 		respondError(c, err)

@@ -97,7 +97,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
   return (
     <Card title="AI 识别" extra={extra}>
       <Descriptions
-        column={{ xs: 1, md: 2 }}
+        column={{ xs: 1, sm: 1, md: 2 }}
         size="small"
         items={[
           { key: 'status', label: '状态', children: <Tag color={analysis.status === 'failed' ? 'red' : analysis.status === 'succeeded' ? 'green' : 'blue'}>{analysisStatusCopy(analysis.status, analysis.error)}</Tag> },
@@ -155,7 +155,7 @@ function SuggestionList({ suggestions }: { suggestions: AISuggestions }) {
   if (entries.length === 0) return <Typography.Text>暂无建议</Typography.Text>;
   return (
     <Descriptions
-      column={{ xs: 1, md: 2 }}
+      column={{ xs: 1, sm: 1, md: 2 }}
       size="small"
       items={entries.map((entry, index) => ({ key: String(index), label: entry.label, children: entry.value }))}
     />

@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nic/paper-collect/backend/internal/archive"
@@ -82,6 +83,7 @@ func (s *Service) RunIngest(ctx context.Context, jobID string) {
 
 func (s *Service) ingest(ctx context.Context, job model.Job) error {
 	s.jobProgress(ctx, job, "读取上传清单并检查文件", 0, 0)
+	ingestStarted := time.Now()
 	db := s.db.WithContext(ctx)
 	var up model.Upload
 	if err := db.Where("id = ?", job.UploadID).First(&up).Error; err != nil {
@@ -99,6 +101,7 @@ func (s *Service) ingest(ctx context.Context, job model.Job) error {
 	var top []*plannedMaterial
 	var groups []*zipGroup
 	skipped := 0
+	var totalBytes int64
 	for i, e := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -106,6 +109,7 @@ func (s *Service) ingest(ctx context.Context, job model.Job) error {
 		if e.Status != model.EntryReceived {
 			return &archive.Rejected{Reason: "上传文件尚未全部接收"}
 		}
+		totalBytes += e.SizeBytes
 		if e.MediaType == blob.MediaTypes[blob.KindZIP] {
 			s.jobProgress(ctx, job, fmt.Sprintf("正在检查并展开压缩包（第 %d / %d 个文件）", i+1, len(entries)), i, len(entries))
 			members, skippedMembers, err := s.expandPackage(ctx, job, e)
@@ -142,7 +146,10 @@ func (s *Service) ingest(ctx context.Context, job model.Job) error {
 	if skipped > 0 {
 		s.jobProgress(ctx, job, fmt.Sprintf("压缩包中共有 %d 个不支持的文件，已跳过，未归档", skipped), len(entries), len(entries))
 	}
-	s.jobProgress(ctx, job, fmt.Sprintf("文件检查完成，正在保存资料并安排存储（%d 个文件，%d 个压缩包）", len(entries), len(groups)), len(entries), len(entries))
+	s.jobProgressWithMetrics(ctx, job, fmt.Sprintf("文件检查完成，正在保存资料并安排存储（%d 个文件，%d 个压缩包）", len(entries), len(groups)), len(entries), len(entries), map[string]any{
+		"file_count": len(entries), "archive_count": len(groups), "skipped_count": skipped,
+		"size_bytes": totalBytes, "duration_ms": time.Since(ingestStarted).Milliseconds(),
+	})
 
 	err := db.Transaction(func(tx *gorm.DB) error {
 		return s.publishIngest(tx, job, up, top, groups, staged)

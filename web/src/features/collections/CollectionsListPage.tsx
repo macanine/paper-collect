@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Input, Table } from 'antd';
+import { Alert, Button, Card, Input, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined } from '@ant-design/icons';
-import { Link, useNavigate } from 'react-router';
+import { ArrowRightOutlined, PlusOutlined } from '@ant-design/icons';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import type { Collection, CollectionKind, SubjectCode } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
 import { useListSearch } from '../../shared/lib/listSearch';
+import { useCompactViewport } from '../../shared/lib/useCompactViewport';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { CollectionKindTag, SubjectTags } from '../../shared/ui/StatusTags';
@@ -18,12 +19,15 @@ type FilterKey = (typeof FILTER_KEYS)[number];
 
 export function CollectionsListPage() {
   const { can } = useAuth();
+  const compact = useCompactViewport();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const list = useListSearch<FilterKey>(FILTER_KEYS);
   const { setFilters } = list;
   const [qInput, setQInput] = useState(list.filters.q);
   const [creating, setCreating] = useState(false);
   const canWrite = can('collections:write');
+  const materialId = searchParams.get('material_id') ?? '';
 
   useEffect(() => {
     const trimmed = qInput.trim();
@@ -36,10 +40,11 @@ export function CollectionsListPage() {
     page: list.page,
     page_size: list.pageSize,
     q: list.filters.q || undefined,
-    roots: true,
+    roots: !materialId,
+    material_id: materialId || undefined,
   });
 
-  const columns: ColumnsType<Collection> = [
+  const desktopColumns: ColumnsType<Collection> = [
     {
       title: '合集',
       dataIndex: 'title',
@@ -87,6 +92,33 @@ export function CollectionsListPage() {
     },
   ];
 
+  const compactColumns: ColumnsType<Collection> = [
+    {
+      title: '合集',
+      key: 'summary',
+      render: (_: unknown, collection) => (
+        <div className="compact-entity">
+          <Link to={`/collections/${collection.id}`} className="compact-entity__heading">
+            <span className="compact-entity__title">{collection.title}</span>
+            <ArrowRightOutlined className="compact-entity__arrow" />
+          </Link>
+          <div className="compact-entity__tags">
+            <CollectionKindTag kind={collection.kind} />
+            <SubjectTags codes={collection.subject_codes} />
+          </div>
+          <div className="compact-entity__meta">
+            {collection.parent_id ? (
+              <Link to={`/collections/${collection.parent_id}`}>查看父合集</Link>
+            ) : (
+              <span>顶层合集</span>
+            )}
+            <span>{formatDateTime(collection.updated_at)}</span>
+          </div>
+        </div>
+      ),
+    },
+  ];
+
   const hasFilters = list.filters.q !== '';
 
   return (
@@ -114,6 +146,26 @@ export function CollectionsListPage() {
         />
       </div>
 
+      {materialId ? (
+        <Alert
+          type="info"
+          showIcon
+          message="仅显示包含所选资料的合集"
+          action={
+            <Button
+              size="small"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete('material_id');
+                setSearchParams(next);
+              }}
+            >
+              清除
+            </Button>
+          }
+        />
+      ) : null}
+
       {query.isError && !query.data ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="合集列表加载失败" />
       ) : (
@@ -121,10 +173,12 @@ export function CollectionsListPage() {
           <Table<Collection>
             rowKey="id"
             size="middle"
-            columns={columns}
+            className={compact ? 'compact-list-table' : undefined}
+            columns={compact ? compactColumns : desktopColumns}
             dataSource={query.data?.items ?? []}
             loading={query.isFetching}
-            scroll={{ x: 900 }}
+            showHeader={!compact}
+            scroll={compact ? undefined : { x: 900 }}
             locale={{
               emptyText: query.isPending ? (
                 '正在加载…'
@@ -154,9 +208,10 @@ export function CollectionsListPage() {
               current: list.page,
               pageSize: list.pageSize,
               total: query.data?.total ?? 0,
-              showSizeChanger: true,
+              showSizeChanger: !compact,
               pageSizeOptions: [10, 20, 50, 100],
               showTotal: (total) => `共 ${total} 条`,
+              simple: compact,
               onChange: (page, size) => list.setPage(page, size),
             }}
           />

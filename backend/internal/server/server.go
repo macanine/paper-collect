@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -48,7 +49,7 @@ func New(opts Options) (*Server, error) {
 func (s *Server) Router() *gin.Engine {
 	r := gin.New()
 	s.router = r
-	r.Use(requestIDMiddleware(), recoveryMiddleware())
+	r.Use(requestIDMiddleware(), requestLogMiddleware(), recoveryMiddleware())
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -143,6 +144,32 @@ func requestIDMiddleware() gin.HandlerFunc {
 		c.Set(requestIDKey, id)
 		c.Header("X-Request-ID", id)
 		c.Next()
+	}
+}
+
+// requestLogMiddleware records API/MCP latency and response size without
+// logging query strings, request bodies, credentials or response content.
+func requestLogMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		started := time.Now()
+		c.Next()
+		requestPath := c.Request.URL.Path
+		if requestPath != "/mcp" && !strings.HasPrefix(requestPath, "/api/") {
+			return
+		}
+		size := c.Writer.Size()
+		if size < 0 {
+			size = 0
+		}
+		log.Printf(
+			"http_request method=%s path=%s status=%d duration_ms=%d response_bytes=%d request_id=%s",
+			c.Request.Method,
+			requestPath,
+			c.Writer.Status(),
+			time.Since(started).Milliseconds(),
+			size,
+			requestID(c),
+		)
 	}
 }
 

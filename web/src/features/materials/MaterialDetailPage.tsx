@@ -4,14 +4,16 @@ import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeO
 import { Link, useNavigate, useParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { Replica, StorageProvider } from '../../shared/api/types';
-import { formatBytes, formatDateTime } from '../../shared/lib/format';
+import { formatBytes, formatDateTime, formatDuration } from '../../shared/lib/format';
 import { saveBlob } from '../../shared/lib/download';
-import { GRADE_LABELS } from '../../shared/lib/labels';
+import { COLLECTION_KIND_LABELS, GRADE_LABELS, JOB_KIND_LABELS } from '../../shared/lib/labels';
+import { CopyButton } from '../../shared/ui/CopyButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
-import { MaterialStatusTag, RoleTag, SubjectTags } from '../../shared/ui/StatusTags';
+import { JobKindTag, JobStatusTag, MaterialStatusTag, RoleTag, SubjectTags } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { AnalysisPanel } from '../ai/AnalysisPanel';
+import { useJobsList } from '../jobs/queries';
 import { IndexPanel } from '../search/IndexPanel';
 import { useProviders, useRefreshShare } from '../storage/queries';
 import { deleteMaterial, downloadMaterial, previewMaterial } from './api';
@@ -28,7 +30,12 @@ export function MaterialDetailPage() {
   const navigate = useNavigate();
   const query = useMaterial(materialId);
   const canReadProviders = can('storage:read');
+  const canReadJobs = can('jobs:read');
   const providersQuery = useProviders(canReadProviders);
+  const relatedJobs = useJobsList(
+    { page: 1, page_size: 5, material_id: materialId },
+    canReadJobs && materialId !== '',
+  );
   const refreshShare = useRefreshShare();
   const [editing, setEditing] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -157,7 +164,7 @@ export function MaterialDetailPage() {
 
       <Card title="基本信息">
         <Descriptions
-          column={{ xs: 1, md: 2 }}
+          column={{ xs: 1, sm: 1, md: 2 }}
           size="small"
           items={[
             { key: 'role', label: '角色', children: <RoleTag role={material.role} /> },
@@ -195,7 +202,35 @@ export function MaterialDetailPage() {
             { key: 'file', label: '文件名', children: material.file_name },
             { key: 'media', label: '文件类型', children: fileTypeName(material.media_type) },
             { key: 'size', label: '大小', children: formatBytes(material.size_bytes) },
-            { key: 'source', label: '原始路径', span: { xs: 1, md: 2 }, children: material.source_path || '—' },
+            {
+              key: 'sha256',
+              label: '内容指纹',
+              span: { xs: 1, md: 2 },
+              children: (
+                <div className="detail-code-row">
+                  <Typography.Text code copyable={false} className="inline-code-value">
+                    {material.sha256}
+                  </Typography.Text>
+                  <CopyButton value={material.sha256} label="复制" />
+                  <Link to={`/materials?sha256=${material.sha256}`}>查看同内容资料</Link>
+                </div>
+              ),
+            },
+            {
+              key: 'source',
+              label: '原始路径',
+              span: { xs: 1, md: 2 },
+              children: material.source_path ? (
+                <div className="detail-code-row">
+                  <Typography.Text code className="min-w-0 break-all">
+                    {material.source_path}
+                  </Typography.Text>
+                  <CopyButton value={material.source_path} label="复制" />
+                </div>
+              ) : (
+                '—'
+              ),
+            },
             {
               key: 'parent',
               label: '所属原件',
@@ -211,6 +246,62 @@ export function MaterialDetailPage() {
           ]}
         />
       </Card>
+
+      {material.collections.length > 0 ? (
+        <Card
+          title="所在合集"
+          extra={
+            <Link to={`/collections?material_id=${material.id}`}>
+              <Button size="small" type="link">
+                查看相关合集
+              </Button>
+            </Link>
+          }
+        >
+          <div className="related-link-list">
+            {material.collections.map((collection) => (
+              <Link key={collection.id} to={`/collections/${collection.id}`} className="related-link-list__item">
+                <span className="font-medium">{collection.title}</span>
+                <span className="text-xs text-slate-500">{COLLECTION_KIND_LABELS[collection.kind]}</span>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {canReadJobs ? (
+        <Card
+          title="相关任务"
+          extra={
+            <Link to={`/jobs?material_id=${material.id}`}>
+              <Button size="small" type="link">
+                查看全部
+              </Button>
+            </Link>
+          }
+        >
+          {relatedJobs.isError ? (
+            <Typography.Text type="danger">相关任务加载失败</Typography.Text>
+          ) : relatedJobs.data?.items.length ? (
+            <div className="related-link-list">
+              {relatedJobs.data.items.map((job) => (
+                <Link key={job.id} to={`/jobs/${job.id}`} className="related-link-list__item">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <JobKindTag kind={job.kind} />
+                    <span className="truncate">{job.progress_message || JOB_KIND_LABELS[job.kind]}</span>
+                  </span>
+                  <span className="flex items-center gap-2 text-xs text-slate-500">
+                    <JobStatusTag status={job.status} />
+                    {formatDuration(job.duration_ms)}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <Typography.Text type="secondary">暂无相关任务</Typography.Text>
+          )}
+        </Card>
+      ) : null}
 
       <AnalysisPanel materialId={material.id} canWrite={can('materials:write')} />
 

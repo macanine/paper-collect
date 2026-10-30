@@ -1,6 +1,6 @@
 # HTTP API v1 接口合同
 
-版本 1.3.0 · 2026-10-28。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+版本 1.4.0 · 2026-10-30。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
 
 ## 通用规范
 
@@ -17,13 +17,13 @@
 
 `Subject.code`：chinese 语文、math 数学、english 英语、physics 物理、chemistry 化学、biology 生物、politics 政治、history 历史、geography 地理、information_technology 信息技术、general_technology 通用技术、comprehensive 综合。`GET /subjects` 返回 `Subject[]{code,name}`。
 
-`Material`：`id:string,title:string(1..255),description:string(0..4000),subject_codes:string[](0..12),grade:string(""|grade10|grade11|grade12),academic_year:integer(0 或 1900..2200),tags:string[](<=30，每项1..64),role:Role,blob_id:string,file_name:string,media_type:string,size_bytes:integer,sha256:string,source_path:string,parent_material_id:string(无则空串),status:pending_storage|archived|degraded,created_at:date-time,updated_at:date-time`。**Role 有且只有 6 类**：exam=试卷，只有试题、没有答案；answer=答案，只有答案或答题卡；questions_answers=试卷+答案，前部是完整试卷、后部集中放答案；teacher_edition=教师版，每道题后紧跟该题答案或解析；lecture=讲义，属于教程型材料，知识讲解、例题、说明和练习混杂，不是纯试题；other=确实无法判断。详情额外含 `replicas:Replica[]`。
+`Material`：`id:string,title:string(1..255),description:string(0..4000),subject_codes:string[](0..12),grade:string(""|grade10|grade11|grade12),academic_year:integer(0 或 1900..2200),tags:string[](<=30，每项1..64),role:Role,blob_id:string,file_name:string,media_type:string,size_bytes:integer,sha256:string,source_path:string,parent_material_id:string(无则空串),status:pending_storage|archived|degraded,created_at:date-time,updated_at:date-time`。**Role 有且只有 6 类**：exam=试卷，只有试题、没有答案；answer=答案，只有答案或答题卡；questions_answers=试卷+答案，前部是完整试卷、后部集中放答案；teacher_edition=教师版，每道题后紧跟该题答案或解析；lecture=讲义，属于教程型材料，知识讲解、例题、说明和练习混杂，不是纯试题；other=确实无法判断。详情额外含 `replicas:Replica[]` 和 `collections:Collection[]`（该资料当前所在的合集摘要）。
 
 `Collection`：`id,title(1..255),description(<=4000),kind:series|exam|folder|zip|custom,parent_id:string(无则空串),subject_codes:string[],created_at,updated_at`。详情额外含 `items:CollectionItem[]`。`CollectionItem`：`id,collection_id,material_id,position:integer(>=0),role:Role,relative_path:string,material?:Material`。`role` 永远取自资料本身，写入时忽略客户端传值，读取时按资料角色返回；同合集同资料唯一；禁止父级循环。
 
 `Upload`：`id,title,collection_kind,subject_codes,grade,academic_year,tags,status:pending|processing|completed|failed,collection_id,material_id,job_id,created_at,entries:UploadEntry[]`。`UploadEntry`：`id,relative_path,size_bytes,sha256:string(可空),status:pending|received`。status=received 表示字节数、内容签名和 SHA 已验证。单个普通文件归档后返回 `material_id`，批次返回 `collection_id`；folder 使用 `webkitRelativePath`，不上传操作系统路径。
 
-`Job`：`id,kind:ingest|replicate|analyze|index,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message}],created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。PostgreSQL 支持带租约和心跳的多实例领取；SQLite 仅支持单实例。
+`Job`：`id,kind:ingest|replicate|analyze|index,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message,elapsed_ms?:integer,duration_ms?:integer,metrics?:object}],started_at:date-time|null,finished_at:date-time|null,duration_ms:integer,created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。`duration_ms` 是最近一次执行从领取到终态的耗时；运行中可按 `started_at` 计算当前耗时。日志的 `elapsed_ms` 是相对本次执行开始的偏移，`duration_ms` 表示当前记录覆盖步骤的耗时，`metrics` 只保存应用可控的非敏感事实（端点名、字节数、吞吐、页数、模型名、校验级别、分享状态等）。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录或新指标。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。PostgreSQL 支持带租约和心跳的多实例领取；SQLite 仅支持单实例。
 
 `StorageProvider`：`id,name(1..128),kind:local|webdav|lanzou|123pan|onedrive|s3,role:primary|backup,enabled:boolean,priority:integer(0..1000),weight:integer(1..1000),config:object<string,string>,secret_configured:boolean,created_at,updated_at`。任何 GET 不返回 secret。`Replica`：`id,blob_id,provider_id,status:pending|uploading|ready|failed,size_bytes,verification:uploaded|size|sha256,error,share_status:pending|ready|unsupported|failed,share_url:string,share_password:string,share_expires_at:date-time|null,created_at,updated_at`。远端对象 ID 不开放给普通资料接口。
 
@@ -71,7 +71,7 @@ GET 分页，200 Page<APIKey>。POST `{"name":"检索 Agent","scopes":["material
 
 ### GET /materials（materials:read）
 
-查询：page、page_size、`q`（标题/描述，<=200）、`subject`（Subject.code）、`role`（Role）、`status`、`grade`。200 Page<Material>，过滤在 DB 执行；综合按实际 subject_codes 匹配，不自动扩大到全部资料。
+查询：page、page_size、`q`（标题/描述，<=200）、`subject`（Subject.code）、`role`（Role）、`status`、`grade`、`sha256`（64 位十六进制，精确查询相同内容指纹）。200 Page<Material>，过滤在 DB 执行；综合按实际 subject_codes 匹配，不自动扩大到全部资料。
 
 ### GET /materials/stats（materials:read）
 
@@ -95,7 +95,7 @@ PDF 直接返回原件；DOCX 由 LibreOffice Writer 转换为 PDF，返回 `app
 
 ### GET /collections · POST /collections（分别 collections:read / collections:write）
 
-GET page、page_size、`q`（标题/描述，<=200）、`roots=true`（仅顶层合集）、`parent_id=<合集ID>`（指定父合集的子合集），200 Page<Collection>。POST JSON `{"title":"高三数学月考","description":"","kind":"exam","parent_id":"","subject_codes":["math"]}`；201 Collection。parent_id 若非空必须存在。
+GET page、page_size、`q`（标题/描述，<=200）、`roots=true`（仅顶层合集）、`parent_id=<合集ID>`（指定父合集的子合集）、`material_id=<资料ID>`（包含该资料的合集），200 Page<Collection>。POST JSON `{"title":"高三数学月考","description":"","kind":"exam","parent_id":"","subject_codes":["math"]}`；201 Collection。parent_id 若非空必须存在。
 
 ### DELETE /materials/{id}（materials:write）
 
@@ -145,7 +145,7 @@ JSON：
 
 ### GET /jobs · GET /jobs/{id}（jobs:read）
 
-列表查询 page/page_size/status/kind，200 Page<Job>；详情 200 Job。
+列表查询 page/page_size/status/kind/material_id/upload_id/replica_id，200 Page<Job>；详情 200 Job。关联 ID 均为精确匹配，用于从资料、上传清单或副本直接下钻任务。
 
 ### GET /jobs/stats（jobs:read）
 

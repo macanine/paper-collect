@@ -1,6 +1,6 @@
 # 高中资料归档系统技术架构
 
-版本 1.3.0 · 2026-10-28。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
+版本 1.4.0 · 2026-10-30。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
 
 本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。自建 RapidOCR 已在远端 Compose 用真实扫描 PDF 验证。
 
@@ -97,9 +97,17 @@ web/src/
 ```
 
 - 路由在 `App.tsx` 声明，登录后的布局及各页面按需加载；`ScopeGuard` 按角色 scope 隐藏/拦截页面，服务端仍逐请求重新授权。
-- 所有 API 调用经过 `shared/api/client.ts`：统一 envelope、`ApiError`、401 单飞刷新并重试一次、Blob 下载、XHR 二进制上传进度。
+- 所有 API 调用经过 `shared/api/client.ts`：统一 envelope、`ApiError`、401 单飞刷新并重试一次、Blob 下载、XHR 二进制上传进度；请求、下载和上传完成后向浏览器内网络遥测采样。
 - TanStack Query 负责服务端状态；上传、任务、分析和索引按状态轮询，终态停止。
 - 浏览器 access token 只存内存；refresh token 与用户摘要存 `localStorage`，刷新页面后先经 `/auth/me` 校验。浏览器不保存 Agent Secret Key。
+
+### 4.3 数据下钻与可观测
+
+- 仪表盘资料/任务统计卡直接进入对应状态筛选；资料按 SHA-256 精确反查同内容逻辑资料，不合并且不隐藏独立资料记录。
+- 资料详情返回 `collections` 和最多 5 个关联任务，可进入合集详情、合集反查列表或完整任务筛选；合集列表支持 `material_id` 反查。
+- 任务列表支持 `upload_id`、`material_id`、`replica_id` 精确筛选；资料详情的副本可回到所属存储端点，任务详情保留上传、资料和副本入口。
+- 浏览器网络遥测只保存在内存，最多保留最近 100 次采样；展示 P95/平均/中位延迟、成功率、传输字节、在途数量、请求耗时、响应大小和 request ID。采样不含请求正文、响应正文、凭据或查询参数；清空会重置历史聚合，但保留仍在途的请求。
+- 后端对 `/api/*` 与 `/mcp` 输出一行结构化请求日志：method、path、status、duration_ms、response_bytes、request_id。日志不记录查询参数、请求正文、凭据或响应内容。
 
 ## 5. 请求生命周期与鉴权
 
@@ -108,6 +116,7 @@ web/src/
 ```
 请求
  → request_id 中间件（UUID，写响应头 X-Request-ID）
+ → request_log 中间件（API/MCP 耗时与响应字节）
  → panic 恢复（500 envelope）
  → auth 中间件（浏览器 Bearer JWT 或 Agent Bearer API Key）
  → requireScope / agentOnly
@@ -117,6 +126,7 @@ web/src/
 ```
 
 - `/healthz` 不鉴权，返回裸 `{"status":"ok"}`；其余业务接口均鉴权。
+- API/MCP 请求结束后记录 `method/path/status/duration_ms/response_bytes/request_id`；静态文件和 SPA 回退不进入该日志。查询参数和请求体不记录。
 - JSON 请求体上限 1 MiB；未知字段、非对象根、尾随数据、非声明字段的 `null` 会被拒绝。
 - `NoRoute` 对非 API 的 GET/HEAD 从 `WEB_DIST` 提供 SPA，找不到文件时回退 `index.html`；API 路径返回 JSON 404。
 - HTTP 服务器设置 `ReadHeaderTimeout=10s`、`IdleTimeout=120s`，没有设置全局 Read/WriteTimeout；长文件通过流式接口和适配器超时控制，而不是整体写超时。
@@ -198,7 +208,7 @@ Eligible: exam / questions_answers only; other roles are not_applicable
 
 `RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时四类任务都会在租约仍然有效时回到 pending。
 
-任务行保存当前阶段、当前阶段的计数和最多 200 条带时间的处理记录，记录在领取、处理阶段和结束时写入；传输进度最多约每 5 秒写一次。进度更新受租约约束，旧 worker 不能覆盖新执行者的记录。列表省略历史日志，详情读取历史记录；旧任务允许没有日志。日志不写令牌、分享链接或文件内容。
+任务行保存当前阶段、当前阶段的计数、本次执行开始/结束时间和 `duration_ms`，并保存最多 200 条带时间的处理记录；领取时开始计时，终态或重新排队时结束或清零。日志可带相对执行开始的 `elapsed_ms`、步骤 `duration_ms` 和有界 `metrics`（数据量、吞吐、页数、文件数、模型、校验级别、分享状态等），传输进度最多约每 5 秒写一次。进度更新受租约约束，旧 worker 不能覆盖新执行者的记录。列表省略历史日志，详情读取历史记录；旧任务允许没有新字段。日志不写令牌、分享链接、URL 或文件内容。
 
 ## 7. 上传与归档流水线
 

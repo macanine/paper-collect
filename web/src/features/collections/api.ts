@@ -15,6 +15,7 @@ export interface CollectionListParams {
   q?: string;
   roots?: boolean;
   parent_id?: string;
+  material_id?: string;
 }
 
 export interface CollectionCreateBody {
@@ -36,7 +37,14 @@ export interface CollectionItemInput {
 
 export function listCollections(params: CollectionListParams, signal?: AbortSignal): Promise<Page<Collection>> {
   return apiRequest<Page<Collection>>('/collections', {
-    query: { page: params.page, page_size: params.page_size, q: params.q, roots: params.roots, parent_id: params.parent_id },
+    query: {
+      page: params.page,
+      page_size: params.page_size,
+      q: params.q,
+      roots: params.roots,
+      parent_id: params.parent_id,
+      material_id: params.material_id,
+    },
     signal,
   });
 }

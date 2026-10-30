@@ -10,6 +10,7 @@ export type MaterialListParams = {
   role?: Role | '';
   status?: MaterialStatus | '';
   grade?: Grade | '';
+  sha256?: string;
 };
 
 export function listMaterials(params: MaterialListParams, signal?: AbortSignal): Promise<Page<Material>> {

@@ -3,7 +3,9 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -100,6 +102,141 @@ func TestDirectSingleFileNeedsNoCollectionOrSubject(t *testing.T) {
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"material_id":""`)) {
 		t.Fatalf("deleted material still linked: %d %s", status, body)
 	}
+}
+
+func TestCrossEntityLookupFilters(t *testing.T) {
+	env := newEnv(t)
+	content := minimalPDF()
+	firstUpload := directUpload(t, env, "custom", map[string][]byte{"甲试卷.pdf": content})
+	secondUpload := directUpload(t, env, "custom", map[string][]byte{"乙试卷.pdf": content})
+
+	readUpload := func(id string) (materialID, jobID string) {
+		t.Helper()
+		status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
+		var upload struct {
+			Data struct {
+				MaterialID string `json:"material_id"`
+				JobID      string `json:"job_id"`
+			} `json:"data"`
+		}
+		if status != http.StatusOK || json.Unmarshal(body, &upload) != nil || upload.Data.MaterialID == "" || upload.Data.JobID == "" {
+			t.Fatalf("read upload %s: %d %s", id, status, body)
+		}
+		return upload.Data.MaterialID, upload.Data.JobID
+	}
+
+	firstMaterial, firstJob := readUpload(firstUpload)
+	secondMaterial, _ := readUpload(secondUpload)
+	if firstMaterial == secondMaterial {
+		t.Fatal("logical files with the same content should remain separate materials")
+	}
+
+	sum := sha256.Sum256(content)
+	sha256Hex := fmt.Sprintf("%x", sum)
+	status, body := env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10&sha256="+sha256Hex, nil, nil)
+	var materials struct {
+		Data struct {
+			Total int `json:"total"`
+			Items []struct {
+				ID     string `json:"id"`
+				SHA256 string `json:"sha256"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &materials) != nil || materials.Data.Total != 2 {
+		t.Fatalf("lookup materials by sha256: %d %s", status, body)
+	}
+	for _, item := range materials.Data.Items {
+		if item.SHA256 != sha256Hex {
+			t.Fatalf("unexpected material hash in lookup: %s", body)
+		}
+	}
+
+	status, body = env.do(t, http.MethodPost, "/api/v1/collections", map[string]any{
+		"title": "互链测试合集", "kind": "exam", "subject_codes": []string{"math"},
+	}, nil)
+	var collection struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if status != http.StatusCreated || json.Unmarshal(body, &collection) != nil || collection.Data.ID == "" {
+		t.Fatalf("create collection: %d %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPut, "/api/v1/collections/"+collection.Data.ID+"/items", map[string]any{
+		"items": []map[string]any{
+			{"material_id": firstMaterial, "position": 0, "role": "exam"},
+			{"material_id": secondMaterial, "position": 1, "role": "exam"},
+		},
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("put collection items: %d %s", status, body)
+	}
+
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+firstMaterial, nil, nil)
+	var materialDetail struct {
+		Data struct {
+			Collections []struct {
+				ID string `json:"id"`
+			} `json:"collections"`
+			Replicas []struct {
+				ID string `json:"id"`
+			} `json:"replicas"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &materialDetail) != nil ||
+		len(materialDetail.Data.Collections) != 1 || materialDetail.Data.Collections[0].ID != collection.Data.ID ||
+		len(materialDetail.Data.Replicas) == 0 {
+		t.Fatalf("material detail relations: %d %s", status, body)
+	}
+	replicaID := materialDetail.Data.Replicas[0].ID
+
+	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=10&material_id="+firstMaterial, nil, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"total":1`)) || !bytes.Contains(body, []byte(collection.Data.ID)) {
+		t.Fatalf("lookup collections by material: %d %s", status, body)
+	}
+
+	readJobs := func(query string) []struct {
+		ID         string `json:"id"`
+		UploadID   string `json:"upload_id"`
+		MaterialID string `json:"material_id"`
+		ReplicaID  string `json:"replica_id"`
+	} {
+		t.Helper()
+		status, body := env.do(t, http.MethodGet, "/api/v1/jobs?page=1&page_size=20&"+query, nil, nil)
+		var jobs struct {
+			Data struct {
+				Total int `json:"total"`
+				Items []struct {
+					ID         string `json:"id"`
+					UploadID   string `json:"upload_id"`
+					MaterialID string `json:"material_id"`
+					ReplicaID  string `json:"replica_id"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if status != http.StatusOK || json.Unmarshal(body, &jobs) != nil || jobs.Data.Total == 0 {
+			t.Fatalf("lookup jobs by %s: %d %s", query, status, body)
+		}
+		for _, item := range jobs.Data.Items {
+			if query == "upload_id="+firstUpload && item.UploadID != firstUpload {
+				t.Fatalf("upload filter leaked another job: %s", body)
+			}
+			if query == "material_id="+firstMaterial && item.MaterialID != firstMaterial {
+				t.Fatalf("material filter leaked another job: %s", body)
+			}
+			if query == "replica_id="+replicaID && item.ReplicaID != replicaID {
+				t.Fatalf("replica filter leaked another job: %s", body)
+			}
+		}
+		return jobs.Data.Items
+	}
+	uploadJobs := readJobs("upload_id=" + firstUpload)
+	if uploadJobs[0].ID != firstJob {
+		t.Fatalf("upload relation returned unexpected job: %#v", uploadJobs[0])
+	}
+	readJobs("material_id=" + firstMaterial)
+	readJobs("replica_id=" + replicaID)
 }
 
 func TestDirectFolderAndZIPBuildOneCollection(t *testing.T) {
