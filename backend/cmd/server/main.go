@@ -59,13 +59,14 @@ func run() error {
 	limiter := auth.NewLimiter(time.Now, 5, 15*time.Minute, 15*time.Minute)
 
 	svc, err := service.New(service.Options{
-		DB:      conn,
-		Blobs:   store,
-		Box:     box,
-		Signer:  signer,
-		Limiter: limiter,
-		Factory: storage.New,
-		Logf:    log.Printf,
+		DB:           conn,
+		Blobs:        store,
+		Box:          box,
+		Signer:       signer,
+		Limiter:      limiter,
+		Factory:      storage.New,
+		Logf:         log.Printf,
+		PullCacheTTL: cfg.PullCacheTTL,
 		Worker: service.WorkerSettings{
 			InstanceID:           cfg.Worker.InstanceID,
 			IngestConcurrency:    cfg.Worker.IngestConcurrency,
@@ -94,6 +95,17 @@ func run() error {
 	if err := svc.RecoverInterrupted(ctx); err != nil {
 		return fmt.Errorf("恢复中断任务失败: %w", err)
 	}
+	// Formula postings are an additive upgrade of already indexed text. Build
+	// them in bounded background transactions so a large archive does not
+	// delay startup; a formula search also completes any remaining backfill.
+	go func() {
+		indexed, err := svc.BackfillMathIndex(ctx)
+		if err != nil && ctx.Err() == nil {
+			log.Printf("补建公式索引失败: %v", err)
+		} else if err == nil && indexed > 0 {
+			log.Printf("已为 %d 道已有题目补建公式索引", indexed)
+		}
+	}()
 	if queued, err := svc.EnqueueMissingIndexes(ctx); err != nil {
 		log.Printf("补建未索引资料失败: %v", err)
 	} else if queued > 0 {

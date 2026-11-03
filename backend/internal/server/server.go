@@ -99,6 +99,8 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.GET("/materials/:id", s.requireScope(model.ScopeMaterialsRead), s.handleGetMaterial)
 	authGroup.PATCH("/materials/:id", s.requireScope(model.ScopeMaterialsWrite), s.handlePatchMaterial)
 	authGroup.GET("/materials/:id/download", s.requireScope(model.ScopeMaterialsRead), s.handleDownloadMaterial)
+	authGroup.POST("/materials/:id/pull-cache", s.requireScope(model.ScopeMaterialsRead), s.handlePullMaterialCache)
+	authGroup.GET("/materials/:id/pull-cache", s.requireScope(model.ScopeMaterialsRead), s.handleDownloadPullCache)
 	authGroup.GET("/materials/:id/preview", s.requireScope(model.ScopeMaterialsRead), s.handlePreviewMaterial)
 	authGroup.DELETE("/materials/:id", s.requireScope(model.ScopeMaterialsWrite), s.handleDeleteMaterial)
 	authGroup.POST("/materials/:id/analysis", s.requireScope(model.ScopeMaterialsWrite), s.handleEnqueueAnalysis)

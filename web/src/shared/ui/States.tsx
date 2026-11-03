@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { Alert, Button, Empty, Result, Spin, Typography } from 'antd';
-import { Link } from 'react-router';
 import { describeError, isApiError } from '../api/errors';
 import { CopyButton } from './CopyButton';
+import { LinkButton } from './LinkButton';
 
 export function LoadingState() {
   return (
@@ -68,9 +68,7 @@ export function ForbiddenState() {
       status="403"
       title="没有访问权限"
       extra={
-        <Link to="/">
-          <Button type="primary">返回仪表盘</Button>
-        </Link>
+        <LinkButton type="primary" to="/">返回仪表盘</LinkButton>
       }
     />
   );
@@ -82,9 +80,7 @@ export function NotFoundPage() {
       status="404"
       title="页面不存在"
       extra={
-        <Link to="/">
-          <Button type="primary">返回仪表盘</Button>
-        </Link>
+        <LinkButton type="primary" to="/">返回仪表盘</LinkButton>
       }
     />
   );

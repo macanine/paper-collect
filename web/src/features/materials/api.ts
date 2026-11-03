@@ -1,6 +1,6 @@
 import { apiDownload, apiRequest } from '../../shared/api/client';
 import { segment } from '../../shared/api/paths';
-import type { Grade, MaterialDetail, MaterialStatus, Material, MaterialStats, MaterialUpdate, Page, Role, SubjectCode } from '../../shared/api/types';
+import type { Grade, MaterialDetail, MaterialPullCache, MaterialStatus, Material, MaterialStats, MaterialUpdate, Page, Role, SubjectCode } from '../../shared/api/types';
 
 export type MaterialListParams = {
   page: number;
@@ -31,6 +31,14 @@ export function updateMaterial(id: string, body: MaterialUpdate): Promise<Materi
 
 export function downloadMaterial(id: string) {
   return apiDownload(`/materials/${segment(id)}/download`);
+}
+
+export function pullMaterialCache(id: string): Promise<MaterialPullCache> {
+  return apiRequest<MaterialPullCache>(`/materials/${segment(id)}/pull-cache`, { method: 'POST' });
+}
+
+export function downloadMaterialPullCache(id: string) {
+  return apiDownload(`/materials/${segment(id)}/pull-cache`);
 }
 
 export function previewMaterial(id: string, signal?: AbortSignal) {

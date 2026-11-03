@@ -27,6 +27,7 @@ type Config struct {
 	AdminPassword  string // optional; only needed to bootstrap an empty database
 	JWTSecret      string
 	MasterKey      []byte // 32 bytes, decoded from base64
+	PullCacheTTL   time.Duration
 	Worker         WorkerConfig
 }
 
@@ -82,6 +83,7 @@ func Load(getenv func(string) string) (Config, error) {
 		add("DATABASE_DRIVER 只能是 sqlite 或 postgres")
 	}
 	cfg.AutoMigrate = strings.ToLower(strings.TrimSpace(getenv("DB_AUTO_MIGRATE"))) != "false"
+	cfg.PullCacheTTL = positiveDuration(getenv, "PULL_CACHE_TTL", 15*time.Minute, &problems)
 
 	webDist, err := filepath.Abs(valueOr(getenv("WEB_DIST"), "../web/dist"))
 	if err != nil {

@@ -1,5 +1,5 @@
-import { useState, type DragEvent } from 'react';
-import { Button, Space, theme } from 'antd';
+import { useRef, useState, type DragEvent } from 'react';
+import { Alert, Button, Space, theme } from 'antd';
 import { FileAddOutlined, FolderOpenOutlined, InboxOutlined } from '@ant-design/icons';
 import { fromDataTransfer, fromFileList, type SourceResult } from './fileSources';
 import { ALLOWED_SUFFIXES } from './manifest';
@@ -18,23 +18,32 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
   const { token } = theme.useToken();
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState(false);
+  const readingRef = useRef(false);
+  const busy = disabled || reading;
   const fileInputId = `${inputId}-files`;
   const folderInputId = `${inputId}-folder`;
 
   const handleList = (list: FileList | null) => {
-    if (!list || list.length === 0) return;
+    if (disabled || readingRef.current || !list || list.length === 0) return;
+    setReadError(false);
     onSelected(fromFileList(list));
   };
 
   const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragging(false);
-    if (disabled) return;
+    if (disabled || readingRef.current) return;
+    readingRef.current = true;
+    setReadError(false);
     setReading(true);
     try {
       const result = await fromDataTransfer(event.dataTransfer.items);
       if (result.files.length > 0 || result.ignored > 0) onSelected(result);
+    } catch {
+      setReadError(true);
     } finally {
+      readingRef.current = false;
       setReading(false);
     }
   };
@@ -44,7 +53,7 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
       className={[
         'flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed px-4 text-center transition-colors',
         compact ? 'py-4' : 'py-8',
-        disabled ? 'opacity-60' : '',
+        busy ? 'opacity-60' : '',
       ].join(' ')}
       style={{
         borderColor: dragging ? token.colorPrimary : token.colorBorder,
@@ -52,23 +61,25 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
       }}
       onDragOver={(event) => {
         event.preventDefault();
-        if (!disabled) setDragging(true);
+        if (!busy) setDragging(true);
       }}
       onDragLeave={() => setDragging(false)}
       onDrop={(event) => void handleDrop(event)}
     >
       {compact ? null : <InboxOutlined style={{ fontSize: 28, color: token.colorTextSecondary }} />}
-      <span>{reading ? '正在读取…' : compact ? '拖拽或选择文件' : '拖拽文件或文件夹到这里'}</span>
+      <span role="status">{reading ? '正在读取…' : compact ? '拖拽或选择文件' : '拖拽文件或文件夹到这里'}</span>
+      {readError ? <Alert type="error" showIcon message="无法读取文件或文件夹，请重新选择" /> : null}
       <Space wrap>
-        <Button icon={<FileAddOutlined />} disabled={disabled} onClick={() => document.getElementById(fileInputId)?.click()}>
+        <Button icon={<FileAddOutlined />} disabled={busy} onClick={() => document.getElementById(fileInputId)?.click()}>
           选择文件
         </Button>
-        <Button icon={<FolderOpenOutlined />} disabled={disabled} onClick={() => document.getElementById(folderInputId)?.click()}>
+        <Button icon={<FolderOpenOutlined />} disabled={busy} onClick={() => document.getElementById(folderInputId)?.click()}>
           选择文件夹
         </Button>
       </Space>
       <input
         id={fileInputId}
+        disabled={busy}
         type="file"
         multiple
         accept={ACCEPT}
@@ -80,6 +91,7 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
       />
       <input
         id={folderInputId}
+        disabled={busy}
         type="file"
         multiple
         hidden

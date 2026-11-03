@@ -68,10 +68,6 @@ export function putAISettings(input: {
   return apiRequest<AISettings>('/ai/settings', { method: 'PUT', body: input });
 }
 
-export function testMinerU(): Promise<MinerUTestResult> {
-  return apiRequest<MinerUTestResult>('/ai/mineru/test', { method: 'POST' });
-}
-
 export interface OCRProviderDraft {
   name: string;
   kind: OCRProviderKind;

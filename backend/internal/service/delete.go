@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,7 +74,16 @@ func (s *Service) DeleteMaterial(ctx context.Context, p auth.Principal, id strin
 		if err := tx.Where("material_id IN ?", ids).Delete(&model.MaterialAnalysis{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobGroup}, ids).
+		// Remove material-scoped work together with its lease locks. In
+		// particular, a queued index job must not outlive the material index
+		// state that is deleted below.
+		materialJobs := tx.Model(&model.Job{}).
+			Select("id").
+			Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobIndex, model.JobGroup}, ids)
+		if err := tx.Where("job_id IN (?)", materialJobs).Delete(&model.JobLock{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobIndex, model.JobGroup}, ids).
 			Delete(&model.Job{}).Error; err != nil {
 			return err
 		}
@@ -102,10 +112,30 @@ func (s *Service) DeleteMaterial(ctx context.Context, p auth.Principal, id strin
 			}
 			for _, replica := range replicas {
 				var provider model.StorageProvider
-				if err := tx.Where("id = ?", replica.ProviderID).First(&provider).Error; err == nil && provider.Kind == model.KindLocal {
+				err := tx.Where("id = ?", replica.ProviderID).First(&provider).Error
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				if err == nil && provider.Kind == model.KindLocal {
 					staleReplicas = append(staleReplicas, localFile{
 						providerKind: provider.Kind, providerID: provider.ID, remoteKey: replica.RemoteKey,
 					})
+				}
+			}
+			replicaIDs := make([]string, 0, len(replicas))
+			for _, replica := range replicas {
+				replicaIDs = append(replicaIDs, replica.ID)
+			}
+			if len(replicaIDs) > 0 {
+				replicaJobs := tx.Model(&model.Job{}).
+					Select("id").
+					Where("kind = ? AND replica_id IN ?", model.JobReplicate, replicaIDs)
+				if err := tx.Where("job_id IN (?)", replicaJobs).Delete(&model.JobLock{}).Error; err != nil {
+					return err
+				}
+				if err := tx.Where("kind = ? AND replica_id IN ?", model.JobReplicate, replicaIDs).
+					Delete(&model.Job{}).Error; err != nil {
+					return err
 				}
 			}
 			if err := tx.Where("blob_id = ?", blobID).Delete(&model.Replica{}).Error; err != nil {

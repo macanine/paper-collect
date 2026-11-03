@@ -1,6 +1,6 @@
 // 相对路径规则（清单上传与合集条目共用），与 docs/API.md 合同一致。
 
-export const MAX_PATH_BYTES = 1024;
+const MAX_PATH_BYTES = 1024;
 
 export function utf8ByteLength(text: string): number {
   return new TextEncoder().encode(text).length;

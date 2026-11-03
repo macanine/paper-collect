@@ -1,12 +1,10 @@
 // 清单上传的前端校验，与 docs/API.md「POST /uploads」合同一致（服务端仍会再次校验）。
 import { normalizePath, validateRelativePath } from '../../shared/lib/paths';
 
-export { MAX_PATH_BYTES, normalizePath, utf8ByteLength, validateRelativePath } from '../../shared/lib/paths';
-
 export const ALLOWED_SUFFIXES = ['.zip', '.pptx', '.pdf', '.docx', '.doc'] as const;
-export const MAX_FILE_BYTES = 536_870_912; // 512 MiB
-export const MAX_BATCH_BYTES = 2_147_483_648; // 2 GiB
-export const MAX_ENTRIES = 2000;
+const MAX_FILE_BYTES = 536_870_912; // 512 MiB
+const MAX_BATCH_BYTES = 2_147_483_648; // 2 GiB
+const MAX_ENTRIES = 2000;
 
 /** 系统生成的噪声文件：选择文件夹时自动忽略（服务端 ZIP 展开同样忽略）。 */
 const IGNORED_SEGMENTS = new Set(['.DS_Store', '__MACOSX']);

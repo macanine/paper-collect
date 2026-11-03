@@ -108,3 +108,31 @@ func TestMigrateAddsKeyLookupIndexWithoutChangingKeys(t *testing.T) {
 		t.Fatal("migration did not preserve the legacy key and add its lookup index")
 	}
 }
+
+func TestMigrateAddsMathIndexVersionToExistingQuestions(t *testing.T) {
+	conn, err := db.Open("sqlite", filepath.Join(t.TempDir(), "questions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := conn.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := conn.Exec(`CREATE TABLE question_blocks (id text PRIMARY KEY, material_id text NOT NULL, page_no integer NOT NULL, seq integer NOT NULL, question_no text, text text NOT NULL, normalized text NOT NULL, confidence real NOT NULL, model text, prompt_version text, created_at datetime)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(`INSERT INTO question_blocks (id, material_id, page_no, seq, text, normalized, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)`, "old", "material", 1, 0, "x+y", "xy", 0.8).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(conn); err != nil {
+		t.Fatal(err)
+	}
+	var question model.QuestionBlock
+	if err := conn.First(&question, "id = ?", "old").Error; err != nil || question.Text != "x+y" || question.MathIndexVersion != 0 {
+		t.Fatalf("legacy question was not preserved: %+v, %v", question, err)
+	}
+	if !conn.Migrator().HasIndex(&model.QuestionBlock{}, "idx_question_blocks_math_index_version") {
+		t.Fatal("math index backfill lookup index is missing")
+	}
+}

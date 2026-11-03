@@ -43,6 +43,11 @@ type testEnv struct {
 
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
+	return newEnvWithPullCacheTTL(t, 0)
+}
+
+func newEnvWithPullCacheTTL(t *testing.T, ttl time.Duration) *testEnv {
+	t.Helper()
 	dir := t.TempDir()
 	conn, err := db.Open("sqlite", filepath.Join(dir, "test.db"))
 	if err != nil {
@@ -66,7 +71,7 @@ func newEnv(t *testing.T) *testEnv {
 	limiter := auth.NewLimiter(time.Now, 50, time.Minute, time.Minute)
 	svc, err := service.New(service.Options{
 		DB: conn, Blobs: store, Box: box, Signer: signer, Limiter: limiter,
-		Factory: storage.New, Logf: t.Logf,
+		Factory: storage.New, Logf: t.Logf, PullCacheTTL: ttl,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -341,6 +346,137 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 	}
 }
 
+func TestPullCloudReplicaIntoTemporaryCache(t *testing.T) {
+	env := newEnvWithPullCacheTTL(t, 2*time.Hour)
+	pdf := minimalPDF()
+	uploadID, _ := env.upload(t, "临时拉取测试", map[string][]byte{"学生版.pdf": pdf})
+	env.finalizeAndWait(t, uploadID)
+
+	var material model.Material
+	if err := env.db.First(&material).Error; err != nil {
+		t.Fatal(err)
+	}
+	var blob model.Blob
+	if err := env.db.Where("id = ?", material.BlobID).First(&blob).Error; err != nil {
+		t.Fatal(err)
+	}
+	var replica model.Replica
+	if err := env.db.Where("blob_id = ?", material.BlobID).First(&replica).Error; err != nil {
+		t.Fatal(err)
+	}
+	if replica.Status != model.ReplicaReady {
+		t.Fatalf("replica status = %s, want ready", replica.Status)
+	}
+
+	casPath := filepath.Join(env.dataDir, "blobs", blob.SHA256[:2], blob.SHA256)
+	if err := os.Remove(casPath); err != nil {
+		t.Fatalf("remove CAS copy: %v", err)
+	}
+
+	status, body := env.do(t, http.MethodPost, "/api/v1/materials/"+material.ID+"/pull-cache", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("pull cache %d: %s", status, body)
+	}
+	var pulled struct {
+		Data struct {
+			DownloadURL string    `json:"download_url"`
+			SizeBytes   int64     `json:"size_bytes"`
+			SHA256      string    `json:"sha256"`
+			ExpiresAt   time.Time `json:"expires_at"`
+			ExpiresIn   int64     `json:"expires_in"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &pulled); err != nil {
+		t.Fatalf("pull body: %s", body)
+	}
+	wantURL := "/api/v1/materials/" + material.ID + "/pull-cache"
+	if pulled.Data.DownloadURL != wantURL || pulled.Data.SizeBytes != int64(len(pdf)) ||
+		pulled.Data.SHA256 != material.SHA256 || pulled.Data.ExpiresAt.IsZero() || pulled.Data.ExpiresIn < 1 {
+		t.Fatalf("unexpected pull metadata: %s", body)
+	}
+	if _, err := os.Stat(casPath); !os.IsNotExist(err) {
+		t.Fatalf("pull cache must not recreate permanent CAS: %v", err)
+	}
+	cachePath := filepath.Join(env.dataDir, "tmp", "material-pulls", material.SHA256)
+	if info, err := os.Stat(cachePath); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("temporary cache missing: %v", err)
+	}
+
+	status, body = env.do(t, http.MethodGet, wantURL, nil, nil)
+	if status != http.StatusOK || !bytes.Equal(body, pdf) {
+		t.Fatalf("download temporary cache %d: %q", status, body)
+	}
+
+	stillValid := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(cachePath, stillValid, stillValid); err != nil {
+		t.Fatal(err)
+	}
+	status, body = env.do(t, http.MethodGet, wantURL, nil, nil)
+	if status != http.StatusOK || !bytes.Equal(body, pdf) {
+		t.Fatalf("configured TTL expired too early %d: %q", status, body)
+	}
+
+	expired := time.Now().Add(-3 * time.Hour)
+	if err := os.Chtimes(cachePath, expired, expired); err != nil {
+		t.Fatal(err)
+	}
+	status, body = env.do(t, http.MethodGet, wantURL, nil, nil)
+	if status != http.StatusGone || !strings.Contains(string(body), `"code":"gone"`) {
+		t.Fatalf("expired temporary cache %d: %s", status, body)
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("expired temporary cache was not removed: %v", err)
+	}
+}
+
+func TestPullCacheRejectsCorruptCloudReplicaWithoutPublishing(t *testing.T) {
+	env := newEnv(t)
+	pdf := minimalPDF()
+	uploadID, _ := env.upload(t, "损坏副本测试", map[string][]byte{"学生版.pdf": pdf})
+	env.finalizeAndWait(t, uploadID)
+
+	var material model.Material
+	if err := env.db.First(&material).Error; err != nil {
+		t.Fatal(err)
+	}
+	var blob model.Blob
+	if err := env.db.Where("id = ?", material.BlobID).First(&blob).Error; err != nil {
+		t.Fatal(err)
+	}
+	var replica model.Replica
+	if err := env.db.Where("blob_id = ?", material.BlobID).First(&replica).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(env.dataDir, "blobs", blob.SHA256[:2], blob.SHA256)); err != nil {
+		t.Fatal(err)
+	}
+	tampered := append([]byte(nil), pdf...)
+	tampered[len(tampered)-1] ^= 1
+	remoteKey := replica.RemoteID
+	if remoteKey == "" {
+		remoteKey = replica.RemoteKey
+	}
+	replicaPath := filepath.Join(env.dataDir, "providers", replica.ProviderID, filepath.FromSlash(remoteKey))
+	if err := os.WriteFile(replicaPath, tampered, 0o600); err != nil {
+		t.Fatalf("tamper local replica: %v", err)
+	}
+
+	status, body := env.do(t, http.MethodPost, "/api/v1/materials/"+material.ID+"/pull-cache", nil, nil)
+	if status != http.StatusServiceUnavailable || !strings.Contains(string(body), `"code":"service_unavailable"`) {
+		t.Fatalf("corrupt replica accepted %d: %s", status, body)
+	}
+	cachePath := filepath.Join(env.dataDir, "tmp", "material-pulls", material.SHA256)
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Fatalf("corrupt replica left a downloadable cache: %v", err)
+	}
+	if staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "material-pulls", ".stage-*")); err != nil || len(staged) != 0 {
+		t.Fatalf("corrupt replica left staging files: %v %v", staged, err)
+	}
+	if _, err := os.Stat(filepath.Join(env.dataDir, "blobs", blob.SHA256[:2], blob.SHA256)); !os.IsNotExist(err) {
+		t.Fatalf("corrupt pull recreated permanent CAS: %v", err)
+	}
+}
+
 func TestMaliciousZipFailsJobWithoutPublishing(t *testing.T) {
 	env := newEnv(t)
 	evil := zipWith(t, map[string][]byte{"../evil.pdf": minimalPDF()})
@@ -543,6 +679,9 @@ func TestDeleteCollectionsAndMaterials(t *testing.T) {
 	}
 	// Find the historical ZIP container and require explicit cascade for its children.
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list legacy materials %d: %s", status, body)
+	}
 	var list struct {
 		Data struct {
 			Items []struct {

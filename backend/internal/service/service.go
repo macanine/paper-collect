@@ -43,6 +43,9 @@ type Options struct {
 	// ResetAllRunningOnStart is enabled for SQLite, where only one service may
 	// use the database. PostgreSQL recovers only expired leases.
 	ResetAllRunningOnStart bool
+	// PullCacheTTL controls how long a cloud replica pulled on demand remains
+	// available for download. Zero uses the default.
+	PullCacheTTL time.Duration
 }
 
 // WorkerSettings controls the embedded job runners.
@@ -80,6 +83,8 @@ type Service struct {
 	wakeMu              sync.Mutex
 	worker              WorkerSettings
 	resetRunningOnStart bool
+	pullCacheTTL        time.Duration
+	pullCacheDir        string
 }
 
 // ErrBootstrapNeeded means the database has no user and no admin credentials were supplied.
@@ -134,6 +139,14 @@ func New(opts Options) (*Service, error) {
 	if worker.PollInterval <= 0 {
 		worker.PollInterval = 2 * time.Second
 	}
+	pullCacheTTL := opts.PullCacheTTL
+	if pullCacheTTL <= 0 {
+		pullCacheTTL = defaultPullCacheTTL
+	}
+	pullCacheDir, err := preparePullCache(opts.Blobs.DataDir())
+	if err != nil {
+		return nil, fmt.Errorf("service: 初始化临时拉取目录: %w", err)
+	}
 	return &Service{
 		db:                  opts.DB,
 		blobs:               opts.Blobs,
@@ -148,6 +161,8 @@ func New(opts Options) (*Service, error) {
 		wake:                make(chan struct{}),
 		worker:              worker,
 		resetRunningOnStart: opts.ResetAllRunningOnStart,
+		pullCacheTTL:        pullCacheTTL,
+		pullCacheDir:        pullCacheDir,
 	}, nil
 }
 

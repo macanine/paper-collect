@@ -512,17 +512,18 @@ type MaterialText struct {
 
 // QuestionBlock is one LLM-extracted question with its starting page.
 type QuestionBlock struct {
-	ID            string  `gorm:"primaryKey;size:36"`
-	MaterialID    string  `gorm:"size:36;not null;index"`
-	PageNo        int     `gorm:"not null;index"`
-	Seq           int     `gorm:"not null"`
-	QuestionNo    string  `gorm:"size:32"`
-	Text          string  `gorm:"type:text;not null"`
-	Normalized    string  `gorm:"type:text;not null"`
-	Confidence    float64 `gorm:"not null"`
-	Model         string  `gorm:"size:200"`
-	PromptVersion string  `gorm:"size:32"`
-	CreatedAt     time.Time
+	ID               string  `gorm:"primaryKey;size:36"`
+	MaterialID       string  `gorm:"size:36;not null;index"`
+	PageNo           int     `gorm:"not null;index"`
+	Seq              int     `gorm:"not null"`
+	QuestionNo       string  `gorm:"size:32"`
+	Text             string  `gorm:"type:text;not null"`
+	Normalized       string  `gorm:"type:text;not null"`
+	MathIndexVersion int     `gorm:"not null;default:0;index"`
+	Confidence       float64 `gorm:"not null"`
+	Model            string  `gorm:"size:200"`
+	PromptVersion    string  `gorm:"size:32"`
+	CreatedAt        time.Time
 }
 
 // QuestionTerm is a portable inverted-index posting.

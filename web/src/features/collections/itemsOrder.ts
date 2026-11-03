@@ -7,7 +7,7 @@ export const MAX_COLLECTION_ITEMS = 5000;
 
 const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 
-export function naturalCompare(a: string, b: string): number {
+function naturalCompare(a: string, b: string): number {
   return collator.compare(a, b);
 }
 

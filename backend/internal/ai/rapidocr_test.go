@@ -78,3 +78,35 @@ func TestParseRapidOCRJSONL(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 }
+
+func TestParseRapidOCRJSONLFormulaBlocks(t *testing.T) {
+	page, err := json.Marshal(map[string]any{
+		"page_no": 3,
+		"texts":   []string{"旧结果不能与内容块重复"},
+		"blocks": []map[string]string{
+			{"type": "text", "text": "已知 "},
+			{"type": "inline_formula", "latex": `x^{2}+\frac{1}{2}`},
+			{"type": "text", "text": "，求值。"},
+			{"type": "display_formula", "latex": `y=\sqrt{x}`},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ParseRapidOCRJSONL(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "已知 \\(x^{2}+\\frac{1}{2}\\)，求值。\n\\[y=\\sqrt{x}\\]"
+	if result.PageCount != 1 || result.Pages[0].PageNo != 3 || result.Pages[0].Text != want || !strings.Contains(result.Markdown, want) {
+		t.Fatalf("formula result = %+v", result)
+	}
+	for _, invalid := range []string{
+		`{"page_no":1,"blocks":[{"type":"inline_formula","latex":""}]}`,
+		`{"page_no":1,"blocks":[{"type":"unknown","text":"正文"}]}`,
+	} {
+		if _, err := ParseRapidOCRJSONL([]byte(invalid)); err == nil {
+			t.Fatalf("invalid formula block accepted: %s", invalid)
+		}
+	}
+}

@@ -3,7 +3,7 @@ import type { AuthSession, User } from './types';
 // 会话存储：access token 仅保存在内存中（15 分钟有效）；refresh token 与用户摘要持久化，
 // 以便刷新页面后通过 /auth/refresh 恢复。浏览器不保存 Agent 的 Secret Key。
 
-export const SESSION_STORAGE_KEY = 'paper-collect.session.v1';
+const SESSION_STORAGE_KEY = 'paper-collect.session.v1';
 
 interface PersistedSession {
   refresh_token: string;
@@ -46,7 +46,7 @@ function readPersisted(storage: StorageLike | null): PersistedSession | null {
   }
 }
 
-export function createSessionStore(storage: StorageLike | null): SessionStore {
+function createSessionStore(storage: StorageLike | null): SessionStore {
   let accessToken: string | null = null;
   let persisted = readPersisted(storage);
   const listeners = new Set<() => void>();

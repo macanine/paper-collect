@@ -4,14 +4,14 @@ import { segment } from '../../shared/api/paths';
 import type { Job, Upload } from '../../shared/api/types';
 import { finalizeUpload, getUpload } from './api';
 
-export const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 2000;
 
 export const uploadKeys = {
   detail: (id: string) => ['uploads', 'detail', id] as const,
   job: (id: string) => ['jobs', 'detail', id] as const,
 };
 
-export function isTerminalJob(job: Job | undefined): boolean {
+function isTerminalJob(job: Job | undefined): boolean {
   return job?.status === 'succeeded' || job?.status === 'failed';
 }
 

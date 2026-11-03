@@ -39,15 +39,6 @@ func attribute(start xml.StartElement, space, local string) string {
 	return ""
 }
 
-func wordAttribute(start xml.StartElement, local string) string {
-	for _, space := range []string{nsWord, nsWordStrict} {
-		if value := attribute(start, space, local); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func sameName(name xml.Name, want xml.Name) bool {
 	return name.Local == want.Local && name.Space == want.Space
 }

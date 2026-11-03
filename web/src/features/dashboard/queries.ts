@@ -4,7 +4,7 @@ import { getMaterialStats, listMaterials } from '../materials/api';
 
 const REFRESH_MS = 30_000;
 
-export const dashboardKeys = {
+const dashboardKeys = {
   all: ['dashboard'] as const,
   materialStats: ['dashboard', 'materials', 'stats'] as const,
   recentMaterials: ['dashboard', 'materials', 'recent'] as const,

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -149,6 +150,47 @@ func (s *Server) handleDownloadMaterial(c *gin.Context) {
 	if download.Size > 0 {
 		c.Header("Content-Length", fmt.Sprintf("%d", download.Size))
 	}
+	c.Status(http.StatusOK)
+	_, _ = io.Copy(c.Writer, download.Reader)
+}
+
+func (s *Server) handlePullMaterialCache(c *gin.Context) {
+	cache, err := s.svc.PullMaterialCache(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "private, no-store, max-age=0")
+	s.respondData(c, http.StatusOK, pullCacheDTO{
+		DownloadURL: "/api/v1/materials/" + url.PathEscape(c.Param("id")) + "/pull-cache",
+		FileName:    cache.FileName,
+		MediaType:   cache.MediaType,
+		SizeBytes:   cache.SizeBytes,
+		SHA256:      cache.SHA256,
+		ExpiresAt:   cache.ExpiresAt,
+		ExpiresIn:   cache.ExpiresIn,
+	})
+}
+
+func (s *Server) handleDownloadPullCache(c *gin.Context) {
+	download, err := s.svc.OpenMaterialPullCache(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	defer download.Reader.Close()
+
+	mediaType := download.MediaType
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	c.Header("Content-Type", mediaType)
+	c.Header("Content-Disposition", contentDisposition(download.FileName))
+	c.Header("Content-Length", fmt.Sprintf("%d", download.SizeBytes))
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Cache-Control", "private, no-store, max-age=0")
+	c.Header("X-Pull-Cache-Expires-At", download.ExpiresAt.Format(time.RFC3339))
+	c.Header("X-Pull-Cache-Expires-In", fmt.Sprintf("%d", download.ExpiresIn))
 	c.Status(http.StatusOK)
 	_, _ = io.Copy(c.Writer, download.Reader)
 }

@@ -5,7 +5,7 @@ import type { AuthSession, Scope, User } from '../../shared/api/types';
 import { hasScope } from './permissions';
 import { fetchCurrentUser, logoutRequest } from './api';
 
-export type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
+type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
 export interface AuthContextValue {
   status: AuthStatus;

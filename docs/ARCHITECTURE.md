@@ -1,6 +1,6 @@
 # 高中资料归档系统技术架构
 
-版本 1.4.0 · 2026-10-30。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
+版本 1.5.0 · 2026-10-30。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
 
 本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。自建 RapidOCR 已在远端 Compose 用真实扫描 PDF 验证。
 
@@ -104,6 +104,7 @@ web/src/
 ### 4.3 数据下钻与可观测
 
 - 仪表盘资料/任务统计卡直接进入对应状态筛选；资料按 SHA-256 精确反查同内容逻辑资料，不合并且不隐藏独立资料记录。
+- 资料、合集、任务列表及仪表盘最近记录使用整行点击导航；移动端卡片空白区域同样可点击。导航忽略行内链接、按钮、表单控件和下拉触发器，标题链接仍保留原生语义与可访问性。
 - 资料详情返回 `collections` 和最多 5 个关联任务，可进入合集详情、合集反查列表或完整任务筛选；合集列表支持 `material_id` 反查。
 - 任务列表支持 `upload_id`、`material_id`、`replica_id` 精确筛选；资料详情的副本可回到所属存储端点，任务详情保留上传、资料和副本入口。
 - 浏览器网络遥测只保存在内存，最多保留最近 100 次采样；展示 P95/平均/中位延迟、成功率、传输字节、在途数量、请求耗时、响应大小和 request ID。采样不含请求正文、响应正文、凭据或查询参数；清空会重置历史聚合，但保留仍在途的请求。
@@ -206,7 +207,7 @@ Index:    pending ──> running ──> succeeded | failed
 Eligible: exam / questions_answers only; other roles are not_applicable
 ```
 
-`RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时相关任务都会在租约仍然有效时回到 pending。
+`RecoverInterrupted` 在 SQLite 启动时把遗留的 `running` Job、`uploading` Replica、`running` Analysis 和索引状态改回 `pending`；PostgreSQL 只回收租约已过期的任务，不干扰其他健康实例。随后才启动 worker。进程取消（关机）时四类任务都会在租约仍然有效时回到 pending。
 
 任务行保存当前阶段、当前阶段的计数、本次执行开始/结束时间和 `duration_ms`，并保存最多 200 条带时间的处理记录；领取时开始计时，终态或重新排队时结束或清零。日志可带相对执行开始的 `elapsed_ms`、步骤 `duration_ms` 和有界 `metrics`（数据量、吞吐、页数、文件数、模型、校验级别、分享状态等），传输进度最多约每 5 秒写一次。进度更新受租约约束，旧 worker 不能覆盖新执行者的记录。列表省略历史日志，详情读取历史记录；旧任务允许没有新字段。日志不写令牌、分享链接、URL 或文件内容。
 
@@ -284,6 +285,7 @@ Eligible: exam / questions_answers only; other roles are not_applicable
 - 上传成功后再尝试 `Share`；分享失败不回滚副本，`share_status=failed` 且副本仍 ready；不支持分享记为 `unsupported`。
 - 分享 URL、提取码、过期时间只出现在有 `materials:read` 的资料详情响应；不写日志/审计。
 - 下载先看本地 CAS；缺失时按“主端优先、priority 升序、Provider ID/创建时间稳定排序”尝试 ready 副本，全部失败返回 503。
+- 按需拉取接口强制从 ready 云端副本读取，不复用 CAS；流式写入 `tmp/material-pulls` 并校验大小与 SHA-256，原子提交后按 `PULL_CACHE_TTL` 提供鉴权下载，不写入永久 CAS。
 - `POST /storage/reconcile` 只按当前策略补建缺少的副本/任务，不删除额外副本；历史副本不自动迁移。
 - 远端上传成功但数据库更新失败时可能残留远端对象；本地、WebDAV、S3 使用固定对象 key，OneDrive 使用固定路径并请求替换同名文件；其他适配器不保证远端幂等。
 
@@ -322,7 +324,7 @@ worker RunAnalyze
          → 嵌入位图逐张提交同一 OCR 接口（最多 20 张、并发 2）
          → PDF/图片仍按页上传
          → 轮询 /api/v1/ocr/jobs/{id}（默认 15 分钟）
-         → 下载 result_url JSONL，按页提取 texts
+         → 下载 result_url JSONL，按页提取 texts；也可接收有序正文/公式 blocks
   → 写 material_texts（Markdown + 逐页文本）
   → 写 DATA_DIR/analysis/<materialID>/document.md（截断 2 MiB）
   → 按 max_pages/max_images 限制图片；图片只在内存中传给视觉模型
@@ -338,8 +340,9 @@ worker RunAnalyze
 - 归类必须基于正文或页面图像：提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准；若 OCR/解析既没有得到正文也没有页面图像，任务失败而不会退回文件名猜测。归档阶段仍会按文件名写入一个初始角色建议，但启用自动识别后会被基于正文的 AI 结果覆盖。
 - `analysis_enabled` 只控制归档后的自动入队；手动触发不依赖它。
 - 解析出的独立页面图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。DOCX 生成的 PDF 预览缓存可能包含文档原有图片，应按原件保护。
-- 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。RapidOCR 的 DOCX 原生解析另含 `docx-native-v1` 版本标记。
-- DOCX 原生解析由 `internal/docx` 完成：读取 `word/document.xml` 与关系表，按段落/表格/文本框/公式生成 Markdown 和逐页文本，识别显式分页与 `lastRenderedPageBreak`；嵌入的 PNG/JPEG/GIF/BMP/TIFF/WebP 按引用顺序记录，最多 20 张、单张 12 MiB、总计 64 MiB，图片 OCR 失败只记录日志，不影响正文。页码依赖文档保存的分页提示，连续文档没有提示时按第 1 页处理。自建 RapidOCR 的 DOCX 不再经过 LibreOffice 转换或 OCR 文字层，因此分析/搜题不依赖 `soffice`，也不依赖 RapidOCR 镜像版本同步；MinerU/PaddleOCR 仍按各自协议接收原件。
+- 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。RapidOCR 的 DOCX 原生解析另含 `docx-native-v2` 版本标记，避免复用旧的公式文本缓存。
+- DOCX 原生解析由 `internal/docx` 完成：读取 `word/document.xml` 与关系表，按段落/表格/文本框/公式生成 Markdown 和逐页文本，识别显式分页与 `lastRenderedPageBreak`；常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。嵌入的 PNG/JPEG/GIF/BMP/TIFF/WebP 按引用顺序记录，最多 20 张、单张 12 MiB、总计 64 MiB，图片 OCR 失败只记录日志，不影响正文。页码依赖文档保存的分页提示，连续文档没有提示时按第 1 页处理。自建 RapidOCR 的 DOCX 不再经过 LibreOffice 转换或 OCR 文字层，因此分析/搜题不依赖 `soffice`，也不依赖 RapidOCR 镜像版本同步；MinerU/PaddleOCR 仍按各自协议接收原件。
+- RapidOCR 结果接收端支持 `page_no` + `texts` 旧格式，也支持有序 `text`、`inline_formula`、`display_formula` 内容块并保留 LaTeX。现有自建 OCR 进程仍只输出 `texts`，并未接入扫描件公式识别模型。
 - DOCX 预览仍由 `internal/office` 调用 LibreOffice Writer 生成 PDF，使用独立配置、最高宏安全级别、内容寻址缓存 `previews/docx-v1/<sha前两位>/<sha>.pdf`；每个应用实例最多同时转换一个文档。非容器部署需自行安装 Writer 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
 - 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
 - 自动归类采用保守规则：仅处理无目录层级的单文件上传、已完成、无现有合集且角色为 `exam` 的资料；候选限定为 `series`/`exam`，按归一化标题、学科、年级、学年和答案类成员评分。学科/年级/学年冲突、重复内容或同标题试卷、低置信度及接近并列候选都不自动处理。成功只追加合集条目并回写 `Upload.collection_id`；任务不会自动创建、合并、移动或拆分合集。无匹配仍是成功终态，手动重新分析会重新尝试；审计写 `collection.auto_assign`。
@@ -368,17 +371,19 @@ RunIndex
 - ZIP 容器本身不索引；展开成员各自索引。
 - 手动 `POST /materials/{id}/index` 不依赖索引开关；`force=true` 会清空 `material_texts.source_hash` 以强制重新解析。
 - 失败不会删除上一次成功的索引；旧题目仍可搜索，状态显示 failed。重建成功才原子替换题目和词项。
-- `question_terms` 使用 CJK unigram + bigram 和连续字母/数字词，不依赖 SQLite FTS5、PostgreSQL 扩展或向量库。
+- `question_terms` 使用 CJK unigram + bigram、连续字母/数字词和保留运算符的公式二元/三元词项，不依赖 SQLite FTS5、PostgreSQL 扩展或向量库。题干原文和 LaTeX 不被归一化覆盖；切题提示要求保留公式，输入中已有 LaTeX 命令的单反斜杠 JSON 输出会先修复，危险控制字符会使切题失败。
+- 新题目在同一事务写入公式词项与 `math_index_version=1`；已有题目由后台分批幂等补建，公式查询也会先补完剩余项。补建只读取已保存题干，不调用 OCR/模型；PostgreSQL 对题目行加锁并按同一顺序协调替换/删除，SQLite 依赖单连接与立即事务。
+- 补建无法恢复旧题干已经丢失的结构；旧 DOCX 可重建题目索引，从原件按 `docx-native-v2` 重新解析并调用切题模型。
 - 题目和词项在事务内分批写入，词项缓冲有界，减少逐行写入的数据库往返；合集成员使用稳定自然排序。
 - `material_index_states` 记录页数、题目数、LLM 调用数、失败批次数和 indexed_at。
 
 ### 10.2 搜索
 
-- 请求归一化：全角转半角、去空白/标点/符号、转小写；查询词项最多取 24 个。
-- SQL 先按词项召回，限制最多 2000 个候选；只返回 `materials.status in (archived, degraded)` 的资料。
+- 普通文本归一化仍为全角转半角、去空白/标点/符号、转小写；公式另行保留运算符和变量大小写，将上标、常见符号、简单分式及对应 LaTeX 写法统一。最多优先取 16 个公式词项，总计最多 24 个词项。
+- SQL 先按词项召回；公式查询要求候选题目包含所有选中的公式词项，再限制最多 2000 个候选，避免纯文字相似题目挤占公式结果。只返回 `materials.status in (archived, degraded)` 的资料。
 - 过滤条件：学科（`material_subjects`）、年级、学年；可选。
-- 打分：词项覆盖率 ×10 + `log1p(tf 总和)` + 精确短语加分（查询 ≥4 字且命中 +6）− 长度惩罚；覆盖率低于 0.5（查询词项 >12 时 0.35）且无精确短语的候选被丢弃。
-- 返回 `snippet`（约 180 字）和纯文本字符区间 `highlights`，不返回 HTML；前端自行渲染 `<mark>`。
+- 普通文本按词项覆盖率、词频、短语和长度打分；公式查询先校验所有公式片段，混合文字要求选中词项至少 35% 匹配，再按覆盖率、词频及公式命中打分。不同运算符不会因为去标点而合并，但不进行通用代数等价运算。
+- 搜索结果返回 `snippet`（约 180 字）和纯文本字符区间 `highlights`，不返回 HTML；普通文本优先截取归一化后最长的连续匹配文段，公式查询围绕命中公式截取。截断处附省略号，区间相对于包含省略号的摘要；前端自行渲染 `<mark>` 并支持分页。单题详情没有查询词，高亮为空。
 - `limit` 默认 20，最大 50；`offset` 从 0 开始；`total` 是过滤后的命中数，不是 SQL 候选数。
 - 每条结果对应一个题目块；同一题出现在多份试卷就是多条结果，不做跨资料聚合。结果可带第一个包含该资料的合集 ID。
 - 搜索接口使用 `materials:read`；搜索设置使用 `search:read`/`search:write`，默认仅管理员，可授权给 API 密钥。
@@ -468,6 +473,7 @@ DATA_DIR/
   blobs/<sha[0:2]>/<sha>   原件 CAS
   tmp/                     上传/展开临时文件
   tmp/upload-archives/     已接收、等待处理的 ZIP；成功后清理
+  tmp/material-pulls/      云端副本按需拉取缓存，按 SHA 命名并受 TTL 限制
   analysis/<materialID>/document.md   识别 Markdown（绝对路径写入数据库）
   providers/<providerID>/...          本地存储端点的副本
 ```
@@ -486,6 +492,7 @@ DATA_DIR/
 | `ADMIN_USERNAME`/`ADMIN_PASSWORD` | 空 | 仅空库自举；密码至少 12 字符 |
 | `JWT_SECRET` | 必填 | ≥32 字符，HS256 签名 |
 | `MASTER_KEY` | 必填 | 32 字节 base64，AES-256-GCM |
+| `PULL_CACHE_TTL` | `15m` | 云端副本拉取到临时目录后的可下载时长 |
 
 完整说明见 [README](../README.md)；`MASTER_KEY` 丢失后已保存的存储/AI 凭据无法解密。
 

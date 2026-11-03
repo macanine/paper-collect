@@ -127,17 +127,6 @@ func validateRelativePath(p string) error {
 	return nil
 }
 
-// validatePage normalises pagination. page >= 1 and 1 <= page_size <= 100.
-func validatePage(page, pageSize int) (PageQuery, error) {
-	if page < 1 {
-		return PageQuery{}, apperr.Validation("page 必须大于等于 1")
-	}
-	if pageSize < 1 || pageSize > 100 {
-		return PageQuery{}, apperr.Validation("page_size 必须在 1 到 100 之间")
-	}
-	return PageQuery{Page: page, PageSize: pageSize}, nil
-}
-
 // PageQuery is a validated page request.
 type PageQuery struct {
 	Page     int

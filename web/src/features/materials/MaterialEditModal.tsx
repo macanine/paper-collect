@@ -21,7 +21,7 @@ export interface MaterialFormValues {
 
 const GRADE_CHOICES = [{ value: '' as Grade, label: '未指定' }, ...GRADE_OPTIONS];
 
-export function toFormValues(material: Material): MaterialFormValues {
+function toFormValues(material: Material): MaterialFormValues {
   return {
     title: material.title,
     description: material.description,
@@ -38,7 +38,7 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /** 计算相对原始资料的 PATCH 载荷；无变化时返回空对象。 */
-export function diffMaterial(material: Material, values: MaterialFormValues): MaterialUpdate {
+function diffMaterial(material: Material, values: MaterialFormValues): MaterialUpdate {
   const patch: MaterialUpdate = {};
   const title = values.title.trim();
   if (title !== material.title) patch.title = title;

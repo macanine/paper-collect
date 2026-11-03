@@ -300,7 +300,6 @@ func parseMineruZip(raw []byte) (Result, error) {
 	markdownBytes := 0
 	var contentList []byte
 	var images [][]byte
-	var imageNames []string
 	type imageEntry struct {
 		name string
 		data []byte
@@ -364,7 +363,6 @@ func parseMineruZip(raw []byte) (Result, error) {
 	sort.SliceStable(found, func(i, j int) bool { return found[i].name < found[j].name })
 	for _, entry := range found {
 		images = append(images, entry.data)
-		imageNames = append(imageNames, entry.name)
 	}
 	if allPages == 0 {
 		allPages = len(images)

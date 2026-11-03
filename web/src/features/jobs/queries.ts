@@ -2,15 +2,15 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import type { Job } from '../../shared/api/types';
 import { getJob, listJobs, retryJob, type JobListParams } from './api';
 
-export const JOB_POLL_MS = 3000;
+const JOB_POLL_MS = 3000;
 
-export const jobKeys = {
+const jobKeys = {
   all: ['jobs'] as const,
   list: (params: JobListParams) => ['jobs', 'list', params] as const,
   detail: (id: string) => ['jobs', 'detail', id] as const,
 };
 
-export function isTerminal(job: Pick<Job, 'status'> | undefined): boolean {
+function isTerminal(job: Pick<Job, 'status'> | undefined): boolean {
   return job?.status === 'succeeded' || job?.status === 'failed';
 }
 

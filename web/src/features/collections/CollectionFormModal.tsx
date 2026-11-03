@@ -16,7 +16,7 @@ export interface CollectionFormValues {
   subject_codes: SubjectCode[];
 }
 
-export function collectionToForm(collection: Collection): CollectionFormValues {
+function collectionToForm(collection: Collection): CollectionFormValues {
   return {
     title: collection.title,
     description: collection.description,
@@ -31,7 +31,7 @@ function sameStringList(left: readonly string[], right: readonly string[]): bool
 }
 
 /** 只提交相对原合集有变化的字段；PATCH 省略即表示不修改。 */
-export function diffCollection(collection: Collection, values: CollectionFormValues): CollectionPatchBody {
+function diffCollection(collection: Collection, values: CollectionFormValues): CollectionPatchBody {
   const patch: CollectionPatchBody = {};
   const title = values.title.trim();
   if (title !== collection.title) patch.title = title;
@@ -43,7 +43,7 @@ export function diffCollection(collection: Collection, values: CollectionFormVal
   return patch;
 }
 
-export function buildCreateBody(values: CollectionFormValues): CollectionCreateBody {
+function buildCreateBody(values: CollectionFormValues): CollectionCreateBody {
   return {
     title: values.title.trim(),
     description: values.description ?? '',

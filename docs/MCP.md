@@ -117,6 +117,8 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `materials_get` | `GET /api/v1/materials/:id` | `materials:read` |
 | `materials_update` | `PATCH /api/v1/materials/:id` | `materials:write` |
 | `materials_download` | `GET /api/v1/materials/:id/download` | `materials:read` |
+| `materials_pull_cache` | `POST /api/v1/materials/:id/pull-cache` | `materials:read` |
+| `materials_pull_cache_download` | `GET /api/v1/materials/:id/pull-cache` | `materials:read` |
 | `materials_preview` | `GET /api/v1/materials/:id/preview` | `materials:read` |
 | `materials_delete` | `DELETE /api/v1/materials/:id` | `materials:write` |
 | `material_analysis_enqueue` | `POST /api/v1/materials/:id/analysis` | `materials:write` |
@@ -159,7 +161,8 @@ OneDrive 使用现成 OpenList 应用时，`storage_providers_create` 的 `confi
 2. 小文件可用 `uploads_file_put` 的 `data_base64` 直接上传，解码后不超过 512 KiB；MCP 请求本身最多 1 MiB。较大文件调用 `uploads_transfer_info` 获取 `method`、相对 `path` 和大小，在同一服务地址用相同 Bearer 密钥以 `application/octet-stream` 流式 PUT。服务端单文件上限为 512 MiB。
 3. 调用 `uploads_finalize`，再用 `jobs_get` 查询处理进度。
 4. 调用 `materials_download` 获取 GET 相对路径、文件名、类型和大小，再在同一服务地址使用相同 Bearer 密钥流式下载。返回路径不包含密钥，下载内容不经过 MCP JSON 缓冲。
-5. PDF 和 DOCX 可调用 `materials_preview` 获取 PDF 预览的 GET 相对路径，仍需使用相同 Bearer 密钥请求；DOCX 的预览由服务端转换，下载接口继续返回原件。
+5. 需要把云端 ready 副本拉回服务端临时缓存时，先调用 `materials_pull_cache` 获取带过期时间的 `download_url`，再用相同 Bearer 密钥请求 `materials_pull_cache_download`；TTL 由服务端 `PULL_CACHE_TTL` 控制，过期后返回 410。
+6. PDF 和 DOCX 可调用 `materials_preview` 获取 PDF 预览的 GET 相对路径，仍需使用相同 Bearer 密钥请求；DOCX 的预览由服务端转换，下载接口继续返回原件。
 
 `uploads_transfer_info` 会验证上传归属和条目存在；实际传输仍会验证权限及文件大小。请勿记录或公开密钥、分享链接或提取码。
 

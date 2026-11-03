@@ -16,4 +16,14 @@ describe('搜题高亮切分', () => {
       { text: 'c', marked: true },
     ]);
   });
+
+  it('使用字符而非 UTF-16 长度定位，并忽略截断后的空区间', () => {
+    expect(splitHighlights('…🚀函数 x²+1…', [[1, 2], [5, 9], [100, 101]])).toEqual([
+      { text: '…', marked: false },
+      { text: '🚀', marked: true },
+      { text: '函数 ', marked: false },
+      { text: 'x²+1', marked: true },
+      { text: '…', marked: false },
+    ]);
+  });
 });

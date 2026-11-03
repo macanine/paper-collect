@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Descriptions, Progress, Result, Space, Statistic, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowLeftOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
 import type { Job, JobStatus, Upload } from '../../shared/api/types';
@@ -9,7 +8,9 @@ import { formatBytes, formatDuration, formatRate } from '../../shared/lib/format
 import { UPLOAD_STATUS_LABELS } from '../../shared/lib/labels';
 import { useCompactViewport } from '../../shared/lib/useCompactViewport';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
+import { LinkButton } from '../../shared/ui/LinkButton';
 import { JobStatusTag, UploadStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { retryJob } from '../jobs/api';
@@ -27,7 +28,7 @@ export function UploadSessionPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink />
+        <BackLink to="/uploads/new">返回上传资料</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="清单加载失败" />
       </div>
     );
@@ -209,7 +210,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
 
   return (
     <div className="page-stack">
-      <BackLink />
+      <BackLink to="/uploads/new">返回上传资料</BackLink>
       <PageHeader
         title={upload.title}
         extra={
@@ -328,21 +329,15 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
           title="归档完成"
           extra={[
             upload.material_id ? (
-              <Link key="material" to={`/materials/${upload.material_id}`}>
-                <Button type="primary">查看资料</Button>
-              </Link>
+              <LinkButton key="material" type="primary" to={`/materials/${upload.material_id}`}>查看资料</LinkButton>
             ) : null,
             upload.collection_id ? (
-              <Link key="collection" to={`/collections/${upload.collection_id}`}>
-                <Button type="primary">查看合集</Button>
-              </Link>
+              <LinkButton key="collection" type="primary" to={`/collections/${upload.collection_id}`}>查看合集</LinkButton>
             ) : null,
             !upload.material_id ? (
-              <Link key="materials" to="/materials">
-                <Button>查看全部资料</Button>
-              </Link>
+              <LinkButton key="materials" to="/materials">查看全部资料</LinkButton>
             ) : null,
-            <Link key="job" to={`/jobs/${jobId}`}><Button>查看处理记录</Button></Link>,
+            <LinkButton key="job" to={`/jobs/${jobId}`}>查看处理记录</LinkButton>,
           ]}
         />
       </Card>
@@ -380,14 +375,5 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
         />
       ) : null}
     </Card>
-  );
-}
-
-function BackLink() {
-  return (
-    <Link to="/uploads/new" className="inline-flex items-center gap-1 text-sm">
-      <ArrowLeftOutlined />
-      返回上传资料
-    </Link>
   );
 }

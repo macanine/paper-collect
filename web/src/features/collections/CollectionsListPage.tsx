@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Alert, Button, Card, Input, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowRightOutlined, PlusOutlined } from '@ant-design/icons';
@@ -7,6 +7,8 @@ import type { Collection, CollectionKind, SubjectCode } from '../../shared/api/t
 import { formatDateTime } from '../../shared/lib/format';
 import { useListSearch } from '../../shared/lib/listSearch';
 import { useCompactViewport } from '../../shared/lib/useCompactViewport';
+import { useDebouncedFilterInput } from '../../shared/lib/useDebouncedFilterInput';
+import { navigateTableRow } from '../../shared/lib/tableNavigation';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { CollectionKindTag, SubjectTags } from '../../shared/ui/StatusTags';
@@ -24,17 +26,10 @@ export function CollectionsListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const list = useListSearch<FilterKey>(FILTER_KEYS);
   const { setFilters } = list;
-  const [qInput, setQInput] = useState(list.filters.q);
+  const [qInput, setQInput] = useDebouncedFilterInput(list.filters.q, (q) => setFilters({ q }));
   const [creating, setCreating] = useState(false);
   const canWrite = can('collections:write');
   const materialId = searchParams.get('material_id') ?? '';
-
-  useEffect(() => {
-    const trimmed = qInput.trim();
-    if (trimmed === list.filters.q) return;
-    const timer = window.setTimeout(() => setFilters({ q: trimmed }), 300);
-    return () => window.clearTimeout(timer);
-  }, [qInput, list.filters.q, setFilters]);
 
   const query = useCollectionsList({
     page: list.page,
@@ -173,7 +168,10 @@ export function CollectionsListPage() {
           <Table<Collection>
             rowKey="id"
             size="middle"
-            className={compact ? 'compact-list-table' : undefined}
+            className={compact ? 'compact-list-table clickable-rows' : 'clickable-rows'}
+            onRow={(collection) => ({
+              onClick: (event) => navigateTableRow(event, `/collections/${collection.id}`, navigate),
+            })}
             columns={compact ? compactColumns : desktopColumns}
             dataSource={query.data?.items ?? []}
             loading={query.isFetching}

@@ -1,4 +1,4 @@
-import type { SubjectCode, Role, Grade, MaterialStatus, CollectionKind, UserRole, ProviderKind, ProviderRole, StorageMode, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus } from '../api/types';
+import type { SubjectCode, Role, Grade, MaterialStatus, CollectionKind, UserRole, ProviderRole, StorageMode, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus } from '../api/types';
 
 export const SUBJECT_LABELS: Record<SubjectCode, string> = {
   chinese: '语文',
@@ -49,15 +49,6 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
   admin: '管理员',
   editor: '编辑',
   viewer: '查看者',
-};
-
-export const PROVIDER_KIND_LABELS: Record<ProviderKind, string> = {
-  local: '本地存储',
-  webdav: 'WebDAV',
-  lanzou: '蓝奏云',
-  '123pan': '123 云盘',
-  onedrive: 'OneDrive',
-  s3: 'S3 / 兼容对象存储',
 };
 
 export const PROVIDER_ROLE_LABELS: Record<ProviderRole, string> = {

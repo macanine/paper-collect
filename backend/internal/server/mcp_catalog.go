@@ -132,6 +132,8 @@ var mcpOperations = func() []mcpOperation {
 		op("materials_get", "读取资料详情和存储状态。", "GET", "/materials/:id", model.ScopeMaterialsRead, id),
 		op("materials_update", "编辑资料字段。", "PATCH", "/materials/:id", model.ScopeMaterialsWrite, id, meta),
 		special(op("materials_download", "取得流式下载路径，使用当前密钥直接请求。", "GET", "/materials/:id/download", model.ScopeMaterialsRead, id), "download"),
+		op("materials_pull_cache", "从可用云端副本拉取文件到临时缓存并校验 SHA-256，返回有时效的下载路径。", "POST", "/materials/:id/pull-cache", model.ScopeMaterialsRead, id),
+		special(op("materials_pull_cache_download", "取得已拉取临时文件的流式下载路径，使用当前密钥直接请求。", "GET", "/materials/:id/pull-cache", model.ScopeMaterialsRead, id), "pull_cache_download"),
 		special(op("materials_preview", "取得 PDF 预览路径，使用当前密钥直接请求。", "GET", "/materials/:id/preview", model.ScopeMaterialsRead, id), "preview"),
 		op("materials_delete", "删除资料，可指定是否级联。", "DELETE", "/materials/:id", model.ScopeMaterialsWrite, id, queryB("cascade")),
 		op("material_analysis_enqueue", "创建资料分析任务。", "POST", "/materials/:id/analysis", model.ScopeMaterialsWrite, id, bodyB("force")),
@@ -310,7 +312,7 @@ func (s *Server) runOperation(c *gin.Context, o mcpOperation, args map[string]an
 			body[f.name] = value
 		}
 	}
-	if o.special == "download" {
+	if o.special == "download" || o.special == "pull_cache_download" {
 		view, err := s.svc.GetMaterial(c.Request.Context(), args["id"].(string))
 		if err != nil {
 			return nil, err

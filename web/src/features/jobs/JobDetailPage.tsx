@@ -1,11 +1,12 @@
 import { App, Button, Card, Descriptions, Popconfirm, Progress, Typography } from 'antd';
-import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import { formatDateTime, formatDuration } from '../../shared/lib/format';
 import { JOB_KIND_LABELS } from '../../shared/lib/labels';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
@@ -23,7 +24,7 @@ export function JobDetailPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink />
+        <BackLink to="/jobs">返回任务列表</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="任务加载失败" />
       </div>
     );
@@ -42,7 +43,7 @@ export function JobDetailPage() {
 
   return (
     <div className="page-stack">
-      <BackLink />
+      <BackLink to="/jobs">返回任务列表</BackLink>
       <PageHeader
         title={JOB_KIND_LABELS[job.kind] ?? '任务详情'}
         extra={
@@ -144,14 +145,5 @@ export function JobDetailPage() {
         <JobProgress job={job} />
       </Card>
     </div>
-  );
-}
-
-function BackLink() {
-  return (
-    <Link to="/jobs" className="inline-flex items-center gap-1 text-sm">
-      <ArrowLeftOutlined />
-      返回任务列表
-    </Link>
   );
 }

@@ -4,7 +4,7 @@ import { SCOPES, type Scope, type UserRole } from '../../shared/api/types';
 // 依据 docs/API.md 与 docs/ARCHITECTURE.md 的角色定义：admin 全部；editor 负责资料/合集编辑、上传与任务读取；
 // viewer 只读资料、合集与任务。编辑角色包含对应的读取权限（与服务端 auth.RoleScopes 一致）。
 
-export const ROLE_SCOPES: Record<UserRole, readonly Scope[]> = {
+const ROLE_SCOPES: Record<UserRole, readonly Scope[]> = {
   admin: SCOPES,
   editor: [
     'materials:read',
@@ -17,7 +17,7 @@ export const ROLE_SCOPES: Record<UserRole, readonly Scope[]> = {
   viewer: ['materials:read', 'collections:read', 'jobs:read'],
 };
 
-export function scopesForRole(role: UserRole | null | undefined): readonly Scope[] {
+function scopesForRole(role: UserRole | null | undefined): readonly Scope[] {
   if (!role) return [];
   return ROLE_SCOPES[role] ?? [];
 }

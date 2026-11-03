@@ -1,6 +1,6 @@
 # 数据结构、存储与备份
 
-版本 1.3.0 · 2026-10-28。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
+版本 1.4.0 · 2026-10-30。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
 
 ## 1. 数据库与运行形态
 
@@ -34,13 +34,13 @@
 | `replicas` | `Replica` | Blob×Provider 副本；唯一索引 `(blob_id, provider_id)`；`status` 索引；verification、分享字段、远端标识、`plan_mode` |
 | `storage_policies` | `Policy` | 单例 `id=1`；mode 与 `minimum_replicas` |
 | `ai_providers` | `AIProvider` | OpenAI 兼容端点；`enabled`、`priority` 索引；加密 API Key、`models_json`、默认/视觉模型 |
-| `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 默认 `PP-OCRv5`），启停与优先级 |
+| `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型字段（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 字段默认 `PP-OCRv5`，但自建服务固定使用 RapidOCR 3.10 默认 PP-OCRv6 small），启停与优先级 |
 | `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限；旧 MinerU 字段仅用于兼容迁移 |
 | `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、应用时间、Markdown 路径、脱敏错误 |
 | `search_settings` | `SearchSettings` | 单例 `id=1`；索引开关、页数/批次上限、指定 provider/model |
 | `material_texts` | `MaterialText` | 每资料一行；`source_hash`、`parse_key`、页数、逐页文本 JSON、完整 Markdown；供分析与索引复用 |
-| `question_blocks` | `QuestionBlock` | 题目；`material_id`、`page_no` 索引；`seq`、题号、纠错后文本、归一化文本、置信度、model/prompt_version |
-| `question_terms` | `QuestionTerm` | 可移植倒排；主键 `(term, question_id)`；`term` 索引；`tf` 词频 |
+| `question_blocks` | `QuestionBlock` | 题目；`material_id`、`page_no` 索引；`seq`、题号、保留公式的题干、普通文本归一化、`math_index_version`、置信度、model/prompt_version |
+| `question_terms` | `QuestionTerm` | 可移植倒排；主键 `(term, question_id)`；`term` 索引；`tf` 词频；`m:` 前缀用于公式词项 |
 | `material_index_states` | `MaterialIndexState` | 每资料一行；status、job_id、页数、题目数、LLM 调用/失败批次、indexed_at、脱敏错误 |
 
 ### 2.1 关系摘要
@@ -75,6 +75,7 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 - `Replica.status`：pending → uploading → ready/failed；failed 可重试回 pending；分享状态独立为 pending/ready/unsupported/failed。
 - `MaterialAnalysis.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
 - `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
+- RapidOCR 的 DOCX 解析键额外包含 `docx-native-v2`，保存常见公式结构。已有题目的 `math_index_version=0` 表示尚未补建公式词项；后台按批次事务补建为 1，公式搜索会先完成剩余补建。该操作不修改题干、不调用外部服务；旧题干已丢失的结构需从原件重建索引才能恢复。
 
 ## 3. 数据目录
 
@@ -87,6 +88,7 @@ DATA_DIR/
   blobs/<sha[0:2]>/<sha>               原件 CAS，无扩展名
   tmp/stage-*.part                     上传及 ZIP 展开的临时文件
   tmp/upload-archives/*.zip            已接收且尚未处理成功的 ZIP 临时文件
+  tmp/material-pulls/<sha256>          按需从云端拉回的临时原件（默认保留 15m）
   tmp/docx-*.part                      远端副本读取 DOCX 时的临时文件
   tmp/docx-*/                          预览转换期间的临时 Word 文件和独立配置
   tmp/fontconfig-cache/                 macOS 转换器使用的字体缓存
@@ -99,6 +101,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 
 - `DATABASE_DSN` 若指向 `DATA_DIR` 外的 SQLite 文件或 PostgreSQL，数据库不在上述默认位置；CAS/临时文件/分析 Markdown/本地副本仍在 `DATA_DIR`。
 - CAS 以内容 SHA-256 寻址；相同内容只存一份。`Publish` 用原子 rename 落盘，重复内容丢弃临时文件。
+- `tmp/material-pulls/<sha256>` 是按需拉取缓存，不是 CAS。写入前校验资料声明的大小和 SHA-256，过期后由读取或后续拉取机会性清理；保留期由 `PULL_CACHE_TTL` 控制，不参与资料归档或副本状态。
 - DOCX 预览是可重建的派生文件，原件最后一个资料引用删除时一并清理；转换异常退出时可能留下临时目录。预览和临时文件也可能包含资料正文，备份和权限应与原件一致。
 - 原始上传在 `tmp/` 完成后才发布到 CAS；失败不会标记 entry received，但极端情况下可能留下未被引用的 CAS 文件。
 - `analysis/<materialID>/document.md` 每次分析前会删除并重建；数据库中的 `markdown_path` 是绝对路径，移动数据目录后旧分析摘要可能读不到，直到重新识别。

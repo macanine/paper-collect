@@ -10,6 +10,7 @@ export function splitHighlights(text: string, ranges: readonly (readonly [number
   const sorted = ranges
     .filter(([start, end]) => Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start)
     .map(([start, end]) => [Math.min(start, runes.length), Math.min(end, runes.length)] as const)
+    .filter(([start, end]) => end > start)
     .sort((a, b) => a[0] - b[0]);
   const merged: [number, number][] = [];
   for (const range of sorted) {

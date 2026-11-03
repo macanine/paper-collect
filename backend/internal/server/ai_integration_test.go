@@ -511,22 +511,36 @@ func TestQuestionSearchIndexAndPages(t *testing.T) {
 		Data struct {
 			Total int `json:"total"`
 			Items []struct {
-				PageNo  int    `json:"page_no"`
-				Text    string `json:"text"`
-				Snippet string `json:"snippet"`
+				QuestionID string `json:"question_id"`
+				PageNo     int    `json:"page_no"`
+				Text       string `json:"text"`
+				Snippet    string `json:"snippet"`
 			} `json:"items"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil || result.Data.Total == 0 {
+	if err := json.Unmarshal(body, &result); err != nil || result.Data.Total == 0 || len(result.Data.Items) == 0 {
 		t.Fatalf("search body: %s", body)
 	}
 	if result.Data.Items[0].PageNo != 1 {
 		t.Fatalf("expected page 1 first, got %+v", result.Data.Items)
 	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/search/questions/"+result.Data.Items[0].QuestionID, nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"highlights":[]`) {
+		t.Fatalf("question detail should have no query highlights: %d %s", status, body)
+	}
 
 	status, body = env.do(t, http.MethodPost, "/api/v1/search/questions", map[string]any{"query": "求导数"}, nil)
 	if status != http.StatusOK || !strings.Contains(string(body), "\"page_no\":2") {
 		t.Fatalf("page-2 search %d: %s", status, body)
+	}
+
+	status, body = env.do(t, http.MethodPost, "/api/v1/search/questions", map[string]any{"query": "x²+2x"}, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":1`) || !strings.Contains(string(body), `"page_no":1`) {
+		t.Fatalf("equivalent formula search %d: %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPost, "/api/v1/search/questions", map[string]any{"query": "x²-2x"}, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":0`) {
+		t.Fatalf("different formula operator should not match %d: %s", status, body)
 	}
 
 	// No cross-material aggregation: 函数 matches both page blocks.

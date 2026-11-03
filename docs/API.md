@@ -1,6 +1,6 @@
 # HTTP API v1 接口合同
 
-版本 1.4.0 · 2026-10-30。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+版本 1.5.0 · 2026-10-30。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
 
 ## 通用规范
 
@@ -8,7 +8,7 @@
 - 成功：`{"data":T,"request_id":"uuid"}`；列表 T 为 `{"items":[],"total":0,"page":1,"page_size":20}`。错误：`{"error":{"code":"validation_error","message":"说明"},"request_id":"uuid"}`。不得把秘密或堆栈写进 message。
 - 默认分页 `page=1&page_size=20`，page >= 1，page_size 1..100，稳定排序 created_at DESC、id DESC。未声明的分页/过滤参数不作为业务条件。
 - 写接口拒绝非法 JSON、未知字段、不支持的枚举、越界值。PATCH 是部分更新：省略=不改，空数组=清空，禁止 null（允许 null 的字段另写）。请求 JSON 默认 1 MiB。
-- HTTP：200 读取/更新；201 创建；202 任务已入队；204 删除/通知；400 格式错误；401 凭据无效；403 权限不足；404 不存在；409 状态冲突/重复路径；413 超尺寸；415 不支持类型；422 文件内容与声明不一致；429 登录频率限制；503 暂不可用。
+- HTTP：200 读取/更新；201 创建；202 任务已入队；204 删除/通知；400 格式错误；401 凭据无效；403 权限不足；404 不存在；409 状态冲突/重复路径；410 临时资源已过期；413 超尺寸；415 不支持类型；422 文件内容与声明不一致；429 登录频率限制；503 暂不可用。
 - GET /healthz 无鉴权返回 `{"status":"ok"}`。所有业务接口强制鉴权，仅 auth/login、auth/refresh 例外。
 - 浏览器 REST 使用 `Authorization: Bearer <access JWT>`；API 密钥直接使用 `Authorization: Bearer <API 密钥>` 访问 REST 和 MCP。新密钥以 `sk-` 开头，旧的 `pc_<id>.<secret>` 仍可直接使用。MCP 接受 API 密钥，不接受浏览器会话。
 - 角色：admin（全部）、editor（资料/合集写、上传、任务读）、viewer（资料/合集/任务读）。scope 包括 materials、collections、uploads、jobs、storage、keys、users、audit、ai 和 search 对应的读写或管理权限。API 密钥 scope 必须为用户权限子集；有相应授权时可访问管理、AI 和搜索设置接口。API 密钥创建其他密钥时只能授予自身持有的权限，创建用户时该用户角色的权限也不得超出当前密钥。新建密钥是独立凭据，不随创建者的密钥撤销而撤销。每次请求重新检查用户和密钥是否有效。
@@ -88,6 +88,18 @@ JSON 可含 title/description/subject_codes/grade/academic_year/tags/role（约�
 ### GET /materials/{id}/download（materials:read）
 
 200 二进制，Content-Type 取已验证媒体类型；Content-Disposition attachment，UTF-8 文件名；X-Content-Type-Options: nosniff。同源 JWT 通过 fetch Blob 下载，不将 Token 放入 URL。先检查本地原件，再按主备优先级尝试可读云副本；没有可用副本 503。Range 请求本期不承诺。
+
+### POST /materials/{id}/pull-cache（materials:read）
+
+从状态为 ready 的云端副本中按主端优先、priority 升序拉取文件，流式写入 `DATA_DIR/tmp/material-pulls`，同时校验资料的声明字节数和 SHA-256。只有完整匹配才原子发布为临时文件；不会写入永久 CAS，也不会修改副本状态或资料状态。没有可用副本、所有副本读取失败或内容校验失败返回 503，失败内容不会保留为可下载文件。
+
+200 data=`{"download_url":"/api/v1/materials/<id>/pull-cache","file_name":"试卷.pdf","media_type":"application/pdf","size_bytes":12345,"sha256":"<64位小写十六进制>","expires_at":"2026-10-30T12:00:00Z","expires_in":900}`。`download_url` 是服务端相对路径，必须继续携带相同 Bearer 凭据；不得把 Token 写进 URL。未过期且尺寸正确的现有临时文件会直接复用，重复 POST 不会延长 TTL。`expires_in` 为剩余秒数。
+
+TTL 由服务端环境变量 `PULL_CACHE_TTL` 控制，默认 `15m`。修改配置需重启对应进程；重启不会清除尚未到期的文件。过期判断基于临时文件的 mtime。多实例共享 `DATA_DIR` 时可复用其他实例落盘的同一 SHA 临时文件。
+
+### GET /materials/{id}/pull-cache（materials:read）
+
+200 返回先前通过 POST 拉取且尚未过期的原文件，Content-Type、Content-Disposition 和 `X-Content-Type-Options: nosniff` 与普通下载一致，并设置 `Cache-Control: private, no-store, max-age=0`、`X-Pull-Cache-Expires-At` 和 `X-Pull-Cache-Expires-In`。此接口只读取临时缓存，不会在 GET 时触发云端拉取。临时文件不存在、尺寸不匹配或已过期时删除该文件并返回 410 `gone`；资料不存在仍返回 404。Range 请求本期不承诺。
 
 ### GET /materials/{id}/preview（materials:read）
 
@@ -227,13 +239,15 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 `AISettings`：`analysis_enabled:boolean`（默认 false）,`ocr_provider_id:string`（当前选中的 OCRProvider；为空时选择 priority 最小的启用服务商）,`mineru_base_url:string`（旧字段，仅兼容保留）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，OCR 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`mineru_configured:boolean`（旧令牌状态）,`ocr_configured:boolean`（当前服务商令牌状态）,`updated_at`。
 
-选择自建 RapidOCR 时，DOCX 由 Go 直接解析 OOXML：正文、标题、表格、文本框、公式文本和分页提示进入解析缓存，嵌入的位图再逐张提交同一 OCR 接口；识别和索引共享解析缓存。DOCX 不经过 LibreOffice 或 PDF 文本层，分析/搜题无需 `soffice`，也无需同步升级 RapidOCR 镜像。页码来自显式分页或文档保存的分页提示，连续文档可能只有第 1 页；表格结构、复杂公式、图片 OCR 和复杂排版不能保证与原文完全一致。
+选择自建 RapidOCR 时，DOCX 由 Go 直接解析 OOXML：正文、标题、表格、文本框、公式和分页提示进入解析缓存，嵌入的位图再逐张提交同一 OCR 接口；识别和索引共享解析缓存。常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。DOCX 不经过 LibreOffice 或 PDF 文本层，分析/搜题无需 `soffice`，也无需同步升级 RapidOCR 镜像。页码来自显式分页或文档保存的分页提示，连续文档可能只有第 1 页；复杂公式、图片 OCR 和复杂排版不能保证与原文完全一致。
 
 - `GET /ai/settings`（ai:read）：200 AISettings。
 - `PUT /ai/settings`（ai:write）：请求完整设置，`ocr_provider_id` 可选：省略=保留，空串=清除选择；`mineru_token` 为旧 MinerU 兼容字段：省略=保留，空串=清除；200 AISettings。旧版仅提交 MinerU 字段的客户端会继续工作，并自动物化/更新 MinerU OCRProvider。
 - `POST /ai/mineru/test`（ai:write）：兼容旧客户端，实际测试当前选中的 OCR 服务商；200 `{"healthy":boolean,"message":"脱敏说明"}`。新客户端应使用 `POST /ocr/providers/{id}/test`。
 
 升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
+
+自建服务当前固定使用 RapidOCR 3.10.0 的默认 PP-OCRv6 small；请求中的 `model` 字段仅保留协议兼容，并不会切换模型。现有 JSONL 每页使用 `page_no` 和 `texts` 字符串数组。接收端也支持按阅读顺序排列的 `blocks`：`{"type":"text","text":"..."}`、`{"type":"inline_formula","latex":"..."}` 和 `{"type":"display_formula","latex":"..."}`；`latex` 为不含外围分隔符的原始 LaTeX，JSON 中的反斜杠须转义。有非空 `blocks` 时优先使用它并忽略 `texts`，未知块类型或空公式会失败而不静默丢失。该协议为后续公式模型提供入口；当前 RapidOCR 服务仍只输出 `texts`，没有接入扫描件公式识别模型。
 
 `MaterialAnalysis`：`id,material_id,status:pending|running|succeeded|failed,provider_id,provider_name,model,page_count,image_count(恒为 0，页面图不落盘),confidence:number(0..1),suggestions:{title?,subject_codes?,grade?,academic_year?,role?,tags?},markdown_excerpt:string(<=4000),error:string,applied_at:date-time|null,created_at,updated_at`。`applied_at` 表示最近一次自动或手动应用建议的时间。
 
@@ -255,8 +269,12 @@ Job 的 `material_id` 关联 analyze/index/group 等任务资料；`kind` 包含
 
 索引由 `index` 任务完成：默认启用；只有角色为 `exam`（试卷）或 `questions_answers`（试卷+答案）的资料会在归档、AI 识别应用角色或启动补建时入队，其他角色不会建立题目索引，角色改为非试卷类时会移除旧索引。任务复用命中“文件 SHA + OCR 类型/地址/模型 + 缓存版本”的 `material_texts`，未命中时调用当前 OCRProvider → LLM 默认每批 10 页/12000 字（可配置）完成 OCR 纠错与切题 → 保存题目和页码 → 建立 CJK unigram+bigram 与连续字母/数字词倒排。不做跨资料同题聚合；同一题出现在多份试卷就是多条结果。索引不保存页面图/bbox；需要视觉图片时 MinerU 会重新解析。
 
-- `POST /search/questions`（materials:read）：请求 `{"query":"已知函数...","subject":"math","grade":"grade12","academic_year":0,"limit":20,"offset":0}`。`query` 必填 1..2000 字；`subject`/`grade`/`academic_year` 按字典校验；`limit` 默认 20、最大 50；`offset` >= 0。只返回资料状态为 archived/degraded 且已有题目的记录。200 `{"items":[{"question_id":"...","question_no":"12","text":"完整题干（含选项/小问）","snippet":"...","highlights":[[0,6]],"score":12.3,"page_no":3,"material":{"id":"...","title":"...","file_name":"..."},"subject_codes":["math"],"collection_id":"..."}],"total":1,"took_ms":23}`。`highlights` 是纯文本字符区间，客户端自行渲染，禁止返回 HTML。
-- `GET /search/questions/{id}`（materials:read）：单题详情（同上字段，score 为 0）。
+题干保留原始公式文本/LaTeX，模型被要求保留运算符和结构；输入中已有的 LaTeX 命令若在模型 JSON 中少转义反斜杠，会在解码前修复，无法安全解码的控制字符使任务失败。搜索额外建立带运算符的公式二元/三元词项，并按公式原文的规范化形式再次校验：例如 `x+y` 与 `x-y` 可区分，`x²` 与 `x^{2}`、简单的 `\frac{x}{y}` 与 `x/y` 可匹配，全角和常见运算符写法可归一化。数学变量保留大小写；不支持通用代数等价、公式结构推理或任意 LaTeX。普通文本仍使用原有词项。公式命中高亮覆盖源文本中的公式片段，`text`/`snippet` 仍为普通文本，不返回可执行 HTML。
+
+升级后后台分批为已有题干补建公式词项，重复执行安全，不重新调用 OCR 或切题模型；公式搜索会先补完尚未处理的旧题，首次搜索可能等待。旧题干本身已经丢失的公式无法凭索引恢复；如需从原生 DOCX 恢复常见公式结构，请对资料重建题目索引，重新解析和切题会产生正常的模型调用。
+
+- `POST /search/questions`（materials:read）：请求 `{"query":"已知函数...","subject":"math","grade":"grade12","academic_year":0,"limit":20,"offset":0}`。`query` 必填 1..2000 字；`subject`/`grade`/`academic_year` 按字典校验；`limit` 默认 20、最大 50；`offset` >= 0。只返回资料状态为 archived/degraded 且已有题目的记录。200 `{"items":[{"question_id":"...","question_no":"12","text":"完整题干（含选项/小问）","snippet":"...","highlights":[[0,6]],"score":12.3,"page_no":3,"material":{"id":"...","title":"...","file_name":"..."},"subject_codes":["math"],"collection_id":"..."}],"total":1,"took_ms":23}`。`snippet` 围绕最长连续文字匹配或命中公式截取，省略处有 `…`；`highlights` 是相对于 `snippet` 的 Unicode 字符区间数组，无匹配时为空数组，客户端自行渲染，禁止返回 HTML。
+- `GET /search/questions/{id}`（materials:read）：单题详情（同上字段，score 为 0）；没有查询词，`snippet` 为题干首段，`highlights` 为空数组。
 - `GET /materials/{id}/questions`（materials:read）：分页 `{id,material_id,page_no,seq,question_no,text,confidence,created_at}`，按 `seq` 升序。
 - `GET /materials/{id}/index`（materials:read）：`{status:pending|running|succeeded|failed|not_applicable,job_id,page_count,question_count,llm_calls,llm_failed_batches,error,indexed_at}`；试卷类资料尚无索引记录时返回 `status=pending`、`job_id=""`；其他角色返回 `status=not_applicable`、`job_id=""`。
 - `POST /materials/{id}/index`（materials:write）：`{"force":true}` 重新索引；`force=true` 会清空解析缓存（`material_texts.source_hash`）以强制重新解析；202 `{"job_id":"...","state":{...}}`。只有角色为 `exam` 或 `questions_answers` 的资料可索引；ZIP 容器和其他角色拒绝索引。

@@ -2,7 +2,7 @@ import { apiRequest, apiUploadBinary, type BinaryUploadOptions } from '../../sha
 import { segment } from '../../shared/api/paths';
 import type { CollectionKind, FinalizeResult, Grade, SubjectCode, Upload, UploadEntry } from '../../shared/api/types';
 
-export interface UploadManifestEntry {
+interface UploadManifestEntry {
   relative_path: string;
   size_bytes: number;
 }

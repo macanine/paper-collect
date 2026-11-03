@@ -51,6 +51,11 @@ func NotFound(message string) *Error {
 	return New(http.StatusNotFound, "not_found", message)
 }
 
+// Gone is a 410 for expired temporary resources.
+func Gone(message string) *Error {
+	return New(http.StatusGone, "gone", message)
+}
+
 // Conflict is a 409 for state conflicts and duplicate paths.
 func Conflict(message string) *Error {
 	return New(http.StatusConflict, "conflict", message)

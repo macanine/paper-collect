@@ -4,10 +4,10 @@ import { useSearchParams } from 'react-router';
 // 列表状态同步到 URL（page、page_size 与过滤条件），刷新与前进后退都能保持视图。
 // 参数名与 API 查询参数保持一致；过滤条件变化时回到第一页。
 
-export const DEFAULT_PAGE_SIZE = 20;
-export const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
 
-export function parseIntParam(raw: string | null, fallback: number, min: number, max: number): number {
+function parseIntParam(raw: string | null, fallback: number, min: number, max: number): number {
   if (raw === null || raw.trim() === '') return fallback;
   const value = Number(raw);
   if (!Number.isInteger(value)) return fallback;

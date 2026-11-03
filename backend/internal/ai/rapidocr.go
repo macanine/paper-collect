@@ -216,7 +216,8 @@ func (r *RapidOCR) downloadResult(ctx context.Context, jsonURL string) (Result, 
 }
 
 // ParseRapidOCRJSONL converts one JSON object per page into a page-oriented
-// result. Each page object has {"texts":[...]}.
+// result. Legacy pages contain texts; formula-aware providers may instead send
+// ordered text, inline_formula and display_formula blocks.
 func ParseRapidOCRJSONL(raw []byte) (Result, error) {
 	lines := bytes.Split(raw, []byte{'\n'})
 	pages := make([]PageText, 0, len(lines))
@@ -228,6 +229,11 @@ func ParseRapidOCRJSONL(raw []byte) (Result, error) {
 		var page struct {
 			PageNo int      `json:"page_no"`
 			Texts  []string `json:"texts"`
+			Blocks []struct {
+				Type  string `json:"type"`
+				Text  string `json:"text"`
+				LaTeX string `json:"latex"`
+			} `json:"blocks"`
 		}
 		if err := json.Unmarshal(line, &page); err != nil {
 			return Result{}, &APIError{Class: "invalid_response", Detail: "RapidOCR JSONL 格式无效"}
@@ -236,13 +242,38 @@ func ParseRapidOCRJSONL(raw []byte) (Result, error) {
 		if pageNo <= 0 {
 			pageNo = len(pages) + 1
 		}
-		texts := make([]string, 0, len(page.Texts))
-		for _, text := range page.Texts {
-			if strings.TrimSpace(text) != "" {
-				texts = append(texts, strings.TrimSpace(text))
+		var pageText string
+		if len(page.Blocks) > 0 {
+			var text strings.Builder
+			for _, block := range page.Blocks {
+				switch block.Type {
+				case "text":
+					text.WriteString(block.Text)
+				case "inline_formula", "display_formula":
+					latex := strings.TrimSpace(block.LaTeX)
+					if latex == "" {
+						return Result{}, &APIError{Class: "invalid_response", Detail: "RapidOCR 公式内容为空"}
+					}
+					if block.Type == "inline_formula" {
+						text.WriteString(`\(` + latex + `\)`)
+					} else {
+						text.WriteString("\n\\[" + latex + "\\]\n")
+					}
+				default:
+					return Result{}, &APIError{Class: "invalid_response", Detail: "RapidOCR 结果包含不支持的内容块"}
+				}
 			}
+			pageText = strings.TrimSpace(text.String())
+		} else {
+			texts := make([]string, 0, len(page.Texts))
+			for _, text := range page.Texts {
+				if strings.TrimSpace(text) != "" {
+					texts = append(texts, strings.TrimSpace(text))
+				}
+			}
+			pageText = strings.Join(texts, "\n")
 		}
-		pages = append(pages, PageText{PageNo: pageNo, Text: strings.Join(texts, "\n")})
+		pages = append(pages, PageText{PageNo: pageNo, Text: pageText})
 		if len(pages) >= rapidOCRMaxPages {
 			break
 		}

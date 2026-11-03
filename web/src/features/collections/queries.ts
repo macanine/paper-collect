@@ -11,7 +11,7 @@ import {
   type CollectionPatchBody,
 } from './api';
 
-export const collectionKeys = {
+const collectionKeys = {
   all: ['collections'] as const,
   list: (params: CollectionListParams) => ['collections', 'list', params] as const,
   detail: (id: string) => ['collections', 'detail', id] as const,

@@ -3,12 +3,12 @@ import { type SessionStore, sessionStore } from './session';
 import { networkTelemetry } from './telemetry';
 import type { AuthSession } from './types';
 
-export const API_BASE = '/api/v1';
+const API_BASE = '/api/v1';
 
-export type QueryValue = string | number | boolean | null | undefined;
+type QueryValue = string | number | boolean | null | undefined;
 export type QueryParams = Record<string, QueryValue>;
 
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export interface JsonRequestOptions {
   method?: HttpMethod;
@@ -19,7 +19,7 @@ export interface JsonRequestOptions {
   public?: boolean;
 }
 
-export interface BinaryUploadProgress {
+interface BinaryUploadProgress {
   loaded: number;
   total: number;
 }
@@ -130,7 +130,7 @@ export async function readEnvelope<T>(res: Response): Promise<T> {
 }
 
 /** 解析 Content-Disposition 中的文件名，兼容 RFC 5987 的 filename*。 */
-export function parseContentDispositionFilename(header: string | null): string | null {
+function parseContentDispositionFilename(header: string | null): string | null {
   if (!header) return null;
   const extended = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/i.exec(header);
   if (extended?.[1]) {
@@ -349,7 +349,7 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
 }
 
 /** 应用内使用的默认客户端，绑定浏览器 fetch 与持久化会话。 */
-export const apiClient = createApiClient({
+const apiClient = createApiClient({
   fetch: (input, init) => fetch(input, init),
   session: sessionStore,
 });

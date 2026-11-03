@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { App, Button, Card, Descriptions, Popconfirm, Space, Spin, Tag, Typography } from 'antd';
-import { ArrowLeftOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons';
+import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { Replica, StorageProvider } from '../../shared/api/types';
@@ -8,6 +8,8 @@ import { formatBytes, formatDateTime, formatDuration } from '../../shared/lib/fo
 import { saveBlob } from '../../shared/lib/download';
 import { COLLECTION_KIND_LABELS, GRADE_LABELS, JOB_KIND_LABELS } from '../../shared/lib/labels';
 import { CopyButton } from '../../shared/ui/CopyButton';
+import { BackLink } from '../../shared/ui/BackLink';
+import { LinkButton } from '../../shared/ui/LinkButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { JobKindTag, JobStatusTag, MaterialStatusTag, RoleTag, SubjectTags } from '../../shared/ui/StatusTags';
@@ -53,7 +55,7 @@ export function MaterialDetailPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink />
+        <BackLink to="/materials">返回资料列表</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="资料加载失败" />
       </div>
     );
@@ -121,7 +123,7 @@ export function MaterialDetailPage() {
 
   return (
     <div className="page-stack">
-      <BackLink />
+      <BackLink to="/materials">返回资料列表</BackLink>
       <PageHeader
         title={material.title}
         extra={
@@ -251,11 +253,9 @@ export function MaterialDetailPage() {
         <Card
           title="所在合集"
           extra={
-            <Link to={`/collections?material_id=${material.id}`}>
-              <Button size="small" type="link">
-                查看相关合集
-              </Button>
-            </Link>
+            <LinkButton size="small" type="link" to={`/collections?material_id=${material.id}`}>
+              查看相关合集
+            </LinkButton>
           }
         >
           <div className="related-link-list">
@@ -273,11 +273,9 @@ export function MaterialDetailPage() {
         <Card
           title="相关任务"
           extra={
-            <Link to={`/jobs?material_id=${material.id}`}>
-              <Button size="small" type="link">
-                查看全部
-              </Button>
-            </Link>
+            <LinkButton size="small" type="link" to={`/jobs?material_id=${material.id}`}>
+              查看全部
+            </LinkButton>
           }
         >
           {relatedJobs.isError ? (
@@ -332,13 +330,4 @@ function fileTypeName(mediaType: string): string {
     'application/zip': 'ZIP 压缩包',
   };
   return names[mediaType] ?? '其他文件';
-}
-
-function BackLink() {
-  return (
-    <Link to="/materials" className="inline-flex items-center gap-1 text-sm">
-      <ArrowLeftOutlined />
-      返回资料列表
-    </Link>
-  );
 }

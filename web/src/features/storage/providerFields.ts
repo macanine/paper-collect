@@ -3,9 +3,9 @@ import { PROVIDER_KINDS, type ProviderKind, type ProviderRole, type StorageProvi
 // 存储端点 config / secret 字段表，严格对应 docs/API.md「POST /storage/providers」的适配器字段表。
 // 不得增加合同之外的字段；secret 永不回显，编辑时留空表示保留原值。
 
-export type FieldInput = 'text' | 'password' | 'select';
+type FieldInput = 'text' | 'password' | 'select';
 
-export interface FieldOption {
+interface FieldOption {
   value: string;
   label: string;
 }
@@ -33,7 +33,7 @@ export interface KindSpec {
   secret: FieldSpec[];
 }
 
-export function validateHttpUrl(value: string): string | null {
+function validateHttpUrl(value: string): string | null {
   let url: URL;
   try {
     url = new URL(value);
@@ -49,7 +49,7 @@ export function validateHttpUrl(value: string): string | null {
   return null;
 }
 
-export function validateInteger(min: number, max: number): (value: string) => string | null {
+function validateInteger(min: number, max: number): (value: string) => string | null {
   return (value) => {
     if (!/^-?\d+$/.test(value.trim())) return '请输入整数';
     const number = Number(value.trim());
@@ -58,7 +58,7 @@ export function validateInteger(min: number, max: number): (value: string) => st
   };
 }
 
-export function validateBooleanText(value: string): string | null {
+function validateBooleanText(value: string): string | null {
   if (value === '' || value === 'true' || value === 'false') return null;
   return '只能填写 true 或 false';
 }

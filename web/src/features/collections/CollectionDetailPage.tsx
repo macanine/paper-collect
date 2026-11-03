@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { App, Button, Card, Descriptions, Popconfirm, Space, Typography } from 'antd';
-import { ArrowLeftOutlined, EditOutlined } from '@ant-design/icons';
+import { EditOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import { formatDateTime } from '../../shared/lib/format';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { CollectionKindTag, SubjectTags } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
@@ -26,7 +27,7 @@ export function CollectionDetailPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink />
+        <BackLink to="/collections">返回合集列表</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="合集加载失败" />
       </div>
     );
@@ -51,7 +52,7 @@ export function CollectionDetailPage() {
 
   return (
     <div className="page-stack">
-      <BackLink />
+      <BackLink to="/collections">返回合集列表</BackLink>
       <PageHeader
         title={collection.title}
         extra={
@@ -135,16 +136,6 @@ export function CollectionDetailPage() {
     </div>
   );
 }
-
-function BackLink() {
-  return (
-    <Link to="/collections" className="inline-flex items-center gap-1 text-sm">
-      <ArrowLeftOutlined />
-      返回合集列表
-    </Link>
-  );
-}
-
 
 /** 子合集（ZIP 包等）。顶层列表不展示它们，避免出现两个同名合集。 */
 function ChildCollections({ collectionId }: { collectionId: string }) {

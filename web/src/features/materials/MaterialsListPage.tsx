@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react';
 import { ArrowRightOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Input, Select, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { MaterialStatusTag, RoleTag, SubjectTags } from '../../shared/ui/StatusTags';
@@ -11,9 +10,12 @@ import { GRADE_LABELS } from '../../shared/lib/labels';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { GRADE_OPTIONS, MATERIAL_STATUS_OPTIONS, ROLE_OPTIONS, SUBJECT_OPTIONS } from '../../shared/lib/options';
 import { useCompactViewport } from '../../shared/lib/useCompactViewport';
+import { useDebouncedFilterInput } from '../../shared/lib/useDebouncedFilterInput';
+import { navigateTableRow } from '../../shared/lib/tableNavigation';
 import type { Grade, Material, MaterialStatus, Role, SubjectCode } from '../../shared/api/types';
 import { useAuth } from '../auth/AuthContext';
 import { CopyButton } from '../../shared/ui/CopyButton';
+import { LinkButton } from '../../shared/ui/LinkButton';
 import { useMaterialsList } from './queries';
 
 const FILTER_KEYS = ['q', 'subject', 'role', 'status', 'grade', 'sha256'] as const;
@@ -22,19 +24,10 @@ type FilterKey = (typeof FILTER_KEYS)[number];
 export function MaterialsListPage() {
   const { can } = useAuth();
   const compact = useCompactViewport();
+  const navigate = useNavigate();
   const list = useListSearch<FilterKey>(FILTER_KEYS);
-  const [qInput, setQInput] = useState(list.filters.q);
   const { setFilters } = list;
-
-  // 关键词输入防抖后写入 URL，避免每次按键都请求接口。
-  useEffect(() => {
-    const trimmed = qInput.trim();
-    if (trimmed === list.filters.q) return;
-    const timer = window.setTimeout(() => {
-      setFilters({ q: trimmed });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [qInput, list.filters.q, setFilters]);
+  const [qInput, setQInput] = useDebouncedFilterInput(list.filters.q, (q) => setFilters({ q }));
 
   const query = useMaterialsList({
     page: list.page,
@@ -143,9 +136,7 @@ export function MaterialsListPage() {
   const emptyAction = hasFilters ? (
     <Button onClick={clearFilters}>清除筛选</Button>
   ) : can('uploads:write') ? (
-    <Link to="/uploads/new">
-      <Button type="primary">上传资料</Button>
-    </Link>
+    <LinkButton type="primary" to="/uploads/new">上传资料</LinkButton>
   ) : undefined;
 
   return (
@@ -154,11 +145,9 @@ export function MaterialsListPage() {
         title="资料"
         extra={
           can('uploads:write') ? (
-            <Link to="/uploads/new">
-              <Button type="primary" icon={<CloudUploadOutlined />}>
-                上传资料
-              </Button>
-            </Link>
+            <LinkButton type="primary" icon={<CloudUploadOutlined />} to="/uploads/new">
+              上传资料
+            </LinkButton>
           ) : null
         }
       />
@@ -166,6 +155,7 @@ export function MaterialsListPage() {
       <div className="filter-row">
         <Input.Search
           allowClear
+          aria-label="搜索标题或描述"
           placeholder="搜索标题或描述"
           value={qInput}
           onChange={(event) => setQInput(event.target.value)}
@@ -175,6 +165,7 @@ export function MaterialsListPage() {
         />
         <Select
           allowClear
+          aria-label="学科"
           placeholder="学科"
           style={{ width: 160 }}
           options={SUBJECT_OPTIONS}
@@ -183,6 +174,7 @@ export function MaterialsListPage() {
         />
         <Select
           allowClear
+          aria-label="角色"
           placeholder="角色"
           style={{ width: 128 }}
           options={ROLE_OPTIONS}
@@ -191,6 +183,7 @@ export function MaterialsListPage() {
         />
         <Select
           allowClear
+          aria-label="年级"
           placeholder="年级"
           style={{ width: 128 }}
           options={GRADE_OPTIONS}
@@ -199,12 +192,14 @@ export function MaterialsListPage() {
         />
         <Select
           allowClear
+          aria-label="归档状态"
           placeholder="归档状态"
           style={{ width: 150 }}
           options={MATERIAL_STATUS_OPTIONS}
           value={list.filters.status || undefined}
           onChange={(value: string | undefined) => setFilters({ status: value ?? '' })}
         />
+        {hasFilters || qInput ? <Button onClick={clearFilters}>清除筛选</Button> : null}
       </div>
 
       {list.filters.sha256 ? (
@@ -233,7 +228,10 @@ export function MaterialsListPage() {
           <Table<Material>
             rowKey="id"
             size="middle"
-            className={compact ? 'compact-list-table' : undefined}
+            className={compact ? 'compact-list-table clickable-rows' : 'clickable-rows'}
+            onRow={(material) => ({
+              onClick: (event) => navigateTableRow(event, `/materials/${material.id}`, navigate),
+            })}
             columns={compact ? compactColumns : desktopColumns}
             dataSource={query.data?.items ?? []}
             loading={query.isFetching}

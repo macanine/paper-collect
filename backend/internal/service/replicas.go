@@ -568,6 +568,70 @@ type Download struct {
 	Size      int64
 }
 
+type replicaSource struct {
+	replica  model.Replica
+	provider model.StorageProvider
+}
+
+// readyReplicaSources returns readable replicas in primary-first order. Disabled
+// providers are retained because existing replicas remain readable.
+func (s *Service) readyReplicaSources(ctx context.Context, blobID string) ([]replicaSource, error) {
+	db := s.db.WithContext(ctx)
+	var replicas []model.Replica
+	if err := db.Where("blob_id = ? AND status = ?", blobID, model.ReplicaReady).
+		Find(&replicas).Error; err != nil {
+		return nil, err
+	}
+	if len(replicas) == 0 {
+		return nil, nil
+	}
+	providers := map[string]model.StorageProvider{}
+	ids := make([]string, 0, len(replicas))
+	for _, r := range replicas {
+		ids = append(ids, r.ProviderID)
+	}
+	var rows []model.StorageProvider
+	if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range rows {
+		providers[p.ID] = p
+	}
+	sources := make([]replicaSource, 0, len(replicas))
+	for _, r := range replicas {
+		if p, ok := providers[r.ProviderID]; ok {
+			sources = append(sources, replicaSource{replica: r, provider: p})
+		}
+	}
+	sort.SliceStable(sources, func(i, j int) bool {
+		ri := providerReadRank(sources[i].provider.Role)
+		rj := providerReadRank(sources[j].provider.Role)
+		if ri != rj {
+			return ri < rj
+		}
+		if sources[i].provider.Priority != sources[j].provider.Priority {
+			return sources[i].provider.Priority < sources[j].provider.Priority
+		}
+		if sources[i].replica.ProviderID != sources[j].replica.ProviderID {
+			return sources[i].replica.ProviderID < sources[j].replica.ProviderID
+		}
+		return sources[i].replica.CreatedAt.Before(sources[j].replica.CreatedAt)
+	})
+	return sources, nil
+}
+
+func (s *Service) openReplicaSource(ctx context.Context, source replicaSource) (io.ReadCloser, error) {
+	adapter, err := s.adapterFor(source.provider)
+	if err != nil {
+		return nil, err
+	}
+	remote := source.replica.RemoteID
+	if remote == "" {
+		remote = source.replica.RemoteKey
+	}
+	return adapter.Open(ctx, remote)
+}
+
 // OpenMaterialDownload returns the local original when present; otherwise it falls
 // back to ready replicas ordered primary first, then backup, then priority.
 func (s *Service) OpenMaterialDownload(ctx context.Context, id string) (Download, error) {
@@ -583,58 +647,17 @@ func (s *Service) OpenMaterialDownload(ctx context.Context, id string) (Download
 		}
 	}
 
-	var replicas []model.Replica
-	if err := db.Where("blob_id = ? AND status = ?", m.BlobID, model.ReplicaReady).
-		Find(&replicas).Error; err != nil {
+	sources, err := s.readyReplicaSources(ctx, m.BlobID)
+	if err != nil {
 		return Download{}, apperr.Internal(err)
 	}
-	if len(replicas) == 0 {
+	if len(sources) == 0 {
 		return Download{}, apperr.Unavailable("没有可用的副本可供下载")
 	}
-	providers := map[string]model.StorageProvider{}
-	ids := make([]string, 0, len(replicas))
-	for _, r := range replicas {
-		ids = append(ids, r.ProviderID)
-	}
-	var rows []model.StorageProvider
-	if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
-		return Download{}, apperr.Internal(err)
-	}
-	for _, p := range rows {
-		providers[p.ID] = p
-	}
-	sort.SliceStable(replicas, func(i, j int) bool {
-		pi, pj := providers[replicas[i].ProviderID], providers[replicas[j].ProviderID]
-		ri := providerReadRank(pi.Role)
-		rj := providerReadRank(pj.Role)
-		if ri != rj {
-			return ri < rj
-		}
-		if pi.Priority != pj.Priority {
-			return pi.Priority < pj.Priority
-		}
-		if replicas[i].ProviderID != replicas[j].ProviderID {
-			return replicas[i].ProviderID < replicas[j].ProviderID
-		}
-		return replicas[i].CreatedAt.Before(replicas[j].CreatedAt)
-	})
 
 	var lastErr error
-	for _, r := range replicas {
-		provider, ok := providers[r.ProviderID]
-		if !ok {
-			continue
-		}
-		adapter, err := s.adapterFor(provider)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		remote := r.RemoteID
-		if remote == "" {
-			remote = r.RemoteKey
-		}
-		body, err := adapter.Open(ctx, remote)
+	for _, source := range sources {
+		body, err := s.openReplicaSource(ctx, source)
 		if err != nil {
 			lastErr = err
 			s.logf("download replica unavailable: %s", storageErrorText(err))

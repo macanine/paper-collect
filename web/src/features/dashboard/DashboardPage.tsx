@@ -12,13 +12,15 @@ import {
   FileTextOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { Job, Material } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
 import { JOB_KIND_LABELS, STORAGE_MODE_LABELS } from '../../shared/lib/labels';
 import { usePolicy, useProviders } from '../storage/queries';
 import { InlineError } from '../../shared/ui/States';
+import { LinkButton } from '../../shared/ui/LinkButton';
 import { JobKindTag, JobStatusTag, MaterialStatusTag } from '../../shared/ui/StatusTags';
+import { navigateTableRow } from '../../shared/lib/tableNavigation';
 import { useAuth } from '../auth/AuthContext';
 import {
   useJobStats,
@@ -35,6 +37,7 @@ const MATERIAL_COUNT_ITEMS = [
 
 export function DashboardPage() {
   const { can } = useAuth();
+  const navigate = useNavigate();
   const canMaterials = can('materials:read');
   const canJobs = can('jobs:read');
   const canStorage = can('storage:read');
@@ -150,16 +153,12 @@ export function DashboardPage() {
         </div>
         <div className="dashboard-hero__actions">
             {can('uploads:write') ? (
-              <Link to="/uploads/new">
-                <Button type="primary" icon={<CloudUploadOutlined />}>
-                  上传资料
-                </Button>
-              </Link>
+              <LinkButton type="primary" icon={<CloudUploadOutlined />} to="/uploads/new">
+                上传资料
+              </LinkButton>
             ) : null}
             {can('collections:write') ? (
-              <Link to="/collections">
-                <Button icon={<AppstoreOutlined />}>管理合集</Button>
-              </Link>
+              <LinkButton icon={<AppstoreOutlined />} to="/collections">管理合集</LinkButton>
             ) : null}
             <Button icon={<ReloadOutlined />} onClick={refreshAll}>
               刷新
@@ -258,9 +257,7 @@ export function DashboardPage() {
                   suffix={policy.data ? `（最低 ${policy.data.minimum_replicas} 份）` : undefined}
                 />
               </Space>
-              <Link to="/storage">
-                <Button icon={<CloudServerOutlined />}>存储设置</Button>
-              </Link>
+              <LinkButton icon={<CloudServerOutlined />} to="/storage">存储设置</LinkButton>
             </div>
           </Card>
         </section>
@@ -271,11 +268,7 @@ export function DashboardPage() {
           <Card
             title="最近资料"
             extra={
-              <Link to="/materials">
-                <Button size="small" type="link">
-                  全部资料
-                </Button>
-              </Link>
+              <LinkButton size="small" type="link" to="/materials">全部资料</LinkButton>
             }
           >
             {recentMaterials.error ? (
@@ -289,6 +282,10 @@ export function DashboardPage() {
               <Table<Material>
                 rowKey="id"
                 size="small"
+                className="clickable-rows"
+                onRow={(material) => ({
+                  onClick: (event) => navigateTableRow(event, `/materials/${material.id}`, navigate),
+                })}
                 columns={materialColumns}
                 dataSource={recentMaterials.data?.items ?? []}
                 loading={recentMaterials.isPending}
@@ -303,11 +300,7 @@ export function DashboardPage() {
           <Card
             title="最近任务"
             extra={
-              <Link to="/jobs">
-                <Button size="small" type="link">
-                  全部任务
-                </Button>
-              </Link>
+              <LinkButton size="small" type="link" to="/jobs">全部任务</LinkButton>
             }
           >
             {recentJobs.error ? (
@@ -321,6 +314,10 @@ export function DashboardPage() {
               <Table<Job>
                 rowKey="id"
                 size="small"
+                className="clickable-rows"
+                onRow={(job) => ({
+                  onClick: (event) => navigateTableRow(event, `/jobs/${job.id}`, navigate),
+                })}
                 columns={jobColumns}
                 dataSource={recentJobs.data?.items ?? []}
                 loading={recentJobs.isPending}

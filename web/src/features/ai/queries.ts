@@ -19,7 +19,7 @@ import {
 import type { AIProviderDraft, AIProviderPatch, OCRProviderDraft, OCRProviderPatch } from './api';
 import { ApiError } from '../../shared/api/errors';
 
-export const aiKeys = {
+const aiKeys = {
   providers: ['ai', 'providers'] as const,
   ocrProviders: ['ai', 'ocr-providers'] as const,
   settings: ['ai', 'settings'] as const,

@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"reflect"
 	"regexp"
@@ -120,19 +119,24 @@ func handlerFieldKind(expr ast.Expr) string {
 // Compare argument names and types against the HTTP handlers, so route coverage
 // cannot hide a newly added filter or request-body field from MCP clients.
 func TestMCPCatalogMatchesHandlerFields(t *testing.T) {
-	packages, err := parser.ParseDir(token.NewFileSet(), ".", func(info fs.FileInfo) bool {
-		return strings.HasPrefix(info.Name(), "handlers_") && strings.HasSuffix(info.Name(), ".go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
 	functions := map[string]*ast.FuncDecl{}
-	for _, pkg := range packages {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				if fn, ok := decl.(*ast.FuncDecl); ok {
-					functions[fn.Name.Name] = fn
-				}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "handlers_") || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				functions[fn.Name.Name] = fn
 			}
 		}
 	}

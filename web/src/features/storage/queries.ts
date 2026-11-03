@@ -3,7 +3,7 @@ import { createProvider, getPolicy, listProviders, reconcileStorage, refreshRepl
 import type { ProviderDraft, ProviderPatch } from './providerFields';
 import type { StoragePolicy } from '../../shared/api/types';
 
-export const storageKeys = {
+const storageKeys = {
   providers: ['storage', 'providers'] as const,
   policy: ['storage', 'policy'] as const,
 };

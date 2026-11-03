@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Tooltip } from 'antd';
 import { CheckOutlined, CopyOutlined } from '@ant-design/icons';
 
-export async function copyToClipboard(text: string): Promise<boolean> {
+async function copyToClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);

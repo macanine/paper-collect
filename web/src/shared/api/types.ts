@@ -34,19 +34,19 @@ export type UserRole = (typeof USER_ROLES)[number];
 export const PROVIDER_KINDS = ['local', 'webdav', 'lanzou', '123pan', 'onedrive', 's3'] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
-export const PROVIDER_ROLES = ['primary', 'backup'] as const;
+const PROVIDER_ROLES = ['primary', 'backup'] as const;
 export type ProviderRole = (typeof PROVIDER_ROLES)[number];
 
 export const STORAGE_MODES = ['mirror_all', 'primary_backup', 'balanced'] as const;
 export type StorageMode = (typeof STORAGE_MODES)[number];
 
-export const REPLICA_STATUSES = ['pending', 'uploading', 'ready', 'failed'] as const;
+const REPLICA_STATUSES = ['pending', 'uploading', 'ready', 'failed'] as const;
 export type ReplicaStatus = (typeof REPLICA_STATUSES)[number];
 
-export const VERIFICATIONS = ['uploaded', 'size', 'sha256'] as const;
+const VERIFICATIONS = ['uploaded', 'size', 'sha256'] as const;
 export type Verification = (typeof VERIFICATIONS)[number];
 
-export const SHARE_STATUSES = ['pending', 'ready', 'unsupported', 'failed'] as const;
+const SHARE_STATUSES = ['pending', 'ready', 'unsupported', 'failed'] as const;
 export type ShareStatus = (typeof SHARE_STATUSES)[number];
 
 export const JOB_KINDS = ['ingest', 'replicate', 'analyze', 'index', 'group'] as const;
@@ -54,15 +54,15 @@ export type JobKind = (typeof JOB_KINDS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'succeeded', 'failed'] as const;
 
-export const ANALYSIS_STATUSES = ['pending', 'running', 'succeeded', 'failed'] as const;
+const ANALYSIS_STATUSES = ['pending', 'running', 'succeeded', 'failed'] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
-export const UPLOAD_STATUSES = ['pending', 'processing', 'completed', 'failed'] as const;
+const UPLOAD_STATUSES = ['pending', 'processing', 'completed', 'failed'] as const;
 export type UploadStatus = (typeof UPLOAD_STATUSES)[number];
 
-export const UPLOAD_ENTRY_STATUSES = ['pending', 'received'] as const;
-export type UploadEntryStatus = (typeof UPLOAD_ENTRY_STATUSES)[number];
+const UPLOAD_ENTRY_STATUSES = ['pending', 'received'] as const;
+type UploadEntryStatus = (typeof UPLOAD_ENTRY_STATUSES)[number];
 
 export const SCOPES = [
   'materials:read',
@@ -163,6 +163,16 @@ export interface MaterialDetail extends Material {
   collections: Collection[];
 }
 
+export interface MaterialPullCache {
+  download_url: string;
+  file_name: string;
+  media_type: string;
+  size_bytes: number;
+  sha256: string;
+  expires_at: string;
+  expires_in: number;
+}
+
 export interface MaterialUpdate {
   title?: string;
   description?: string;
@@ -184,7 +194,7 @@ export interface Collection {
   updated_at: string;
 }
 
-export interface CollectionItem {
+interface CollectionItem {
   id: string;
   collection_id: string;
   material_id: string;
@@ -263,7 +273,7 @@ export interface StorageProvider {
   updated_at: string;
 }
 
-export interface ProviderCapabilities {
+interface ProviderCapabilities {
   upload: boolean;
   download: boolean;
   share: boolean;
@@ -402,7 +412,7 @@ export interface AnalysisEnqueueResult {
 }
 
 
-export interface SearchMaterialRef {
+interface SearchMaterialRef {
   id: string;
   title: string;
   file_name: string;
@@ -438,7 +448,7 @@ export interface QuestionRow {
   created_at: string;
 }
 
-export const INDEX_STATUSES = ['pending', 'running', 'succeeded', 'failed', 'not_applicable'] as const;
+const INDEX_STATUSES = ['pending', 'running', 'succeeded', 'failed', 'not_applicable'] as const;
 export type IndexStatus = (typeof INDEX_STATUSES)[number];
 
 export interface MaterialIndexState {

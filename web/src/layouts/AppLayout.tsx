@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { App as AntdApp, Avatar, Button, Drawer, Dropdown } from 'antd';
+import { App as AntdApp, Avatar, Drawer, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   AppstoreOutlined,
@@ -25,6 +25,7 @@ import type { Scope } from '../shared/api/types';
 import { USER_ROLE_LABELS } from '../shared/lib/labels';
 import { NetworkActivity } from '../shared/ui/NetworkActivity';
 import { FullPageLoading, LoadingState } from '../shared/ui/States';
+import { LinkButton } from '../shared/ui/LinkButton';
 
 interface NavigationItem {
   key: string;
@@ -137,7 +138,6 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
                   >
                     <span className="app-nav__icon">{item.icon}</span>
                     <span>{item.label}</span>
-                    <span className="app-nav__marker" aria-hidden="true" />
                   </Link>
                 );
               })}
@@ -202,7 +202,8 @@ function AuthenticatedAppLayout() {
         onClose={() => setMobileNavOpen(false)}
         placement="left"
         size={312}
-        closable={false}
+        title="主导航"
+        closable={{ 'aria-label': '关闭导航' }}
         rootClassName="app-mobile-drawer"
         styles={{ body: { padding: 0 } }}
       >
@@ -220,6 +221,7 @@ function AuthenticatedAppLayout() {
               type="button"
               className="app-icon-button app-mobile-trigger"
               aria-label="打开导航"
+              aria-expanded={mobileNavOpen}
               onClick={() => setMobileNavOpen(true)}
             >
               <MenuOutlined />
@@ -250,11 +252,11 @@ function AuthenticatedAppLayout() {
               </Link>
             ) : null}
             {can('uploads:write') ? (
-              <Link to="/uploads/new" className="app-header__upload">
-                <Button type="primary" icon={<CloudUploadOutlined />}>
+              <span className="app-header__upload">
+                <LinkButton aria-label="上传资料" icon={<CloudUploadOutlined />} to="/uploads/new">
                   <span className="app-header__upload-label">上传资料</span>
-                </Button>
-              </Link>
+                </LinkButton>
+              </span>
             ) : null}
             {user ? (
               <Dropdown

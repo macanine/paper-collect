@@ -1,13 +1,14 @@
 import { Alert, App, Button, Card, Popconfirm, Progress, Select, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowRightOutlined } from '@ant-design/icons';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { Job, JobKind, JobStatus } from '../../shared/api/types';
 import { formatDateTime, formatDuration } from '../../shared/lib/format';
 import { useListSearch } from '../../shared/lib/listSearch';
 import { JOB_KIND_OPTIONS, JOB_STATUS_OPTIONS } from '../../shared/lib/options';
 import { useCompactViewport } from '../../shared/lib/useCompactViewport';
+import { navigateTableRow } from '../../shared/lib/tableNavigation';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { JobKindTag, JobStatusTag } from '../../shared/ui/StatusTags';
@@ -21,6 +22,7 @@ type FilterKey = (typeof FILTER_KEYS)[number];
 export function JobsListPage() {
   const { can } = useAuth();
   const compact = useCompactViewport();
+  const navigate = useNavigate();
   const { message } = App.useApp();
   const list = useListSearch<FilterKey>(FILTER_KEYS);
   const { setFilters } = list;
@@ -46,7 +48,7 @@ export function JobsListPage() {
           <Link to={`/jobs/${job.id}`} className="font-mono text-xs">
             {job.id.slice(0, 8)}
           </Link>
-          <span className="table-subtext">{formatDateTime(job.created_at)}</span>
+          <span className="table-subtext">更新 {formatDateTime(job.updated_at)}</span>
         </div>
       ),
     },
@@ -63,13 +65,6 @@ export function JobsListPage() {
       key: 'status',
       width: 90,
       render: (status: JobStatus) => <JobStatusTag status={status} />,
-    },
-    {
-      title: '尝试',
-      dataIndex: 'attempts',
-      key: 'attempts',
-      width: 80,
-      align: 'right',
     },
     {
       title: '处理进度',
@@ -92,6 +87,7 @@ export function JobsListPage() {
               showInfo={false}
             />
           ) : null}
+          {job.attempts > 1 ? <span className="table-subtext">第 {job.attempts} 次尝试</span> : null}
         </div>
       ),
     },
@@ -99,7 +95,7 @@ export function JobsListPage() {
       title: '耗时',
       dataIndex: 'duration_ms',
       key: 'duration',
-      width: 100,
+      width: 90,
       align: 'right',
       render: (value: number) => <span className="tabular-nums">{formatDuration(value)}</span>,
     },
@@ -120,16 +116,9 @@ export function JobsListPage() {
       ),
     },
     {
-      title: '更新时间',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      width: 170,
-      render: (value: string) => formatDateTime(value),
-    },
-    {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 100,
       render: (_: unknown, job) =>
         canRetry && job.status === 'failed' ? (
           <Popconfirm
@@ -271,12 +260,15 @@ export function JobsListPage() {
         <Table<Job>
           rowKey="id"
           size="middle"
-          className={compact ? 'compact-list-table' : undefined}
+          className={compact ? 'compact-list-table clickable-rows' : 'clickable-rows'}
+          onRow={(job) => ({
+            onClick: (event) => navigateTableRow(event, `/jobs/${job.id}`, navigate),
+          })}
           columns={compact ? compactColumns : desktopColumns}
           dataSource={query.data?.items ?? []}
           loading={query.isFetching}
           showHeader={!compact}
-          scroll={compact ? undefined : { x: 1080 }}
+          scroll={compact ? undefined : { x: 900 }}
           locale={{ emptyText: <EmptyState /> }}
           pagination={{
             current: list.page,

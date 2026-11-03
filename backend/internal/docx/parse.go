@@ -295,11 +295,20 @@ func (p *parser) parseInline(dec *xml.Decoder, start xml.StartElement, text *str
 				*blocks = append(*blocks, block)
 			}
 		}
+	case isMath(start.Name, "oMath"):
+		budget := mathBudget{}
+		formula, err := readMathNode(dec, start, 0, &budget)
+		if err != nil {
+			return err
+		}
+		if rendered := renderMath(formula); rendered != "" {
+			text.WriteString(`\(` + rendered + `\)`)
+		}
 	case isWord(start.Name, "r"), isWord(start.Name, "hyperlink"), isWord(start.Name, "ins"),
 		isWord(start.Name, "moveTo"), isWord(start.Name, "smartTag"), isWord(start.Name, "fldSimple"),
 		isWord(start.Name, "sdt"), isWord(start.Name, "sdtContent"), isWord(start.Name, "customXml"),
 		isWord(start.Name, "dir"), isWord(start.Name, "bdo"),
-		isMath(start.Name, "oMath"), isMath(start.Name, "oMathPara"):
+		isMath(start.Name, "oMathPara"):
 		return p.parseInlineChildren(dec, start.Name, text, blocks, flush)
 	case start.Name.Space == nsMath:
 		return p.parseInlineChildren(dec, start.Name, text, blocks, flush)

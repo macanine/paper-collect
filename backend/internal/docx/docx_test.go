@@ -125,3 +125,64 @@ func TestRenderedPageBreakSplitsPages(t *testing.T) {
 		t.Fatalf("pages = %+v", pages)
 	}
 }
+
+func TestNativeMathPreservesFractionScriptsAndRoots(t *testing.T) {
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p>` +
+		`<w:r><w:t>已知</w:t></w:r><m:oMath>` +
+		`<m:f><m:num><m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup><m:r><m:t>+1</m:t></m:r></m:num>` +
+		`<m:den><m:rad><m:deg/><m:e><m:r><m:t>y</m:t></m:r></m:e></m:rad></m:den></m:f>` +
+		`</m:oMath><w:r><w:t>求值</w:t></w:r></w:p></w:body></w:document>`
+	doc := parsePackage(t, packageBytes(t, map[string]string{"word/document.xml": document}))
+	pages, markdown := doc.Render(nil)
+	want := `已知\(\frac{{x}^{2}+1}{\sqrt{y}}\)求值`
+	if len(pages) != 1 || pages[0].Text != want || markdown != want {
+		t.Fatalf("formula text = %+v, markdown = %q", pages, markdown)
+	}
+}
+
+func TestNativeMathPreservesLimitsDelimitersAndMatrices(t *testing.T) {
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath>` +
+		`<m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub><m:r><m:t>i=1</m:t></m:r></m:sub><m:sup><m:r><m:t>n</m:t></m:r></m:sup><m:e><m:sSub><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sub><m:r><m:t>i</m:t></m:r></m:sub></m:sSub></m:e></m:nary>` +
+		`<m:d><m:dPr><m:begChr m:val="["/><m:endChr m:val="]"/></m:dPr><m:e><m:r><m:t>a+b</m:t></m:r></m:e></m:d>` +
+		`<m:m><m:mr><m:e><m:r><m:t>a</m:t></m:r></m:e><m:e><m:r><m:t>b</m:t></m:r></m:e></m:mr><m:mr><m:e><m:r><m:t>c</m:t></m:r></m:e><m:e><m:r><m:t>d</m:t></m:r></m:e></m:mr></m:m>` +
+		`</m:oMath></w:p></w:body></w:document>`
+	doc := parsePackage(t, packageBytes(t, map[string]string{"word/document.xml": document}))
+	pages, _ := doc.Render(nil)
+	for _, want := range []string{`\sum_{i=1}^{n}{{x}_{i}}`, `[a+b]`, `\begin{matrix}a & b \\ c & d\end{matrix}`} {
+		if len(pages) != 1 || !strings.Contains(pages[0].Text, want) {
+			t.Fatalf("missing %q in %+v", want, pages)
+		}
+	}
+}
+
+func TestNativeMathRejectsExcessiveNesting(t *testing.T) {
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath>` +
+		strings.Repeat(`<m:e>`, maxMathDepth+2) + `<m:r><m:t>x</m:t></m:r>` + strings.Repeat(`</m:e>`, maxMathDepth+2) +
+		`</m:oMath></w:p></w:body></w:document>`
+	data := packageBytes(t, map[string]string{"word/document.xml": document})
+	if _, err := Parse(bytes.NewReader(data), int64(len(data))); err == nil {
+		t.Fatal("excessive formula nesting was accepted")
+	}
+}
+
+func TestNativeMathRespectsHiddenPartsAndDefaultIntegral(t *testing.T) {
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath>` +
+		`<m:rad><m:radPr><m:degHide m:val="true"/></m:radPr><m:deg><m:r><m:t>3</m:t></m:r></m:deg><m:e><m:r><m:t>x</m:t></m:r></m:e></m:rad>` +
+		`<m:nary><m:naryPr><m:subHide/><m:supHide m:val="0"/></m:naryPr><m:sub><m:r><m:t>0</m:t></m:r></m:sub><m:sup><m:r><m:t>1</m:t></m:r></m:sup><m:e><m:r><m:t>x</m:t></m:r></m:e></m:nary>` +
+		`</m:oMath></w:p></w:body></w:document>`
+	doc := parsePackage(t, packageBytes(t, map[string]string{"word/document.xml": document}))
+	pages, _ := doc.Render(nil)
+	want := `\(\sqrt{x}\int^{1}{x}\)`
+	if len(pages) != 1 || pages[0].Text != want {
+		t.Fatalf("hidden parts or default integral: %+v", pages)
+	}
+}
+
+func TestNativeMathRejectsExcessiveText(t *testing.T) {
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath><m:r><m:t>` +
+		strings.Repeat("x", maxMathTextBytes+1) + `</m:t></m:r></m:oMath></w:p></w:body></w:document>`
+	data := packageBytes(t, map[string]string{"word/document.xml": document})
+	if _, err := Parse(bytes.NewReader(data), int64(len(data))); err == nil {
+		t.Fatal("excessive formula text was accepted")
+	}
+}

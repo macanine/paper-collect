@@ -77,6 +77,16 @@ type materialDetailDTO struct {
 	Collections []collectionDTO `json:"collections"`
 }
 
+type pullCacheDTO struct {
+	DownloadURL string    `json:"download_url"`
+	FileName    string    `json:"file_name"`
+	MediaType   string    `json:"media_type"`
+	SizeBytes   int64     `json:"size_bytes"`
+	SHA256      string    `json:"sha256"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	ExpiresIn   int64     `json:"expires_in"`
+}
+
 type replicaDTO struct {
 	ID             string     `json:"id"`
 	BlobID         string     `json:"blob_id"`
@@ -572,9 +582,13 @@ type questionDTO struct {
 }
 
 func toSearchHit(h service.QuestionHit) searchHitDTO {
+	highlights := h.Highlights
+	if highlights == nil {
+		highlights = [][2]int{}
+	}
 	return searchHitDTO{
 		QuestionID: h.Question.ID, QuestionNo: h.Question.QuestionNo, Text: h.Question.Text,
-		Snippet: h.Snippet, Highlights: h.Highlights, Score: h.Score, PageNo: h.Question.PageNo,
+		Snippet: h.Snippet, Highlights: highlights, Score: h.Score, PageNo: h.Question.PageNo,
 		Material: searchMaterialDTO{ID: h.Material.ID, Title: h.Material.Title, FileName: h.Material.FileName},
 		Subjects: h.Subjects, CollectionID: h.CollectionID,
 	}

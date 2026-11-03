@@ -90,7 +90,7 @@ function statusTitle(status: number, code: string): string {
 }
 
 /** 将错误码映射为面向用户的中文标题。 */
-export function titleForError(error: ApiError): string {
+function titleForError(error: ApiError): string {
   return CODE_TITLES[error.code] ?? STATUS_TITLES[error.status] ?? `请求失败（HTTP ${error.status}）`;
 }
 
