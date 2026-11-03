@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Descriptions, Progress, Result, Space, Statistic, Table, Tag } from 'antd';
+import { Alert, App, Button, Card, Descriptions, Progress, Result, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Link, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
@@ -11,7 +11,7 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { LinkButton } from '../../shared/ui/LinkButton';
-import { JobStatusTag, UploadStatusTag } from '../../shared/ui/StatusTags';
+import { JobStatusTag, StageTag, UploadStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { retryJob } from '../jobs/api';
 import { FileSelector } from './FileSelector';
@@ -28,7 +28,7 @@ export function UploadSessionPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink to="/uploads/new">返回上传资料</BackLink>
+        <BackLink to="/uploads">返回上传记录</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="清单加载失败" />
       </div>
     );
@@ -210,7 +210,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
 
   return (
     <div className="page-stack">
-      <BackLink to="/uploads/new">返回上传资料</BackLink>
+      <BackLink to="/uploads">返回上传记录</BackLink>
       <PageHeader
         title={upload.title}
         extra={
@@ -244,6 +244,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
         }
       />
 
+      {upload.status === 'completed' ? null : (
       <Card>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
           <Statistic title="已接收" value={stats.receivedCount} suffix={`/ ${stats.total}`} />
@@ -255,6 +256,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
         </div>
         <Progress className="mt-4" percent={percent} status={stats.failedCount > 0 ? 'exception' : undefined} />
       </Card>
+      )}
 
       {canTransfer && stats.missingCount > 0 ? (
         <Alert
@@ -282,6 +284,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
         />
       ) : null}
 
+      {upload.status === 'completed' ? null : (
       <Card title="文件清单">
         <Table<TransferRow>
           rowKey={(row) => row.entry.id}
@@ -299,6 +302,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
           scroll={compact ? undefined : { x: 900 }}
         />
       </Card>
+      )}
     </div>
   );
 }
@@ -318,28 +322,56 @@ interface SubmittedCardProps {
   onRetry: () => void;
 }
 
-function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jobFailure, jobProgress, jobLogs, attempts, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
+function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jobFailure, jobProgress, attempts, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
   if (upload.status === 'completed') {
-    const skipped = jobLogs?.filter((entry) => entry.message.includes('个不支持的文件，已跳过，未归档')) ?? [];
     return (
-      <Card>
-        {skipped.map((entry) => <Alert key={`${entry.time}-${entry.message}`} type="warning" showIcon message={entry.message} className="mb-3" />)}
+      <Card title="处理结果">
         <Result
           status="success"
-          title="归档完成"
+          title={`新增 ${upload.new_count} 个文件，${upload.duplicate_count} 个已存在`}
+          subTitle={upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : '新文件正在识别，把握不足的会出现在待整理里'}
           extra={[
-            upload.material_id ? (
-              <LinkButton key="material" type="primary" to={`/materials/${upload.material_id}`}>查看资料</LinkButton>
-            ) : null,
-            upload.collection_id ? (
-              <LinkButton key="collection" type="primary" to={`/collections/${upload.collection_id}`}>查看合集</LinkButton>
-            ) : null,
-            !upload.material_id ? (
-              <LinkButton key="materials" to="/materials">查看全部资料</LinkButton>
-            ) : null,
-            <LinkButton key="job" to={`/jobs/${jobId}`}>查看处理记录</LinkButton>,
+            <LinkButton key="inbox" type="primary" to="/inbox">
+              去待整理
+            </LinkButton>,
+            <LinkButton key="library" to="/library">
+              打开资料库
+            </LinkButton>,
+            <LinkButton key="job" to={`/jobs/${jobId}`}>
+              处理日志
+            </LinkButton>,
           ]}
         />
+        <Table
+          rowKey={(row) => `${row.material_id}-${row.path}`}
+          size="small"
+          dataSource={upload.results}
+          pagination={{ pageSize: 50, hideOnSinglePage: true }}
+          columns={[
+            { title: '上传路径', dataIndex: 'path', key: 'path', render: (path: string) => <span className="break-all">{path}</span> },
+            {
+              title: '结果',
+              key: 'result',
+              width: 120,
+              render: (_: unknown, row) => (row.duplicate ? <Tag>已存在</Tag> : <Tag color="blue">新文件</Tag>),
+            },
+            { title: '整理状态', key: 'stage', width: 110, render: (_: unknown, row) => <StageTag stage={row.stage} /> },
+            {
+              title: '归入',
+              key: 'pack',
+              render: (_: unknown, row) => (row.pack_id ? <Link to={`/packs/${row.pack_id}`}>{row.title || '查看套卷'}</Link> : '—'),
+            },
+          ]}
+        />
+        {upload.skipped.length > 0 ? (
+          <Alert
+            className="mt-3"
+            type="warning"
+            showIcon
+            message="以下文件格式不支持，未归档"
+            description={<Typography.Paragraph className="!mb-0">{upload.skipped.join('、')}</Typography.Paragraph>}
+          />
+        ) : null}
       </Card>
     );
   }

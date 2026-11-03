@@ -1,50 +1,62 @@
-import { lazy, Suspense, useMemo, useState } from 'react';
-import { App, Button, Card, Descriptions, Popconfirm, Space, Spin, Tag, Typography } from 'antd';
-import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons';
+import { useMemo, useState } from 'react';
+import { App, Button, Card, Descriptions, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { DeleteOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
-import { describeError } from '../../shared/api/errors';
-import type { Replica, StorageProvider } from '../../shared/api/types';
-import { formatBytes, formatDateTime, formatDuration } from '../../shared/lib/format';
+import { describeError, errorMessage } from '../../shared/api/errors';
+import type { Part, Replica, StorageProvider } from '../../shared/api/types';
+import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { saveBlob } from '../../shared/lib/download';
-import { COLLECTION_KIND_LABELS, GRADE_LABELS, JOB_KIND_LABELS } from '../../shared/lib/labels';
+import { MATERIAL_STATUS_LABELS, REVIEW_REASON_LABELS } from '../../shared/lib/labels';
+import { PART_OPTIONS } from '../../shared/lib/options';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { BackLink } from '../../shared/ui/BackLink';
-import { LinkButton } from '../../shared/ui/LinkButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
-import { JobKindTag, JobStatusTag, MaterialStatusTag, RoleTag, SubjectTags } from '../../shared/ui/StatusTags';
+import { MaterialStatusTag, PartTag, StageTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { AnalysisPanel } from '../ai/AnalysisPanel';
-import { useJobsList } from '../jobs/queries';
 import { IndexPanel } from '../search/IndexPanel';
 import { useProviders, useRefreshShare } from '../storage/queries';
-import { deleteMaterial, downloadMaterial, previewMaterial } from './api';
-import { MaterialEditModal } from './MaterialEditModal';
+import { MovePackModal } from '../packs/MovePackModal';
+import { PackMeta } from '../packs/PackBadges';
+import { downloadMaterial, previewMaterial, trashMaterial } from './api';
+import { FilePreviewModal, canPreview } from './FilePreview';
 import { ReplicaTable } from './ReplicaTable';
-import { useMaterial } from './queries';
+import { invalidateLibrary, useMaterial, useUpdateMaterial } from './queries';
+import { useQueryClient } from '@tanstack/react-query';
 
-const MaterialPreviewModal = lazy(() => import('./MaterialPreviewModal').then((module) => ({ default: module.MaterialPreviewModal })));
+const FILE_TYPES: Record<string, string> = {
+  'application/pdf': 'PDF',
+  'application/msword': 'Word（DOC）',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word（DOCX）',
+  'application/vnd.ms-powerpoint': 'PowerPoint（PPT）',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint（PPTX）',
+  'application/vnd.ms-excel': 'Excel（XLS）',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel（XLSX）',
+  'image/jpeg': 'JPEG 图片',
+  'image/png': 'PNG 图片',
+  'image/webp': 'WebP 图片',
+  'audio/mpeg': 'MP3 音频',
+  'audio/mp4': 'M4A 音频',
+  'audio/wav': 'WAV 音频',
+};
 
 export function MaterialDetailPage() {
   const { materialId = '' } = useParams();
   const { can } = useAuth();
+  const canWrite = can('materials:write');
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const query = useMaterial(materialId);
+  const update = useUpdateMaterial(materialId);
   const canReadProviders = can('storage:read');
-  const canReadJobs = can('jobs:read');
   const providersQuery = useProviders(canReadProviders);
-  const relatedJobs = useJobsList(
-    { page: 1, page_size: 5, material_id: materialId },
-    canReadJobs && materialId !== '',
-  );
   const refreshShare = useRefreshShare();
-  const [editing, setEditing] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [converting, setConverting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const providerMap = useMemo<Map<string, StorageProvider> | null>(() => {
     if (!canReadProviders || !providersQuery.data) return null;
@@ -55,53 +67,48 @@ export function MaterialDetailPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink to="/materials">返回资料列表</BackLink>
-        <ErrorState error={query.error} onRetry={() => void query.refetch()} title="资料加载失败" />
+        <BackLink to="/library">返回资料库</BackLink>
+        <ErrorState error={query.error} onRetry={() => void query.refetch()} title="文件加载失败" />
       </div>
     );
   }
 
   const material = query.data;
   const isWord = material.media_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  const pdfFileName = `${material.file_name.replace(/\.docx$/i, '')}.pdf`;
+  const showError = (error: unknown) => {
+    const { title, detail } = describeError(error);
+    message.error(detail ? `${title}：${detail}` : title);
+  };
 
-  const handleDownload = async () => {
+  const handleDownload = async (pdf: boolean) => {
     setDownloading(true);
     try {
-      const { blob, filename } = await downloadMaterial(material.id);
-      saveBlob(blob, filename ?? material.file_name);
+      const { blob, filename } = pdf ? await previewMaterial(material.id) : await downloadMaterial(material.id);
+      saveBlob(blob, pdf ? material.file_name.replace(/\.docx$/i, '.pdf') : (filename ?? material.file_name));
     } catch (error) {
-      const { title, detail } = describeError(error);
-      message.error(detail ? `${title}：${detail}` : title);
+      showError(error);
     } finally {
       setDownloading(false);
     }
   };
 
-  const handleDownloadPdf = async () => {
-    setConverting(true);
+  const handleTrash = async () => {
     try {
-      const { blob } = await previewMaterial(material.id);
-      saveBlob(blob, pdfFileName);
+      await trashMaterial(material.id);
+      invalidateLibrary(queryClient);
+      message.success('已移入回收站，30 天内可恢复');
+      navigate(material.pack_id ? '/library' : '/trash', { replace: true });
     } catch (error) {
-      const { title, detail } = describeError(error);
-      message.error(detail ? `${title}：${detail}` : title);
-    } finally {
-      setConverting(false);
+      showError(error);
     }
   };
 
-  const handleDelete = async () => {
-    setDeleting(true);
+  const changePart = async (part: Part) => {
     try {
-      await deleteMaterial(material.id, true);
-      message.success('资料已删除（云端副本不会被远端删除）');
-      navigate('/materials', { replace: true });
+      await update.mutateAsync({ part });
+      message.success('已更新部件，文件名同步调整');
     } catch (error) {
-      const { title, detail } = describeError(error);
-      message.error(detail ? `${title}：${detail}` : title);
-    } finally {
-      setDeleting(false);
+      message.error(errorMessage(error));
     }
   };
 
@@ -114,8 +121,7 @@ export function MaterialDetailPage() {
       else if (updated.share_status === 'failed') message.warning(updated.error ? `分享失败：${updated.error}` : '分享失败，副本仍然可用');
       else message.info('分享状态已更新');
     } catch (error) {
-      const { title, detail } = describeError(error);
-      message.error(detail ? `${title}：${detail}` : title);
+      showError(error);
     } finally {
       setRefreshingId(null);
     }
@@ -123,187 +129,105 @@ export function MaterialDetailPage() {
 
   return (
     <div className="page-stack">
-      <BackLink to="/materials">返回资料列表</BackLink>
+      <BackLink to={material.pack_id ? `/packs/${material.pack_id}` : '/library'}>返回套卷</BackLink>
       <PageHeader
-        title={material.title}
+        title={material.file_name}
+        description={
+          <span className="flex flex-wrap items-center gap-2">
+            <PartTag part={material.part} />
+            <StageTag stage={material.stage} />
+            {material.review_reasons.map((r) => (
+              <Tag key={r} color="warning">
+                {REVIEW_REASON_LABELS[r]}
+              </Tag>
+            ))}
+          </span>
+        }
         extra={
           <Space wrap>
-            <MaterialStatusTag status={material.status} />
-            {can('materials:write') ? (
-              <Button icon={<EditOutlined />} onClick={() => setEditing(true)}>
-                编辑
+            <Button type="primary" icon={<DownloadOutlined />} loading={downloading} onClick={() => void handleDownload(false)}>
+              下载原件
+            </Button>
+            {canPreview(material.media_type) ? (
+              <Button icon={<EyeOutlined />} onClick={() => setPreviewing(true)}>
+                预览
               </Button>
             ) : null}
-            {can('materials:read') ? (
-              material.media_type === 'application/pdf' || isWord ? (
-                <Button icon={<EyeOutlined />} onClick={() => setPreviewing(true)}>预览</Button>
-              ) : null
-            ) : null}
-            {can('materials:read') && isWord ? (
-              <Button icon={<DownloadOutlined />} loading={converting} onClick={() => void handleDownloadPdf()}>下载 PDF</Button>
-            ) : null}
-            {can('materials:read') ? (
-              <Button type="primary" icon={<DownloadOutlined />} loading={downloading} onClick={() => void handleDownload()}>
-                下载原件
-              </Button>
-            ) : null}
-            {can('materials:write') ? (
-              <Popconfirm
-                title="删除这份资料？"
-                okText="删除"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-                onConfirm={() => void handleDelete()}
-              >
-                <Button danger icon={<DeleteOutlined />} loading={deleting}>
-                  删除
-                </Button>
-              </Popconfirm>
+            {isWord ? <Button onClick={() => void handleDownload(true)}>下载 PDF</Button> : null}
+            {canWrite ? (
+              <>
+                <Button onClick={() => setMoving(true)}>移动到其他套卷</Button>
+                <Popconfirm title="把这个文件移入回收站？" okText="移入" onConfirm={() => void handleTrash()}>
+                  <Button danger icon={<DeleteOutlined />}>
+                    移入回收站
+                  </Button>
+                </Popconfirm>
+              </>
             ) : null}
           </Space>
         }
       />
 
-      <Card title="基本信息">
-        <Descriptions
-          column={{ xs: 1, sm: 1, md: 2 }}
-          size="small"
-          items={[
-            { key: 'role', label: '角色', children: <RoleTag role={material.role} /> },
-            { key: 'subjects', label: '学科', children: <SubjectTags codes={material.subject_codes} /> },
-            { key: 'grade', label: '年级', children: GRADE_LABELS[material.grade] },
-            {
-              key: 'year',
-              label: '学年',
-              children: material.academic_year > 0 ? `${material.academic_year} 学年` : '未指定',
-            },
-            {
-              key: 'tags',
-              label: '标签',
-              children:
-                material.tags.length > 0 ? (
-                  <span className="inline-flex flex-wrap gap-1">
-                    {material.tags.map((tag) => (
-                      <Tag key={tag}>{tag}</Tag>
-                    ))}
-                  </span>
-                ) : (
-                  '—'
-                ),
-            },
-            {
-              key: 'description',
-              label: '描述',
-              span: { xs: 1, md: 2 },
-              children: material.description ? (
-                <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{material.description}</Typography.Paragraph>
-              ) : (
-                '—'
-              ),
-            },
-            { key: 'file', label: '文件名', children: material.file_name },
-            { key: 'media', label: '文件类型', children: fileTypeName(material.media_type) },
-            { key: 'size', label: '大小', children: formatBytes(material.size_bytes) },
-            {
-              key: 'sha256',
-              label: '内容指纹',
-              span: { xs: 1, md: 2 },
-              children: (
-                <div className="detail-code-row">
-                  <Typography.Text code copyable={false} className="inline-code-value">
-                    {material.sha256}
-                  </Typography.Text>
-                  <CopyButton value={material.sha256} label="复制" />
-                  <Link to={`/materials?sha256=${material.sha256}`}>查看同内容资料</Link>
-                </div>
-              ),
-            },
-            {
-              key: 'source',
-              label: '原始路径',
-              span: { xs: 1, md: 2 },
-              children: material.source_path ? (
-                <div className="detail-code-row">
-                  <Typography.Text code className="min-w-0 break-all">
-                    {material.source_path}
-                  </Typography.Text>
-                  <CopyButton value={material.source_path} label="复制" />
-                </div>
-              ) : (
-                '—'
-              ),
-            },
-            {
-              key: 'parent',
-              label: '所属原件',
-              span: { xs: 1, md: 2 },
-              children: material.parent_material_id ? (
-                <Link to={`/materials/${material.parent_material_id}`}>查看原件</Link>
-              ) : (
-                '—'
-              ),
-            },
-            { key: 'created', label: '创建时间', children: formatDateTime(material.created_at) },
-            { key: 'updated', label: '更新时间', children: formatDateTime(material.updated_at) },
-          ]}
-        />
-      </Card>
-
-      {material.collections.length > 0 ? (
-        <Card
-          title="所在合集"
-          extra={
-            <LinkButton size="small" type="link" to={`/collections?material_id=${material.id}`}>
-              查看相关合集
-            </LinkButton>
-          }
-        >
-          <div className="related-link-list">
-            {material.collections.map((collection) => (
-              <Link key={collection.id} to={`/collections/${collection.id}`} className="related-link-list__item">
-                <span className="font-medium">{collection.title}</span>
-                <span className="text-xs text-slate-500">{COLLECTION_KIND_LABELS[collection.kind]}</span>
-              </Link>
-            ))}
+      {material.pack ? (
+        <Card size="small" title="所属套卷">
+          <div className="flex flex-col gap-1">
+            <Link to={`/packs/${material.pack.id}`} className="font-semibold">
+              {material.pack.title}
+            </Link>
+            <PackMeta pack={material.pack} />
           </div>
         </Card>
       ) : null}
 
-      {canReadJobs ? (
-        <Card
-          title="相关任务"
-          extra={
-            <LinkButton size="small" type="link" to={`/jobs?material_id=${material.id}`}>
-              查看全部
-            </LinkButton>
-          }
-        >
-          {relatedJobs.isError ? (
-            <Typography.Text type="danger">相关任务加载失败</Typography.Text>
-          ) : relatedJobs.data?.items.length ? (
-            <div className="related-link-list">
-              {relatedJobs.data.items.map((job) => (
-                <Link key={job.id} to={`/jobs/${job.id}`} className="related-link-list__item">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <JobKindTag kind={job.kind} />
-                    <span className="truncate">{job.progress_message || JOB_KIND_LABELS[job.kind]}</span>
-                  </span>
-                  <span className="flex items-center gap-2 text-xs text-slate-500">
-                    <JobStatusTag status={job.status} />
-                    {formatDuration(job.duration_ms)}
-                  </span>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <Typography.Text type="secondary">暂无相关任务</Typography.Text>
-          )}
-        </Card>
-      ) : null}
+      <Card title="文件信息">
+        <Descriptions
+          size="small"
+          column={{ xs: 1, md: 2 }}
+          items={[
+            {
+              key: 'part',
+              label: '部件',
+              children: canWrite ? <Select size="small" value={material.part} options={PART_OPTIONS} onChange={(part) => void changePart(part)} style={{ width: 140 }} /> : <PartTag part={material.part} />,
+            },
+            ...(material.part === 'full' ? [{ key: 'answer', label: '答案起始页', children: material.answer_start_page > 0 ? `第 ${material.answer_start_page} 页` : '未识别' }] : []),
+            { key: 'original', label: '原始文件名', children: material.original_name },
+            { key: 'type', label: '文件类型', children: FILE_TYPES[material.media_type] ?? material.media_type },
+            { key: 'size', label: '大小', children: formatBytes(material.size_bytes) },
+            {
+              key: 'sha',
+              label: '内容指纹',
+              children: (
+                <Space size={4}>
+                  <Typography.Text code className="break-all text-xs">
+                    {material.sha256.slice(0, 16)}…
+                  </Typography.Text>
+                  <CopyButton value={material.sha256} label="复制" />
+                </Space>
+              ),
+            },
+            { key: 'storage', label: '存储', children: <span title={MATERIAL_STATUS_LABELS[material.status]}><MaterialStatusTag status={material.status} /></span> },
+            { key: 'created', label: '入库时间', children: formatDateTime(material.created_at) },
+          ]}
+        />
+      </Card>
 
-      <AnalysisPanel materialId={material.id} canWrite={can('materials:write')} />
+      <Card title={`来源记录（${material.sources.length}）`} styles={{ body: { padding: 0 } }}>
+        <Table
+          rowKey="id"
+          size="small"
+          pagination={false}
+          dataSource={material.sources}
+          columns={[
+            { title: '上传路径', dataIndex: 'path', key: 'path', render: (path: string) => <span className="break-all">{path}</span> },
+            { title: '', key: 'dup', width: 110, render: (_: unknown, src) => (src.duplicate ? <Tag>重复上传</Tag> : <Tag color="blue">首次上传</Tag>) },
+            { title: '时间', dataIndex: 'created_at', key: 'created', width: 170, render: (v: string) => formatDateTime(v) },
+            { title: '', key: 'upload', width: 90, render: (_: unknown, src) => (src.upload_id && can('uploads:write') ? <Link to={`/uploads/${src.upload_id}`}>上传记录</Link> : null) },
+          ]}
+        />
+      </Card>
 
-      <IndexPanel materialId={material.id} canWrite={can('materials:write')} />
+      <AnalysisPanel materialId={material.id} canWrite={canWrite} />
+      <IndexPanel materialId={material.id} canWrite={canWrite} />
 
       <Card title="副本与分享">
         <ReplicaTable
@@ -315,19 +239,10 @@ export function MaterialDetailPage() {
         />
       </Card>
 
-      {editing ? <MaterialEditModal material={material} open={editing} onClose={() => setEditing(false)} /> : null}
-      {previewing ? <Suspense fallback={<Spin fullscreen tip="正在加载预览" />}><MaterialPreviewModal materialId={material.id} title={material.title} isWord={isWord} pdfFileName={pdfFileName} onClose={() => setPreviewing(false)} /></Suspense> : null}
+      {previewing ? (
+        <FilePreviewModal target={{ id: material.id, title: material.file_name, fileName: material.file_name, mediaType: material.media_type }} onClose={() => setPreviewing(false)} />
+      ) : null}
+      {moving ? <MovePackModal open materialId={material.id} currentPackId={material.pack_id} onClose={() => setMoving(false)} /> : null}
     </div>
   );
-}
-
-function fileTypeName(mediaType: string): string {
-  const names: Record<string, string> = {
-    'application/pdf': 'PDF 文档',
-    'application/msword': 'Word 文档（DOC）',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word 文档（DOCX）',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PowerPoint 演示文稿',
-    'application/zip': 'ZIP 压缩包',
-  };
-  return names[mediaType] ?? '其他文件';
 }

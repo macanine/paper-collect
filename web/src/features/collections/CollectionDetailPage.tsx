@@ -1,157 +1,133 @@
 import { useState } from 'react';
-import { App, Button, Card, Descriptions, Popconfirm, Space, Typography } from 'antd';
-import { EditOutlined } from '@ant-design/icons';
+import { App, Button, Card, Form, Input, List, Modal, Popconfirm, Space } from 'antd';
+import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
-import { describeError } from '../../shared/api/errors';
-import { formatDateTime } from '../../shared/lib/format';
-import { PageHeader } from '../../shared/ui/PageHeader';
+import { errorMessage } from '../../shared/api/errors';
 import { BackLink } from '../../shared/ui/BackLink';
-import { ErrorState, LoadingState } from '../../shared/ui/States';
-import { CollectionKindTag, SubjectTags } from '../../shared/ui/StatusTags';
+import { LinkButton } from '../../shared/ui/LinkButton';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { useAuth } from '../auth/AuthContext';
-import { CollectionFormModal } from './CollectionFormModal';
-import { CollectionItemsEditor } from './CollectionItemsEditor';
-import { useCollection, useCollectionsList } from './queries';
-import { deleteCollection } from './api';
+import { Completeness, PackMeta } from '../packs/PackBadges';
+import { useCollection, useCollectionMutations } from './queries';
 
 export function CollectionDetailPage() {
   const { collectionId = '' } = useParams();
   const { can } = useAuth();
+  const canWrite = can('collections:write');
   const { message } = App.useApp();
   const navigate = useNavigate();
   const query = useCollection(collectionId);
+  const { update, replacePacks, remove } = useCollectionMutations();
   const [editing, setEditing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [form] = Form.useForm<{ title: string; description?: string }>();
 
   if (query.isPending) return <LoadingState />;
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink to="/collections">返回合集列表</BackLink>
-        <ErrorState error={query.error} onRetry={() => void query.refetch()} title="合集加载失败" />
+        <BackLink to="/collections">返回专题</BackLink>
+        <ErrorState error={query.error} onRetry={() => void query.refetch()} title="专题加载失败" />
       </div>
     );
   }
-
   const collection = query.data;
-  const canWrite = can('collections:write');
+  const order = collection.packs.map((p) => p.id);
 
-  const handleDelete = async () => {
-    setDeleting(true);
+  const save = async () => {
+    const values = await form.validateFields();
     try {
-      await deleteCollection(collection.id, true);
-      message.success('合集已删除；其中的资料仍然保留');
-      navigate('/collections', { replace: true });
+      await update.mutateAsync({ id: collection.id, body: { title: values.title, description: values.description ?? '' } });
+      setEditing(false);
     } catch (error) {
-      const { title, detail } = describeError(error);
-      message.error(detail ? `${title}：${detail}` : title);
-    } finally {
-      setDeleting(false);
+      message.error(errorMessage(error));
     }
+  };
+  const setOrder = async (next: string[]) => {
+    try {
+      await replacePacks.mutateAsync({ id: collection.id, packIds: next });
+    } catch (error) {
+      message.error(errorMessage(error));
+    }
+  };
+  const move = (index: number, delta: number) => {
+    const next = [...order];
+    const [id] = next.splice(index, 1);
+    next.splice(index + delta, 0, id as string);
+    void setOrder(next);
   };
 
   return (
     <div className="page-stack">
-      <BackLink to="/collections">返回合集列表</BackLink>
+      <BackLink to="/collections">返回专题</BackLink>
       <PageHeader
         title={collection.title}
+        description={collection.description || `${collection.packs.length} 个套卷`}
         extra={
           <Space wrap>
-            <CollectionKindTag kind={collection.kind} />
+            <LinkButton type="primary" to={`/library?collection_id=${collection.id}`}>
+              在资料库中查看
+            </LinkButton>
             {canWrite ? (
-              <Button icon={<EditOutlined />} onClick={() => setEditing(true)}>
-                编辑信息
-              </Button>
-            ) : null}
-            {canWrite ? (
-              <Popconfirm
-                title="删除这个合集？"
-                okText="删除"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-                onConfirm={() => void handleDelete()}
-              >
-                <Button danger loading={deleting}>
-                  删除合集
+              <>
+                <Button
+                  onClick={() => {
+                    form.setFieldsValue({ title: collection.title, description: collection.description });
+                    setEditing(true);
+                  }}
+                >
+                  编辑
                 </Button>
-              </Popconfirm>
+                <Popconfirm title="删除专题？其中的套卷不会被删除" onConfirm={() => void remove.mutateAsync(collection.id).then(() => navigate('/collections', { replace: true }))}>
+                  <Button danger>删除专题</Button>
+                </Popconfirm>
+              </>
             ) : null}
           </Space>
         }
       />
-
-      <Card title="合集信息">
-        <Descriptions
-          size="small"
-          column={{ xs: 1, sm: 1, md: 2 }}
-          items={[
-            { key: 'kind', label: '类型', children: <CollectionKindTag kind={collection.kind} /> },
-            {
-              key: 'parent',
-              label: '父合集',
-              children: collection.parent_id ? (
-                <Link to={`/collections/${collection.parent_id}`}>
-                  查看父合集
-                </Link>
-              ) : (
-                '顶层合集'
-              ),
-            },
-            {
-              key: 'subjects',
-              label: '学科',
-              children: <SubjectTags codes={collection.subject_codes} />,
-            },
-            { key: 'count', label: '条目数', children: `${collection.items.length} 条` },
-            { key: 'created', label: '创建时间', children: formatDateTime(collection.created_at) },
-            { key: 'updated', label: '更新时间', children: formatDateTime(collection.updated_at) },
-            {
-              key: 'description',
-              label: '描述',
-              span: { xs: 1, md: 2 },
-              children: collection.description ? (
-                <Typography.Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{collection.description}</Typography.Paragraph>
-              ) : (
-                '—'
-              ),
-            },
-          ]}
+      <Card styles={{ body: { padding: 0 } }}>
+        <List
+          dataSource={collection.packs}
+          locale={{ emptyText: <EmptyState description="专题还是空的：在资料库勾选套卷，点“加入专题”" /> }}
+          renderItem={(pack, index) => (
+            <List.Item
+              className="px-6"
+              actions={
+                canWrite
+                  ? [
+                      <Button key="up" type="text" size="small" aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, -1)} />,
+                      <Button key="down" type="text" size="small" aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === order.length - 1} onClick={() => move(index, 1)} />,
+                      <Button key="remove" type="link" size="small" danger onClick={() => void setOrder(order.filter((id) => id !== pack.id))}>
+                        移出
+                      </Button>,
+                    ]
+                  : undefined
+              }
+            >
+              <List.Item.Meta
+                title={<Link to={`/packs/${pack.id}`}>{pack.title}</Link>}
+                description={
+                  <span className="flex flex-wrap items-center gap-2">
+                    <PackMeta pack={pack} />
+                    <Completeness pack={pack} />
+                  </span>
+                }
+              />
+            </List.Item>
+          )}
         />
       </Card>
-
-      <ChildCollections collectionId={collection.id} />
-
-      <Card title={`合集条目（${collection.items.length}）`}>
-        <CollectionItemsEditor collection={collection} canWrite={canWrite} />
-      </Card>
-
-      {editing ? (
-        <CollectionFormModal
-          open={editing}
-          collection={collection}
-          onClose={() => setEditing(false)}
-          onSaved={() => void query.refetch()}
-        />
-      ) : null}
+      <Modal open={editing} title="编辑专题" okText="保存" onOk={() => void save()} onCancel={() => setEditing(false)} confirmLoading={update.isPending} destroyOnHidden>
+        <Form form={form} layout="vertical">
+          <Form.Item name="title" label="名称" rules={[{ required: true, whitespace: true, message: '请填写名称' }]}>
+            <Input maxLength={255} />
+          </Form.Item>
+          <Form.Item name="description" label="说明">
+            <Input.TextArea autoSize={{ minRows: 2 }} maxLength={4000} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
-  );
-}
-
-/** 子合集（ZIP 包等）。顶层列表不展示它们，避免出现两个同名合集。 */
-function ChildCollections({ collectionId }: { collectionId: string }) {
-  const query = useCollectionsList({ page: 1, page_size: 100, parent_id: collectionId });
-  const items = query.data?.items ?? [];
-  if (query.isError || items.length === 0) return null;
-  return (
-    <Card title={`子合集（${items.length}）`}>
-      <div className="flex flex-col gap-2">
-        {items.map((item) => (
-          <Link key={item.id} to={`/collections/${item.id}`} className="flex flex-wrap items-center gap-2">
-            <CollectionKindTag kind={item.kind} />
-            <span className="font-medium">{item.title}</span>
-          </Link>
-        ))}
-      </div>
-    </Card>
   );
 }

@@ -34,6 +34,7 @@ interface SettingsFormValues {
   ocr_provider_id: string;
   max_pages: number;
   max_images: number;
+  auto_accept_percent: number;
 }
 
 interface OCRFormValues {
@@ -101,6 +102,7 @@ export function AiSettingsPage() {
       ocr_provider_id: settings.data.ocr_provider_id,
       max_pages: settings.data.max_pages,
       max_images: settings.data.max_images,
+      auto_accept_percent: Math.round((settings.data.auto_accept_confidence ?? 0.8) * 100),
     });
   }, [settings.data, form]);
 
@@ -113,6 +115,7 @@ export function AiSettingsPage() {
         mineru_base_url: settings.data?.mineru_base_url ?? '',
         max_pages: values.max_pages,
         max_images: values.max_images,
+        auto_accept_confidence: values.auto_accept_percent / 100,
       });
       message.success('AI 解析设置已保存');
     } catch (error) {
@@ -302,6 +305,14 @@ export function AiSettingsPage() {
                 <InputNumber min={0} max={4} className="w-full" />
               </Form.Item>
             </div>
+            <Form.Item
+              name="auto_accept_percent"
+              label="自动入库把握度"
+              extra="AI 整体把握度达到此值且没有不确定字段时直接入库，否则进入待整理。调高更稳妥，调低更省事。"
+              rules={[{ required: true }]}
+            >
+              <InputNumber min={0} max={100} addonAfter="%" className="w-full" />
+            </Form.Item>
             <Button type="primary" onClick={() => void handleSave()} loading={save.isPending} disabled={!canWrite}>
               保存设置
             </Button>

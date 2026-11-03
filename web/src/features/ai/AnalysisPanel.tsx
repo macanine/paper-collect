@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Alert, App, Button, Card, Collapse, Descriptions, Popconfirm, Progress, Space, Tag, Typography } from 'antd';
 import { RobotOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApiError, describeError } from '../../shared/api/errors';
 import type { AISuggestions, MaterialAnalysis } from '../../shared/api/types';
-import { GRADE_LABELS, ROLE_LABELS, SUBJECT_LABELS } from '../../shared/lib/labels';
+import { DOC_TYPE_LABELS, FIELD_LABELS, GRADE_LABELS, PART_LABELS, SUBJECT_LABELS, TERM_LABELS } from '../../shared/lib/labels';
 import { formatDateTime } from '../../shared/lib/format';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { materialKeys } from '../materials/queries';
@@ -30,6 +30,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
     if (query.data?.status !== 'succeeded') return;
     void queryClient.invalidateQueries({ queryKey: materialKeys.detail(materialId) });
     void queryClient.invalidateQueries({ queryKey: materialKeys.all });
+    void queryClient.invalidateQueries({ queryKey: ['packs'] });
   }, [materialId, query.data?.status, queryClient]);
 
   const handleRun = (force: boolean) => {
@@ -41,7 +42,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
 
   const handleApply = () => {
     apply.mutate(undefined, {
-      onSuccess: () => message.success('建议已重新应用到资料并写入审计'),
+      onSuccess: () => message.success('已按识别结果更新套卷并确认'),
       onError: (error) => {
         const { title, detail } = describeError(error);
         message.error(detail ? `${title}：${detail}` : title);
@@ -117,9 +118,11 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
               建议字段（{suggestionFieldCount(analysis.suggestions)} 项）
               {analysis.applied_at ? <Tag color="green" className="ml-2">已应用</Tag> : <Tag color="orange" className="ml-2">未应用</Tag>}
             </Typography.Text>
-            <Button size="small" loading={apply.isPending} disabled={!canWrite} onClick={handleApply}>
-              重新应用建议
-            </Button>
+            <Popconfirm title="用识别结果覆盖套卷的编目信息？" okText="覆盖" cancelText="取消" onConfirm={handleApply}>
+              <Button size="small" loading={apply.isPending} disabled={!canWrite}>
+                按识别结果覆盖
+              </Button>
+            </Popconfirm>
           </div>
           <SuggestionList suggestions={analysis.suggestions} />
           <Collapse
@@ -143,21 +146,37 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
 }
 
 function SuggestionList({ suggestions }: { suggestions: AISuggestions }) {
-  const entries: { label: string; value: React.ReactNode }[] = [];
-  if (suggestions.title) entries.push({ label: '标题', value: suggestions.title });
-  if (suggestions.subject_codes?.length) {
-    entries.push({ label: '学科', value: suggestions.subject_codes.map((code) => SUBJECT_LABELS[code] ?? code).join('、') });
-  }
-  if (suggestions.grade) entries.push({ label: '年级', value: GRADE_LABELS[suggestions.grade] });
-  if (suggestions.academic_year) entries.push({ label: '学年', value: `${suggestions.academic_year} 学年` });
-  if (suggestions.role) entries.push({ label: '角色', value: ROLE_LABELS[suggestions.role] });
-  if (suggestions.tags?.length) entries.push({ label: '标签', value: suggestions.tags.join('、') });
+  const entries: { key: string; value: ReactNode }[] = [];
+  if (suggestions.part) entries.push({ key: 'part', value: PART_LABELS[suggestions.part] });
+  if (suggestions.doc_type) entries.push({ key: 'doc_type', value: DOC_TYPE_LABELS[suggestions.doc_type] });
+  if (suggestions.subject_codes?.length) entries.push({ key: 'subject_codes', value: suggestions.subject_codes.map((code) => SUBJECT_LABELS[code] ?? code).join('、') });
+  if (suggestions.grade) entries.push({ key: 'grade', value: GRADE_LABELS[suggestions.grade] });
+  if (suggestions.cohort) entries.push({ key: 'cohort', value: `${suggestions.cohort} 届` });
+  if (suggestions.term) entries.push({ key: 'term', value: TERM_LABELS[suggestions.term] });
+  if (suggestions.region) entries.push({ key: 'region', value: suggestions.region });
+  if (suggestions.organization) entries.push({ key: 'organization', value: suggestions.organization });
+  if (suggestions.exam_date) entries.push({ key: 'exam_date', value: suggestions.exam_date });
+  if (suggestions.exam_name) entries.push({ key: 'exam_name', value: suggestions.exam_name });
+  if (suggestions.chapter) entries.push({ key: 'chapter', value: suggestions.chapter });
+  if (suggestions.tags?.length) entries.push({ key: 'tags', value: suggestions.tags.join('、') });
+  if (suggestions.answer_start_page) entries.push({ key: 'answer_start_page', value: `第 ${suggestions.answer_start_page} 页` });
   if (entries.length === 0) return <Typography.Text>暂无建议</Typography.Text>;
+  const uncertain = new Set(suggestions.uncertain ?? []);
   return (
     <Descriptions
       column={{ xs: 1, sm: 1, md: 2 }}
       size="small"
-      items={entries.map((entry, index) => ({ key: String(index), label: entry.label, children: entry.value }))}
+      items={entries.map((entry) => ({
+        key: entry.key,
+        label: entry.key === 'answer_start_page' ? '答案起始页' : FIELD_LABELS[entry.key],
+        children: uncertain.has(entry.key) ? (
+          <span>
+            {entry.value} <Tag color="warning">不确定</Tag>
+          </span>
+        ) : (
+          entry.value
+        ),
+      }))}
     />
   );
 }

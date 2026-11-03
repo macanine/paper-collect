@@ -1,25 +1,27 @@
 import { Tag } from 'antd';
 import type { TagProps } from 'antd';
 import type {
-  CollectionKind,
+  DocType,
   JobKind,
   JobStatus,
   MaterialStatus,
+  Part,
   ReplicaStatus,
-  Role,
   ShareStatus,
+  Stage,
   SubjectCode,
   UploadStatus,
   Verification,
 } from '../api/types';
 import {
-  COLLECTION_KIND_LABELS,
+  DOC_TYPE_LABELS,
   JOB_KIND_LABELS,
   JOB_STATUS_LABELS,
   MATERIAL_STATUS_LABELS,
+  PART_LABELS,
   REPLICA_STATUS_LABELS,
-  ROLE_LABELS,
   SHARE_STATUS_LABELS,
+  STAGE_LABELS,
   SUBJECT_LABELS,
   UPLOAD_STATUS_LABELS,
   VERIFICATION_LABELS,
@@ -61,13 +63,22 @@ const SHARE_STATUS_COLORS: Record<ShareStatus, TagColor> = {
   failed: 'error',
 };
 
-const ROLE_COLORS: Record<Role, TagColor> = {
-  exam: 'blue',
-  answer: 'green',
-  questions_answers: 'cyan',
-  teacher_edition: 'purple',
-  lecture: 'gold',
+const PART_COLORS: Record<Part, TagColor> = {
+  questions: 'blue',
+  answers: 'green',
+  full: 'cyan',
+  teacher: 'purple',
+  answer_sheet: 'geekblue',
+  listening: 'magenta',
+  main: 'gold',
   other: 'default',
+};
+
+const STAGE_COLORS: Record<Stage, TagColor> = {
+  processing: 'processing',
+  review: 'warning',
+  ready: 'success',
+  failed: 'error',
 };
 
 export function MaterialStatusTag({ status }: { status: MaterialStatus }) {
@@ -98,8 +109,17 @@ export function VerificationTag({ verification }: { verification: Verification }
   return <Tag color={verification === 'sha256' ? 'success' : 'default'}>{VERIFICATION_LABELS[verification]}</Tag>;
 }
 
-export function RoleTag({ role }: { role: Role }) {
-  return <Tag color={ROLE_COLORS[role]}>{ROLE_LABELS[role]}</Tag>;
+export function PartTag({ part }: { part: Part }) {
+  return <Tag color={PART_COLORS[part]}>{PART_LABELS[part]}</Tag>;
+}
+
+export function StageTag({ stage }: { stage: Stage }) {
+  return <Tag color={STAGE_COLORS[stage]}>{STAGE_LABELS[stage]}</Tag>;
+}
+
+export function DocTypeTag({ type }: { type: DocType | '' }) {
+  if (type === '') return <Tag>未分类</Tag>;
+  return <Tag>{DOC_TYPE_LABELS[type]}</Tag>;
 }
 
 export function SubjectTags({ codes }: { codes: SubjectCode[] }) {
@@ -113,7 +133,4 @@ export function SubjectTags({ codes }: { codes: SubjectCode[] }) {
   );
 }
 
-export function CollectionKindTag({ kind }: { kind: CollectionKind }) {
-  return <Tag>{COLLECTION_KIND_LABELS[kind]}</Tag>;
-}
 

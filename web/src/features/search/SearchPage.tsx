@@ -205,8 +205,18 @@ export function SearchResultCard({ hit, onOpenPage }: { hit: SearchHit; onOpenPa
           />
         ) : null}
         <Space wrap>
-          <Link to={`/materials/${hit.material.id}`}>{hit.material.title}</Link>
-          {hit.collection_id ? <Link to={`/collections/${hit.collection_id}`}>查看合集</Link> : null}
+          {hit.pack?.id ? <Link to={`/packs/${hit.pack.id}`}>{hit.pack.title}</Link> : <Link to={`/materials/${hit.material.id}`}>{hit.material.title}</Link>}
+          {hit.also_in?.length ? (
+            <Typography.Text type="secondary">
+              也出现在：
+              {hit.also_in.map((p, i) => (
+                <span key={p.id}>
+                  {i > 0 ? '、' : ''}
+                  <Link to={`/packs/${p.id}`}>{p.title}</Link>
+                </span>
+              ))}
+            </Typography.Text>
+          ) : null}
           <Button size="small" onClick={onOpenPage}>
             打开原卷第 {hit.page_no} 页
           </Button>

@@ -14,12 +14,9 @@ export function analysisStatusCopy(status: AnalysisStatus, error: string): strin
 }
 
 export function suggestionFieldCount(suggestions: AISuggestions): number {
-  let count = 0;
-  if (suggestions.title) count += 1;
-  if (suggestions.subject_codes && suggestions.subject_codes.length > 0) count += 1;
-  if (suggestions.grade) count += 1;
-  if (suggestions.academic_year) count += 1;
-  if (suggestions.role) count += 1;
-  if (suggestions.tags && suggestions.tags.length > 0) count += 1;
-  return count;
+  return Object.entries(suggestions).filter(([key, value]) => {
+    if (key === 'uncertain') return false;
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== undefined && value !== '' && value !== 0;
+  }).length;
 }

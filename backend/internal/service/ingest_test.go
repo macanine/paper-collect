@@ -70,3 +70,15 @@ func testPackID(t *testing.T, db *gorm.DB) string {
 	}
 	return pack.ID
 }
+
+func TestPackStemTitleKeepsBalancedBrackets(t *testing.T) {
+	for name, want := range map[string]string{
+		"英语周测（一）.pdf":  "英语周测（一）",
+		"数学（答案）.pdf":    "数学",
+		"物理-参考答案.docx": "物理",
+	} {
+		if got := packStemTitle(name); got != want {
+			t.Errorf("packStemTitle(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

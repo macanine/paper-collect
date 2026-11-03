@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { App as AntdApp, Avatar, Drawer, Dropdown } from 'antd';
+import { App as AntdApp, Avatar, Badge, Button, Drawer, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   AppstoreOutlined,
@@ -10,9 +10,12 @@ import {
   CloudServerOutlined,
   CloudUploadOutlined,
   DashboardOutlined,
+  DeleteOutlined,
   DownOutlined,
   ExperimentOutlined,
-  FileTextOutlined,
+  FolderOpenOutlined,
+  HistoryOutlined,
+  InboxOutlined,
   KeyOutlined,
   LogoutOutlined,
   MenuOutlined,
@@ -20,12 +23,16 @@ import {
   SearchOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
+import { getLibraryStats } from '../features/materials/api';
+import { UploadDialog } from '../features/uploads/UploadDialog';
+import { UploadProvider, useUploads } from '../features/uploads/UploadManager';
+import { UploadTray } from '../features/uploads/UploadTray';
 import { useAuth } from '../features/auth/AuthContext';
 import type { Scope } from '../shared/api/types';
 import { USER_ROLE_LABELS } from '../shared/lib/labels';
 import { NetworkActivity } from '../shared/ui/NetworkActivity';
 import { FullPageLoading, LoadingState } from '../shared/ui/States';
-import { LinkButton } from '../shared/ui/LinkButton';
 
 interface NavigationItem {
   key: string;
@@ -33,6 +40,7 @@ interface NavigationItem {
   label: string;
   icon: ReactNode;
   scope?: Scope;
+  badge?: 'review';
 }
 
 interface NavigationSection {
@@ -44,25 +52,29 @@ interface NavigationSection {
 const NAVIGATION: NavigationSection[] = [
   {
     key: 'workspace',
-    label: '资料工作台',
+    label: '资料',
     items: [
-      { key: '/', path: '/', label: '仪表盘', icon: <DashboardOutlined /> },
+      { key: '/', path: '/', label: '工作台', icon: <DashboardOutlined /> },
+      { key: '/inbox', path: '/inbox', label: '待整理', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
+      { key: '/library', path: '/library', label: '资料库', icon: <FolderOpenOutlined />, scope: 'materials:read' },
       { key: '/search', path: '/search', label: '搜题', icon: <SearchOutlined />, scope: 'materials:read' },
-      { key: '/materials', path: '/materials', label: '资料', icon: <FileTextOutlined />, scope: 'materials:read' },
-      { key: '/collections', path: '/collections', label: '合集', icon: <AppstoreOutlined />, scope: 'collections:read' },
-      { key: '/uploads/new', path: '/uploads/new', label: '上传资料', icon: <CloudUploadOutlined />, scope: 'uploads:write' },
-      { key: '/jobs', path: '/jobs', label: '任务', icon: <BarsOutlined />, scope: 'jobs:read' },
+      { key: '/collections', path: '/collections', label: '专题', icon: <AppstoreOutlined />, scope: 'collections:read' },
     ],
   },
   {
-    key: 'infrastructure',
-    label: '存储与运行',
-    items: [{ key: '/storage', path: '/storage', label: '存储端点', icon: <CloudServerOutlined />, scope: 'storage:read' }],
+    key: 'records',
+    label: '记录',
+    items: [
+      { key: '/uploads', path: '/uploads', label: '上传记录', icon: <HistoryOutlined />, scope: 'uploads:write' },
+      { key: '/trash', path: '/trash', label: '回收站', icon: <DeleteOutlined />, scope: 'materials:write' },
+      { key: '/jobs', path: '/jobs', label: '处理日志', icon: <BarsOutlined />, scope: 'jobs:read' },
+    ],
   },
   {
     key: 'system',
-    label: '系统管理',
+    label: '系统',
     items: [
+      { key: '/storage', path: '/storage', label: '存储端点', icon: <CloudServerOutlined />, scope: 'storage:read' },
       { key: '/admin/ai-models', path: '/admin/ai-models', label: 'AI 模型', icon: <RobotOutlined />, scope: 'ai:read' },
       { key: '/admin/ai-settings', path: '/admin/ai-settings', label: 'AI 解析', icon: <ExperimentOutlined />, scope: 'ai:read' },
       { key: '/admin/api-keys', path: '/admin/api-keys', label: 'API 密钥', icon: <KeyOutlined />, scope: 'keys:manage' },
@@ -73,17 +85,19 @@ const NAVIGATION: NavigationSection[] = [
 ];
 
 const DETAIL_LABELS: Record<string, string> = {
-  materials: '资料详情',
-  collections: '合集详情',
-  jobs: '任务详情',
-  uploads: '上传进度',
+  packs: '套卷详情',
+  materials: '文件详情',
+  collections: '专题详情',
+  jobs: '处理详情',
+  uploads: '上传详情',
 };
 
 function routeKey(pathname: string): string {
   if (pathname === '/') return '/';
   if (pathname.startsWith('/admin/')) return pathname;
-  if (pathname.startsWith('/uploads/')) return '/uploads/new';
-  return `/${pathname.split('/')[1] ?? ''}`;
+  const first = pathname.split('/')[1] ?? '';
+  if (first === 'packs' || first === 'materials') return '/library';
+  return `/${first}`;
 }
 
 function detailLabel(pathname: string, item: NavigationItem | undefined): string | null {
@@ -106,10 +120,11 @@ function useNavigation(can: (scope: Scope) => boolean) {
 interface SidebarContentProps {
   sections: NavigationSection[];
   activeKey: string;
+  reviewCount: number;
   onNavigate?: () => void;
 }
 
-function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps) {
+function SidebarContent({ sections, activeKey, reviewCount, onNavigate }: SidebarContentProps) {
   return (
     <div className="app-sidebar__inner">
       <Link to="/" className="app-brand" onClick={onNavigate} aria-label="返回仪表盘">
@@ -117,7 +132,7 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
           <BookOutlined />
         </span>
         <span className="app-brand__copy">
-          <span className="app-brand__title">高中资料归档</span>
+          <span className="app-brand__title">中学资料库</span>
           <span className="app-brand__subtitle">Paper Collect</span>
         </span>
       </Link>
@@ -137,7 +152,8 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
                     onClick={onNavigate}
                   >
                     <span className="app-nav__icon">{item.icon}</span>
-                    <span>{item.label}</span>
+                    <span className="app-nav__label">{item.label}</span>
+                    {item.badge === 'review' && reviewCount > 0 ? <Badge count={reviewCount} size="small" overflowCount={999} /> : null}
                   </Link>
                 );
               })}
@@ -149,8 +165,41 @@ function SidebarContent({ sections, activeKey, onNavigate }: SidebarContentProps
   );
 }
 
+function HeaderUploadButton() {
+  const { openDialog } = useUploads();
+  return (
+    <span className="app-header__upload">
+      <Button type="primary" aria-label="上传资料" icon={<CloudUploadOutlined />} onClick={openDialog}>
+        <span className="app-header__upload-label">上传资料</span>
+      </Button>
+    </span>
+  );
+}
+
 function AuthenticatedAppLayout() {
+  const { can } = useAuth();
+  return (
+    <UploadProvider enabled={can('uploads:write')}>
+      <AppFrame />
+      {can('uploads:write') ? (
+        <>
+          <UploadTray />
+          <UploadDialog />
+        </>
+      ) : null}
+    </UploadProvider>
+  );
+}
+
+function AppFrame() {
   const { user, can, signOut } = useAuth();
+  const stats = useQuery({
+    queryKey: ['dashboard', 'library-stats'],
+    queryFn: ({ signal }) => getLibraryStats(signal),
+    enabled: can('materials:read'),
+    refetchInterval: 30_000,
+  });
+  const reviewCount = stats.data?.review ?? 0;
   const navigate = useNavigate();
   const location = useLocation();
   const { message } = AntdApp.useApp();
@@ -169,7 +218,7 @@ function AuthenticatedAppLayout() {
 
   useEffect(() => {
     const current = detail ?? activeItem?.label ?? '管理台';
-    document.title = `${current} · 高中资料归档`;
+    document.title = `${current} · 中学资料库`;
   }, [activeItem?.label, detail]);
 
   const handleLogout = async () => {
@@ -194,7 +243,7 @@ function AuthenticatedAppLayout() {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <SidebarContent sections={navigation} activeKey={activeKey} />
+        <SidebarContent sections={navigation} activeKey={activeKey} reviewCount={reviewCount} />
       </aside>
 
       <Drawer
@@ -210,6 +259,7 @@ function AuthenticatedAppLayout() {
         <SidebarContent
           sections={navigation}
           activeKey={activeKey}
+          reviewCount={reviewCount}
           onNavigate={() => setMobileNavOpen(false)}
         />
       </Drawer>
@@ -227,7 +277,7 @@ function AuthenticatedAppLayout() {
               <MenuOutlined />
             </button>
             <nav className="app-breadcrumb" aria-label="当前位置">
-              <span className="app-breadcrumb__root">工作台</span>
+              <span className="app-breadcrumb__root">资料库</span>
               <span className="app-breadcrumb__separator" aria-hidden="true">
                 /
               </span>
@@ -251,13 +301,7 @@ function AuthenticatedAppLayout() {
                 <span>搜题</span>
               </Link>
             ) : null}
-            {can('uploads:write') ? (
-              <span className="app-header__upload">
-                <LinkButton aria-label="上传资料" icon={<CloudUploadOutlined />} to="/uploads/new">
-                  <span className="app-header__upload-label">上传资料</span>
-                </LinkButton>
-              </span>
-            ) : null}
+            {can('uploads:write') ? <HeaderUploadButton /> : null}
             {user ? (
               <Dropdown
                 trigger={['click']}

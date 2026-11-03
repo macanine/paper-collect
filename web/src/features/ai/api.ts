@@ -11,9 +11,6 @@ import type {
   MinerUTestResult,
   OCRProvider,
   OCRProviderKind,
-  Role,
-  SubjectCode,
-  Grade,
 } from '../../shared/api/types';
 
 export interface AIProviderDraft {
@@ -64,6 +61,7 @@ export function putAISettings(input: {
   mineru_token?: string;
   max_pages: number;
   max_images: number;
+  auto_accept_confidence?: number;
 }): Promise<AISettings> {
   return apiRequest<AISettings>('/ai/settings', { method: 'PUT', body: input });
 }
@@ -107,19 +105,8 @@ export function enqueueMaterialAnalysis(materialId: string, force: boolean): Pro
   });
 }
 
-export interface AnalysisOverride {
-  title?: string;
-  subject_codes?: SubjectCode[];
-  grade?: Grade;
-  academic_year?: number;
-  role?: Role;
-  tags?: string[];
-}
-
-export function applyMaterialAnalysis(materialId: string, override?: AnalysisOverride): Promise<MaterialDetail> {
-  return apiRequest<MaterialDetail>(`/materials/${segment(materialId)}/analysis/apply`, {
-    method: 'POST',
-    body: override ?? {},
-  });
+/** 以人工确认的方式重新应用识别结果：覆盖套卷字段并移出待整理。 */
+export function applyMaterialAnalysis(materialId: string): Promise<MaterialDetail> {
+  return apiRequest<MaterialDetail>(`/materials/${segment(materialId)}/analysis/apply`, { method: 'POST', body: {} });
 }
 

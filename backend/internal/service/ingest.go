@@ -263,6 +263,9 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, fil
 		if err := insertPackSubjects(tx, pack.ID, hints.SubjectCodes); err != nil {
 			return err
 		}
+		sort.SliceStable(g.files, func(i, j int) bool {
+			return partRank[suggestPart(path.Base(g.files[i].Path), g.files[i].MediaType)] < partRank[suggestPart(path.Base(g.files[j].Path), g.files[j].MediaType)]
+		})
 		for i, f := range g.files {
 			b, err := s.ensureBlobTx(tx, f.plannedFile, now)
 			if err != nil {

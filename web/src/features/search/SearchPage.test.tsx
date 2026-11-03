@@ -23,7 +23,8 @@ describe('搜题结果', () => {
     page_no: 3,
     material: { id: 'material-1', title: '数学试卷', file_name: '数学试卷.pdf' },
     subject_codes: ['math'],
-    collection_id: '',
+    pack: { id: 'pack-1', title: '测试套卷' },
+    also_in: [],
   };
 
   it('默认展示高亮的匹配文段，完整题目按需展开', () => {
@@ -31,7 +32,7 @@ describe('搜题结果', () => {
     expect(html).toContain('匹配文段');
     expect(html).toContain('<mark>x+y=2</mark>');
     expect(html).toContain('查看完整题目');
-    expect(html).toContain('数学试卷');
+    expect(html).toContain('测试套卷');
     expect(html).not.toContain('很长的题目开头');
   });
 

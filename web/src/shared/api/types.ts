@@ -16,17 +16,47 @@ export const SUBJECT_CODES = [
 ] as const;
 export type SubjectCode = (typeof SUBJECT_CODES)[number];
 
-export const ROLES = ['exam', 'answer', 'questions_answers', 'teacher_edition', 'lecture', 'other'] as const;
-export type Role = (typeof ROLES)[number];
+/** 文件在套卷中的部件。 */
+export const PARTS = ['questions', 'answers', 'full', 'teacher', 'answer_sheet', 'listening', 'main', 'other'] as const;
+export type Part = (typeof PARTS)[number];
 
-export const GRADES = ['', 'grade10', 'grade11', 'grade12'] as const;
+/** 套卷的资料类型。 */
+export const DOC_TYPES = [
+  'gaokao_real',
+  'gaokao_mock',
+  'zhongkao_real',
+  'zhongkao_mock',
+  'joint',
+  'monthly',
+  'midterm',
+  'final',
+  'opening',
+  'unit',
+  'weekly',
+  'topic',
+  'lecture',
+  'study_guide',
+  'courseware',
+  'homework',
+  'other',
+] as const;
+export type DocType = (typeof DOC_TYPES)[number];
+
+export const GRADES = ['', 'grade7', 'grade8', 'grade9', 'grade10', 'grade11', 'grade12'] as const;
 export type Grade = (typeof GRADES)[number];
+
+export const TERMS = ['', 'first', 'second'] as const;
+export type Term = (typeof TERMS)[number];
+
+/** 用户唯一需要关心的整理状态。 */
+export const STAGES = ['processing', 'review', 'ready', 'failed'] as const;
+export type Stage = (typeof STAGES)[number];
+
+export const REVIEW_REASONS = ['low_confidence', 'pack_suggestion', 'duplicate_suspect', 'analysis_failed', 'manual'] as const;
+export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
 export const MATERIAL_STATUSES = ['pending_storage', 'archived', 'degraded'] as const;
 export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
-
-export const COLLECTION_KINDS = ['series', 'exam', 'folder', 'zip', 'custom'] as const;
-export type CollectionKind = (typeof COLLECTION_KINDS)[number];
 
 export const USER_ROLES = ['admin', 'editor', 'viewer'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -61,7 +91,7 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 const UPLOAD_STATUSES = ['pending', 'processing', 'completed', 'failed'] as const;
 export type UploadStatus = (typeof UPLOAD_STATUSES)[number];
 
-const UPLOAD_ENTRY_STATUSES = ['pending', 'received'] as const;
+const UPLOAD_ENTRY_STATUSES = ['pending', 'received', 'existing'] as const;
 type UploadEntryStatus = (typeof UPLOAD_ENTRY_STATUSES)[number];
 
 export const SCOPES = [
@@ -91,8 +121,15 @@ export interface Page<T> {
   page_size: number;
 }
 
-export interface MaterialStats {
-  total: number;
+export interface LibraryStats {
+  packs: number;
+  files: number;
+  processing: number;
+  review: number;
+  ready: number;
+  failed: number;
+  missing_answers: number;
+  trashed: number;
   pending_storage: number;
   archived: number;
   degraded: number;
@@ -121,25 +158,111 @@ export interface AuthSession {
   user: User;
 }
 
-export interface Material {
+export interface PackBrief {
   id: string;
   title: string;
-  description: string;
+}
+
+export interface PackMember {
+  id: string;
+  title: string;
+  file_name: string;
+  part: Part;
+  answer_start_page: number;
+  stage: Stage;
+  status: MaterialStatus;
+  media_type: string;
+  size_bytes: number;
+  position: number;
+}
+
+export interface Pack {
+  id: string;
+  title: string;
+  title_locked: boolean;
+  catalog_locked: boolean;
+  doc_type: DocType | '';
   subject_codes: SubjectCode[];
   grade: Grade;
-  academic_year: number;
+  term: Term;
+  cohort: number;
+  region: string;
+  organization: string;
+  exam_date: string;
+  exam_name: string;
+  chapter: string;
   tags: string[];
-  role: Role;
-  blob_id: string;
+  description: string;
+  stage: Stage;
+  is_exam: boolean;
+  has_questions: boolean;
+  has_answers: boolean;
+  has_answer_sheet: boolean;
+  members: PackMember[];
+  collections?: Collection[];
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PackUpdate {
+  title?: string;
+  doc_type?: DocType | '';
+  subject_codes?: SubjectCode[];
+  grade?: Grade;
+  term?: Term;
+  cohort?: number;
+  region?: string;
+  organization?: string;
+  exam_date?: string;
+  exam_name?: string;
+  chapter?: string;
+  tags?: string[];
+  description?: string;
+}
+
+export interface FacetValue {
+  value: string;
+  count: number;
+}
+
+export interface PackFacets {
+  subjects: FacetValue[];
+  grades: FacetValue[];
+  doc_types: FacetValue[];
+  cohorts: FacetValue[];
+  regions: FacetValue[];
+  organizations: FacetValue[];
+  tags: FacetValue[];
+}
+
+export interface Material {
+  id: string;
+  pack_id: string;
+  position: number;
+  part: Part;
+  answer_start_page: number;
+  title: string;
   file_name: string;
+  original_name: string;
+  stage: Stage;
+  review_reasons: ReviewReason[];
+  suggested_pack: PackBrief | null;
+  status: MaterialStatus;
   media_type: string;
   size_bytes: number;
   sha256: string;
-  source_path: string;
-  parent_material_id: string;
-  status: MaterialStatus;
   created_at: string;
   updated_at: string;
+  pack?: Pack;
+}
+
+export interface MaterialSource {
+  id: string;
+  upload_id: string;
+  path: string;
+  duplicate: boolean;
+  created_at: string;
 }
 
 export interface Replica {
@@ -159,8 +282,8 @@ export interface Replica {
 }
 
 export interface MaterialDetail extends Material {
+  sources: MaterialSource[];
   replicas: Replica[];
-  collections: Collection[];
 }
 
 export interface MaterialPullCache {
@@ -174,38 +297,24 @@ export interface MaterialPullCache {
 }
 
 export interface MaterialUpdate {
-  title?: string;
-  description?: string;
-  subject_codes?: SubjectCode[];
-  grade?: Grade;
-  academic_year?: number;
-  tags?: string[];
-  role?: Role;
+  part?: Part;
+  answer_start_page?: number;
+  pack_id?: string;
+  new_pack?: boolean;
 }
 
+/** 专题：人工整理的套卷集合。 */
 export interface Collection {
   id: string;
   title: string;
   description: string;
-  kind: CollectionKind;
-  parent_id: string;
-  subject_codes: SubjectCode[];
+  pack_count: number;
   created_at: string;
   updated_at: string;
 }
 
-interface CollectionItem {
-  id: string;
-  collection_id: string;
-  material_id: string;
-  position: number;
-  role: Role;
-  relative_path: string;
-  material?: Material;
-}
-
 export interface CollectionDetail extends Collection {
-  items: CollectionItem[];
+  packs: Pack[];
 }
 
 export interface UploadEntry {
@@ -216,20 +325,38 @@ export interface UploadEntry {
   status: UploadEntryStatus;
 }
 
+export interface UploadHints {
+  subject_codes: SubjectCode[];
+  grade: Grade;
+  doc_type: DocType | '';
+  cohort: number;
+  region: string;
+  organization: string;
+  tags: string[];
+}
+
+export interface UploadResult {
+  material_id: string;
+  pack_id: string;
+  title: string;
+  path: string;
+  duplicate: boolean;
+  stage: Stage;
+  part: Part;
+}
+
 export interface Upload {
   id: string;
   title: string;
-  collection_kind: CollectionKind;
-  subject_codes: SubjectCode[];
-  grade: Grade;
-  academic_year: number;
-  tags: string[];
+  hints: UploadHints;
   status: UploadStatus;
-  collection_id: string;
-  material_id: string;
   job_id: string;
+  new_count: number;
+  duplicate_count: number;
+  skipped: string[];
   created_at: string;
   entries: UploadEntry[];
+  results: UploadResult[];
 }
 
 export interface Job {
@@ -324,12 +451,20 @@ export interface FinalizeResult {
 
 
 export interface AISuggestions {
-  title?: string;
+  exam_name?: string;
+  doc_type?: DocType;
   subject_codes?: SubjectCode[];
   grade?: Grade;
-  academic_year?: number;
-  role?: Role;
+  term?: Term;
+  cohort?: number;
+  region?: string;
+  organization?: string;
+  exam_date?: string;
+  chapter?: string;
   tags?: string[];
+  part?: Part;
+  answer_start_page?: number;
+  uncertain?: string[];
 }
 
 export interface AIProvider {
@@ -363,6 +498,7 @@ export interface AISettings {
   mineru_base_url: string;
   max_pages: number;
   max_images: number;
+  auto_accept_confidence: number;
   mineru_configured: boolean;
   ocr_configured: boolean;
   updated_at: string;
@@ -427,8 +563,9 @@ export interface SearchHit {
   score: number;
   page_no: number;
   material: SearchMaterialRef;
+  pack: PackBrief;
   subject_codes: SubjectCode[];
-  collection_id: string;
+  also_in: PackBrief[];
 }
 
 export interface SearchQuestionsResult {

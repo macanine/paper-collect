@@ -117,12 +117,18 @@ func (s *Service) refreshPackNamesTx(tx *gorm.DB, packID string) ([]string, erro
 	}
 	title := pack.Title
 	if !pack.TitleLocked {
-		title = canonicalPackTitle(pack)
+		// The field-built name is only used once it says what the pack is
+		// (type and subject); until then the exam name or the name the files
+		// arrived with identifies it far better than "2025届 浙江 高三".
+		title = ""
+		if pack.DocType != "" && len(model.DecodeStrings(pack.SubjectsJSON)) > 0 {
+			title = canonicalPackTitle(pack)
+		}
 		if title == "" && pack.ExamName != "" {
 			title = truncateRunes(pack.ExamName, maxTitleRunes)
 		}
 		if title == "" && len(members) > 0 {
-			title = packStemTitle(members[0].OriginalName)
+			title = s.arrivalTitleTx(tx, members[0])
 		}
 		if title == "" {
 			title = "未命名资料"
@@ -167,6 +173,8 @@ func (s *Service) renameMaterialFiles(ctx context.Context, ids []string) {
 		s.renameLocalReplicaFiles(ctx, id)
 	}
 }
+
+var emptyBrackets = regexp.MustCompile(`\(\s*\)|（\s*）|【\s*】|\[\s*\]`)
 
 var unsafeFileChars = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]+`)
 
@@ -229,12 +237,43 @@ func pairingStem(fileName string) string {
 	return b.String()
 }
 
+// arrivalTitleTx names a pack after the folder and file it arrived as, e.g.
+// "2025届浙江9月联考/数学试题.pdf" becomes "2025届浙江9月联考 数学".
+func (s *Service) arrivalTitleTx(tx *gorm.DB, m model.Material) string {
+	stem := packStemTitle(m.OriginalName)
+	var src model.MaterialSource
+	if err := tx.Where("material_id = ?", m.ID).Order("created_at ASC").First(&src).Error; err != nil {
+		return stem
+	}
+	dir := path.Base(path.Dir(src.Path))
+	if dir == "." || dir == "/" || dir == "" {
+		return stem
+	}
+	dir = strings.TrimSuffix(dir, path.Ext(dir))
+	if strings.Contains(stem, dir) {
+		return stem
+	}
+	if raw := strings.TrimSuffix(path.Base(m.OriginalName), path.Ext(m.OriginalName)); pairingStem(raw) == "" || strings.Contains(dir, stem) {
+		return truncateRunes(dir, maxTitleRunes)
+	}
+	return truncateRunes(dir+" "+stem, maxTitleRunes)
+}
+
+// partRank orders files inside a pack: questions first, then answers, sheets, audio.
+var partRank = map[string]int{
+	model.PartQuestions: 0, model.PartFull: 1, model.PartTeacher: 2, model.PartAnswers: 3,
+	model.PartAnswerSheet: 4, model.PartListening: 5, model.PartMain: 6, model.PartOther: 7,
+}
+
 // packStemTitle turns an original file name into a readable fallback title.
 func packStemTitle(fileName string) string {
 	base := path.Base(fileName)
 	base = strings.TrimSuffix(base, path.Ext(base))
 	base = stemNoise.ReplaceAllString(base, "")
-	base = strings.Trim(base, " -_()（）【】[]·.")
+	// Brackets emptied by the noise removal ("数学（答案）" → "数学（）") go;
+	// balanced ones such as "周测（一）" stay.
+	base = emptyBrackets.ReplaceAllString(base, "")
+	base = strings.Trim(base, " -_·.+")
 	base = strings.Join(strings.Fields(base), " ")
 	if base == "" {
 		base = strings.TrimSuffix(path.Base(fileName), path.Ext(fileName))

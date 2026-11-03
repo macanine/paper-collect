@@ -1,7 +1,10 @@
 // 清单上传的前端校验，与 docs/API.md「POST /uploads」合同一致（服务端仍会再次校验）。
 import { normalizePath, validateRelativePath } from '../../shared/lib/paths';
 
-export const ALLOWED_SUFFIXES = ['.zip', '.pptx', '.pdf', '.docx', '.doc'] as const;
+export const ALLOWED_SUFFIXES = [
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+  '.jpg', '.jpeg', '.png', '.webp', '.mp3', '.m4a', '.wav', '.zip',
+] as const;
 const MAX_FILE_BYTES = 536_870_912; // 512 MiB
 const MAX_BATCH_BYTES = 2_147_483_648; // 2 GiB
 const MAX_ENTRIES = 2000;
@@ -56,7 +59,7 @@ export function validateManifest(items: readonly ManifestItem[]): ManifestReport
       }
       const fileName = item.relativePath.slice(item.relativePath.lastIndexOf('/') + 1);
       if (!hasAllowedSuffix(fileName)) {
-        issues.push('格式不支持，仅允许 .zip、.pptx、.pdf、.docx、.doc');
+        issues.push('格式不支持');
       }
     }
 

@@ -1,12 +1,14 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { invalidateLibrary } from '../materials/queries';
 import {
+  addCollectionPacks,
   createCollection,
+  deleteCollection,
   getCollection,
   listCollections,
-  replaceCollectionItems,
+  replaceCollectionPacks,
   updateCollection,
   type CollectionCreateBody,
-  type CollectionItemInput,
   type CollectionListParams,
   type CollectionPatchBody,
 } from './api';
@@ -27,47 +29,17 @@ export function useCollectionsList(params: CollectionListParams, enabled = true)
 }
 
 export function useCollection(id: string) {
-  return useQuery({
-    queryKey: collectionKeys.detail(id),
-    queryFn: () => getCollection(id),
-    enabled: id !== '',
-  });
+  return useQuery({ queryKey: collectionKeys.detail(id), queryFn: () => getCollection(id), enabled: id !== '' });
 }
 
-function invalidateCollections(queryClient: QueryClient, id?: string) {
-  void queryClient.invalidateQueries({ queryKey: collectionKeys.all });
-  if (id) void queryClient.invalidateQueries({ queryKey: collectionKeys.detail(id) });
-  void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-}
-
-export function useCreateCollection() {
+export function useCollectionMutations() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: CollectionCreateBody) => createCollection(body),
-    onSuccess: () => {
-      invalidateCollections(queryClient);
-    },
-  });
-}
-
-export function useUpdateCollection(id: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (body: CollectionPatchBody) => updateCollection(id, body),
-    onSuccess: () => {
-      invalidateCollections(queryClient, id);
-    },
-  });
-}
-
-export function useReplaceCollectionItems(id: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (items: CollectionItemInput[]) => replaceCollectionItems(id, items),
-    onSuccess: (detail) => {
-      queryClient.setQueryData(collectionKeys.detail(id), detail);
-      void queryClient.invalidateQueries({ queryKey: collectionKeys.all });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-    },
-  });
+  const done = () => invalidateLibrary(queryClient);
+  return {
+    create: useMutation({ mutationFn: (body: CollectionCreateBody) => createCollection(body), onSuccess: done }),
+    update: useMutation({ mutationFn: ({ id, body }: { id: string; body: CollectionPatchBody }) => updateCollection(id, body), onSuccess: done }),
+    addPacks: useMutation({ mutationFn: ({ id, packIds }: { id: string; packIds: string[] }) => addCollectionPacks(id, packIds), onSuccess: done }),
+    replacePacks: useMutation({ mutationFn: ({ id, packIds }: { id: string; packIds: string[] }) => replaceCollectionPacks(id, packIds), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: string) => deleteCollection(id), onSuccess: done }),
+  };
 }

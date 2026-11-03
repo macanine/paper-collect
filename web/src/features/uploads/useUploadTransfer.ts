@@ -104,7 +104,7 @@ export function useUploadTransfer(upload: Upload) {
       const work: { entry: UploadEntry; file: File }[] = [];
       const selectedIds = entryIds ? new Set(entryIds) : null;
       for (const entry of upload.entries) {
-        if (entry.status === 'received') continue;
+        if (entry.status !== 'pending') continue;
         if (selectedIds && !selectedIds.has(entry.id)) continue;
         const file = files.get(entry.id);
         if (file) work.push({ entry, file });
@@ -165,7 +165,7 @@ export function useUploadTransfer(upload: Upload) {
         const current = runtime[entry.id];
         const file = files.get(entry.id);
         let status: RowStatus;
-        if (entry.status === 'received') status = 'received';
+        if (entry.status !== 'pending') status = 'received';
         else if (current?.status === 'uploading') status = 'uploading';
         else if (current?.status === 'failed') status = 'failed';
         else if (!file) status = 'missing-file';
@@ -174,7 +174,7 @@ export function useUploadTransfer(upload: Upload) {
           entry,
           file,
           status,
-          loaded: entry.status === 'received' ? entry.size_bytes : (current?.loaded ?? 0),
+          loaded: entry.status !== 'pending' ? entry.size_bytes : (current?.loaded ?? 0),
           error: current?.error,
         };
       }),

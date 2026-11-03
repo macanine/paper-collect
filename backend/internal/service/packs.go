@@ -142,7 +142,9 @@ func (s *Service) packQuery(db *gorm.DB, f PackFilter) *gorm.DB {
 	if f.Missing == "answers" {
 		withAnswers := db.Unscoped().Model(&model.Material{}).Select("pack_id").
 			Where("part IN ?", []string{model.PartAnswers, model.PartFull, model.PartTeacher})
-		q = q.Where("doc_type IN ?", examDocTypeList()).Where("id NOT IN (?)", withAnswers)
+		// An untyped pack counts as an exam once it holds a question paper.
+		withQuestions := db.Unscoped().Model(&model.Material{}).Select("pack_id").Where("part = ?", model.PartQuestions)
+		q = q.Where("(doc_type IN ? OR (doc_type = '' AND id IN (?)))", examDocTypeList(), withQuestions).Where("id NOT IN (?)", withAnswers)
 	}
 	if f.CollectionID != "" {
 		q = q.Where("id IN (?)", db.Model(&model.CollectionItem{}).Select("pack_id").Where("collection_id = ?", f.CollectionID))
@@ -245,6 +247,13 @@ func buildPackView(p model.Pack, members []model.Material) PackView {
 		}
 	}
 	view.HasQuestions, view.HasAnswers, view.HasSheet = packCompleteness(parts)
+	if p.DocType == "" {
+		for _, part := range parts {
+			if part == model.PartQuestions || part == model.PartAnswers || part == model.PartFull || part == model.PartAnswerSheet {
+				view.IsExam = true
+			}
+		}
+	}
 	return view
 }
 

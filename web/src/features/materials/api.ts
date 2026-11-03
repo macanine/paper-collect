@@ -1,15 +1,27 @@
 import { apiDownload, apiRequest } from '../../shared/api/client';
 import { segment } from '../../shared/api/paths';
-import type { Grade, MaterialDetail, MaterialPullCache, MaterialStatus, Material, MaterialStats, MaterialUpdate, Page, Role, SubjectCode } from '../../shared/api/types';
+import type {
+  LibraryStats,
+  Material,
+  MaterialDetail,
+  MaterialPullCache,
+  MaterialStatus,
+  MaterialUpdate,
+  Page,
+  Part,
+  ReviewReason,
+  Stage,
+} from '../../shared/api/types';
 
 export type MaterialListParams = {
   page: number;
   page_size: number;
   q?: string;
-  subject?: SubjectCode | '';
-  role?: Role | '';
+  stage?: Stage | '';
+  part?: Part | '';
   status?: MaterialStatus | '';
-  grade?: Grade | '';
+  reason?: ReviewReason | '';
+  pack_id?: string;
   sha256?: string;
 };
 
@@ -17,8 +29,8 @@ export function listMaterials(params: MaterialListParams, signal?: AbortSignal):
   return apiRequest<Page<Material>>('/materials', { query: params, signal });
 }
 
-export function getMaterialStats(signal?: AbortSignal): Promise<MaterialStats> {
-  return apiRequest<MaterialStats>('/materials/stats', { signal });
+export function getLibraryStats(signal?: AbortSignal): Promise<LibraryStats> {
+  return apiRequest<LibraryStats>('/materials/stats', { signal });
 }
 
 export function getMaterial(id: string): Promise<MaterialDetail> {
@@ -27,6 +39,11 @@ export function getMaterial(id: string): Promise<MaterialDetail> {
 
 export function updateMaterial(id: string, body: MaterialUpdate): Promise<MaterialDetail> {
   return apiRequest<MaterialDetail>(`/materials/${segment(id)}`, { method: 'PATCH', body });
+}
+
+/** 确认待整理文件；acceptSuggestion 同时并入建议的套卷。 */
+export function acceptMaterials(ids: string[], acceptSuggestion = false): Promise<{ count: number }> {
+  return apiRequest<{ count: number }>('/materials/accept', { method: 'POST', body: { ids, accept_suggestion: acceptSuggestion } });
 }
 
 export function downloadMaterial(id: string) {
@@ -45,6 +62,7 @@ export function previewMaterial(id: string, signal?: AbortSignal) {
   return apiDownload(`/materials/${segment(id)}/preview`, { signal });
 }
 
-export function deleteMaterial(id: string, cascade: boolean): Promise<void> {
-  return apiRequest<void>(`/materials/${segment(id)}?cascade=${cascade ? 'true' : 'false'}`, { method: 'DELETE' });
+/** 单个文件移入回收站。 */
+export function trashMaterial(id: string): Promise<void> {
+  return apiRequest<void>(`/materials/${segment(id)}`, { method: 'DELETE' });
 }

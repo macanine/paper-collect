@@ -16,6 +16,6 @@ describe('AI 分析展示辅助', () => {
 
   it('统计建议字段数量', () => {
     expect(suggestionFieldCount({})).toBe(0);
-    expect(suggestionFieldCount({ title: 't', subject_codes: ['math'], grade: 'grade12', role: 'exam' })).toBe(4);
+    expect(suggestionFieldCount({ exam_name: 't', subject_codes: ['math'], grade: 'grade12', part: 'questions', uncertain: ['grade'] })).toBe(4);
   });
 });
