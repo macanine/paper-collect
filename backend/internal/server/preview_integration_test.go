@@ -19,7 +19,7 @@ func TestDOCXUploadPreviewDownloadAndMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := newEnv(t)
-	id := directUpload(t, env, "custom", map[string][]byte{"数学.docx": original})
+	id := directUpload(t, env, map[string][]byte{"数学.docx": original})
 	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
 	var upload struct {
 		Data struct {

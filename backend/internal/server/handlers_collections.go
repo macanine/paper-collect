@@ -21,13 +21,7 @@ func (s *Server) handleListCollections(c *gin.Context) {
 		respondError(c, apperr.Validation("搜索词不能超过 200 个字符"))
 		return
 	}
-	filter := service.CollectionFilter{Q: q}
-	switch strings.ToLower(strings.TrimSpace(c.Query("roots"))) {
-	case "true", "1":
-		filter.RootsOnly = true
-	}
-	filter.ParentID = strings.TrimSpace(c.Query("parent_id"))
-	filter.MaterialID = strings.TrimSpace(c.Query("material_id"))
+	filter := service.CollectionFilter{Q: q, PackID: strings.TrimSpace(c.Query("pack_id"))}
 	page, err := s.svc.ListCollections(c.Request.Context(), filter, pg)
 	if err != nil {
 		respondError(c, err)
@@ -38,29 +32,22 @@ func (s *Server) handleListCollections(c *gin.Context) {
 
 func (s *Server) handleCreateCollection(c *gin.Context) {
 	var req struct {
-		Title        string   `json:"title"`
-		Description  string   `json:"description"`
-		Kind         string   `json:"kind"`
-		ParentID     string   `json:"parent_id"`
-		SubjectCodes []string `json:"subject_codes"`
+		Title       string   `json:"title"`
+		Description string   `json:"description"`
+		PackIDs     []string `json:"pack_ids"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	in := service.CollectionInput{
-		Title:        req.Title,
-		Description:  req.Description,
-		Kind:         req.Kind,
-		ParentID:     req.ParentID,
-		SubjectCodes: req.SubjectCodes,
-	}
-	col, err := s.svc.CreateCollection(c.Request.Context(), principal(c), in)
+	view, err := s.svc.CreateCollection(c.Request.Context(), principal(c), service.CollectionInput{
+		Title: req.Title, Description: req.Description, PackIDs: req.PackIDs,
+	})
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusCreated, toCollection(col))
+	s.respondData(c, http.StatusCreated, toCollectionDetail(view))
 }
 
 func (s *Server) handleGetCollection(c *gin.Context) {
@@ -74,54 +61,47 @@ func (s *Server) handleGetCollection(c *gin.Context) {
 
 func (s *Server) handlePatchCollection(c *gin.Context) {
 	var req struct {
-		Title        *string   `json:"title"`
-		Description  *string   `json:"description"`
-		Kind         *string   `json:"kind"`
-		ParentID     *string   `json:"parent_id"`
-		SubjectCodes *[]string `json:"subject_codes"`
+		Title       *string `json:"title"`
+		Description *string `json:"description"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	patch := service.CollectionPatch{
-		Title:        req.Title,
-		Description:  req.Description,
-		Kind:         req.Kind,
-		ParentID:     req.ParentID,
-		SubjectCodes: req.SubjectCodes,
-	}
-	col, err := s.svc.UpdateCollection(c.Request.Context(), principal(c), c.Param("id"), patch)
+	view, err := s.svc.UpdateCollection(c.Request.Context(), principal(c), c.Param("id"),
+		service.CollectionPatch{Title: req.Title, Description: req.Description})
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, toCollection(col))
+	s.respondData(c, http.StatusOK, toCollectionDetail(view))
 }
 
 func (s *Server) handlePutCollectionItems(c *gin.Context) {
 	var req struct {
-		Items []struct {
-			MaterialID   string  `json:"material_id"`
-			Position     *int    `json:"position"`
-			Role         *string `json:"role"`
-			RelativePath *string `json:"relative_path"`
-		} `json:"items"`
+		PackIDs []string `json:"pack_ids"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	items := make([]service.ItemInput, 0, len(req.Items))
-	for _, it := range req.Items {
-		items = append(items, service.ItemInput{
-			MaterialID:   it.MaterialID,
-			Position:     it.Position,
-			Role:         it.Role,
-			RelativePath: it.RelativePath,
-		})
+	view, err := s.svc.ReplaceItems(c.Request.Context(), principal(c), c.Param("id"), req.PackIDs)
+	if err != nil {
+		respondError(c, err)
+		return
 	}
-	view, err := s.svc.ReplaceItems(c.Request.Context(), principal(c), c.Param("id"), items)
+	s.respondData(c, http.StatusOK, toCollectionDetail(view))
+}
+
+func (s *Server) handleAddCollectionPacks(c *gin.Context) {
+	var req struct {
+		PackIDs []string `json:"pack_ids"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	view, err := s.svc.AddCollectionPacks(c.Request.Context(), principal(c), c.Param("id"), req.PackIDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -130,8 +110,7 @@ func (s *Server) handlePutCollectionItems(c *gin.Context) {
 }
 
 func (s *Server) handleDeleteCollection(c *gin.Context) {
-	cascade := isTrueQuery(c, "cascade")
-	if err := s.svc.DeleteCollection(c.Request.Context(), principal(c), c.Param("id"), cascade); err != nil {
+	if err := s.svc.DeleteCollection(c.Request.Context(), principal(c), c.Param("id")); err != nil {
 		respondError(c, err)
 		return
 	}

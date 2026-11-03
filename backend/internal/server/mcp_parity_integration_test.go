@@ -65,13 +65,13 @@ func toolData(t *testing.T, r rpcToolResponse) map[string]any {
 func TestMCPApplicationWriteAndUploadParity(t *testing.T) {
 	env := newEnv(t)
 	key := createAgentKey(t, env, []string{"materials:read", "materials:write", "collections:read", "collections:write", "uploads:write", "jobs:read"})
-	collection := toolData(t, callTool(t, env, key, "collections_create", map[string]any{"title": "MCP 合集", "kind": "folder"}))
+	collection := toolData(t, callTool(t, env, key, "collections_create", map[string]any{"title": "MCP 专题"}))
 	id := collection["id"].(string)
 	updated := toolData(t, callTool(t, env, key, "collections_update", map[string]any{"id": id, "description": "修改成功"}))
 	if updated["description"] != "修改成功" {
 		t.Fatal("collection update was not applied")
 	}
-	roots := toolData(t, callTool(t, env, key, "collections_list", map[string]any{"roots": true, "q": "MCP"}))
+	roots := toolData(t, callTool(t, env, key, "collections_list", map[string]any{"q": "MCP"}))
 	if roots["total"] != float64(1) {
 		t.Fatal("collection query filters differ from REST")
 	}
@@ -87,13 +87,22 @@ func TestMCPApplicationWriteAndUploadParity(t *testing.T) {
 	_ = toolData(t, callTool(t, env, key, "uploads_file_put", map[string]any{"id": uploadID, "entry_id": entryID, "data_base64": base64.StdEncoding.EncodeToString(pdf)}))
 	_ = toolData(t, callTool(t, env, key, "uploads_finalize", map[string]any{"id": uploadID}))
 	env.svc.ProcessAvailable(t.Context(), 100)
-	materialList := toolData(t, callTool(t, env, key, "materials_search", map[string]any{"q": "test", "role": "other"}))
+	materialList := toolData(t, callTool(t, env, key, "materials_search", map[string]any{"q": "test", "part": "other"}))
 	if materialList["total"] != float64(1) {
 		t.Fatal("material filtering differs from REST")
 	}
 	material := materialList["items"].([]any)[0].(map[string]any)
 	materialID := material["id"].(string)
-	_ = toolData(t, callTool(t, env, key, "materials_update", map[string]any{"id": materialID, "description": "已编辑"}))
+	packID := material["pack_id"].(string)
+	_ = toolData(t, callTool(t, env, key, "materials_update", map[string]any{"id": materialID, "part": "questions"}))
+	pack := toolData(t, callTool(t, env, key, "packs_update", map[string]any{"id": packID, "doc_type": "weekly", "subject_codes": []any{"physics"}}))
+	if pack["title"] != "周测 物理" {
+		t.Fatalf("pack update did not rename: %v", pack["title"])
+	}
+	added := toolData(t, callTool(t, env, key, "collections_items_add", map[string]any{"id": id, "pack_ids": []any{packID}}))
+	if added["pack_count"] != float64(1) {
+		t.Fatal("pack was not added to the topic")
+	}
 	download := toolData(t, callTool(t, env, key, "materials_download", map[string]any{"id": materialID}))
 	if download["method"] != "GET" || !strings.HasSuffix(download["path"].(string), "/download") {
 		t.Fatal("invalid download descriptor")
@@ -197,7 +206,7 @@ func TestDashboardStatsRESTAndMCPParity(t *testing.T) {
 		path, tool string
 		fields     []string
 	}{
-		{"/api/v1/materials/stats", "materials_stats", []string{"total", "pending_storage", "archived", "degraded"}},
+		{"/api/v1/materials/stats", "materials_stats", []string{"packs", "files", "review", "ready", "missing_answers", "pending_storage", "archived", "degraded"}},
 		{"/api/v1/jobs/stats", "jobs_stats", []string{"total", "pending", "running", "succeeded", "failed"}},
 	} {
 		status, raw := env.do(t, http.MethodGet, test.path, nil, headers)
@@ -216,7 +225,11 @@ func TestDashboardStatsRESTAndMCPParity(t *testing.T) {
 				t.Fatalf("%s field %s differs between REST and MCP", test.tool, field)
 			}
 		}
-		if response.Data["total"].(float64) < 1 {
+		count, ok := response.Data["total"].(float64)
+		if !ok {
+			count, _ = response.Data["files"].(float64)
+		}
+		if count < 1 {
 			t.Fatalf("%s should include created data", test.tool)
 		}
 	}
@@ -235,7 +248,7 @@ func TestMCPUponZIPUploadArchivesOnlyMembers(t *testing.T) {
 	key := createAgentKey(t, env, []string{"uploads:write", "materials:read"})
 	packageZip := zipWith(t, map[string][]byte{"试卷.pdf": minimalPDF()})
 	upload := toolData(t, callTool(t, env, key, "uploads_create", map[string]any{
-		"title": "资料", "collection_kind": "zip", "entries": []any{
+		"title": "资料", "entries": []any{
 			map[string]any{"relative_path": "资料.zip", "size_bytes": len(packageZip)},
 		},
 	}))
@@ -247,11 +260,11 @@ func TestMCPUponZIPUploadArchivesOnlyMembers(t *testing.T) {
 	_ = toolData(t, callTool(t, env, key, "uploads_finalize", map[string]any{"id": uploadID}))
 	env.svc.ProcessAvailable(t.Context(), 100)
 	result := toolData(t, callTool(t, env, key, "uploads_get", map[string]any{"id": uploadID}))
-	if result["status"] != "completed" || result["collection_id"] == "" {
-		t.Fatal("MCP ZIP did not create a collection")
+	if result["status"] != "completed" || result["new_count"] != float64(1) {
+		t.Fatal("MCP ZIP did not archive its member")
 	}
 	materials := toolData(t, callTool(t, env, key, "materials_search", map[string]any{}))
-	if materials["total"] != float64(1) || materials["items"].([]any)[0].(map[string]any)["file_name"] != "试卷.pdf" {
+	if materials["total"] != float64(1) || materials["items"].([]any)[0].(map[string]any)["original_name"] != "试卷.pdf" {
 		t.Fatal("MCP did not archive exactly the ZIP member")
 	}
 }

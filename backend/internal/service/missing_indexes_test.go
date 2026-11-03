@@ -19,11 +19,11 @@ func TestEnqueueMissingIndexesConcurrentAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	materials := []model.Material{
-		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam},
-		{ID: newID(), Status: model.StatusDegraded, MediaType: "application/pdf", Role: model.RoleQuestionsAnswers},
-		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleLecture},
-		{ID: newID(), Status: model.StatusArchived, MediaType: "application/zip", Role: model.RoleExam},
-		{ID: newID(), Status: model.StatusPendingStorage, MediaType: "application/pdf", Role: model.RoleExam},
+		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()},
+		{ID: newID(), Status: model.StatusDegraded, MediaType: "application/pdf", Part: model.PartFull, SHA256: testSHA()},
+		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartMain, SHA256: testSHA()},
+		{ID: newID(), Status: model.StatusArchived, MediaType: "application/zip", Part: model.PartQuestions, SHA256: testSHA()},
+		{ID: newID(), Status: model.StatusPendingStorage, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()},
 	}
 	if err := db.Create(&materials).Error; err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestEnqueueMissingIndexesRollsBackStateWhenJobFails(t *testing.T) {
 	if _, err := svc.ensureSearchSettings(ctx); err != nil {
 		t.Fatal(err)
 	}
-	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam}
+	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()}
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}

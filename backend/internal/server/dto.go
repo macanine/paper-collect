@@ -35,8 +35,15 @@ type auditDTO struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type materialStatsDTO struct {
-	Total          int64 `json:"total"`
+type libraryStatsDTO struct {
+	Packs          int64 `json:"packs"`
+	Files          int64 `json:"files"`
+	Processing     int64 `json:"processing"`
+	Review         int64 `json:"review"`
+	Ready          int64 `json:"ready"`
+	Failed         int64 `json:"failed"`
+	MissingAnswers int64 `json:"missing_answers"`
+	Trashed        int64 `json:"trashed"`
 	PendingStorage int64 `json:"pending_storage"`
 	Archived       int64 `json:"archived"`
 	Degraded       int64 `json:"degraded"`
@@ -51,30 +58,100 @@ type jobStatsDTO struct {
 }
 
 type materialDTO struct {
-	ID               string    `json:"id"`
-	Title            string    `json:"title"`
-	Description      string    `json:"description"`
-	SubjectCodes     []string  `json:"subject_codes"`
-	Grade            string    `json:"grade"`
-	AcademicYear     int       `json:"academic_year"`
-	Tags             []string  `json:"tags"`
-	Role             string    `json:"role"`
-	BlobID           string    `json:"blob_id"`
-	FileName         string    `json:"file_name"`
-	MediaType        string    `json:"media_type"`
-	SizeBytes        int64     `json:"size_bytes"`
-	SHA256           string    `json:"sha256"`
-	SourcePath       string    `json:"source_path"`
-	ParentMaterialID string    `json:"parent_material_id"`
-	Status           string    `json:"status"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID              string        `json:"id"`
+	PackID          string        `json:"pack_id"`
+	Position        int           `json:"position"`
+	Part            string        `json:"part"`
+	AnswerStartPage int           `json:"answer_start_page"`
+	Title           string        `json:"title"`
+	FileName        string        `json:"file_name"`
+	OriginalName    string        `json:"original_name"`
+	Stage           string        `json:"stage"`
+	ReviewReasons   []string      `json:"review_reasons"`
+	SuggestedPack   *packBriefDTO `json:"suggested_pack"`
+	Status          string        `json:"status"`
+	MediaType       string        `json:"media_type"`
+	SizeBytes       int64         `json:"size_bytes"`
+	SHA256          string        `json:"sha256"`
+	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at"`
+	Pack            *packDTO      `json:"pack,omitempty"`
+}
+
+type materialSourceDTO struct {
+	ID        string    `json:"id"`
+	UploadID  string    `json:"upload_id"`
+	Path      string    `json:"path"`
+	Duplicate bool      `json:"duplicate"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type materialDetailDTO struct {
 	materialDTO
-	Replicas    []replicaDTO    `json:"replicas"`
-	Collections []collectionDTO `json:"collections"`
+	Sources  []materialSourceDTO `json:"sources"`
+	Replicas []replicaDTO        `json:"replicas"`
+}
+
+type packBriefDTO struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type packMemberDTO struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	FileName        string `json:"file_name"`
+	Part            string `json:"part"`
+	AnswerStartPage int    `json:"answer_start_page"`
+	Stage           string `json:"stage"`
+	Status          string `json:"status"`
+	MediaType       string `json:"media_type"`
+	SizeBytes       int64  `json:"size_bytes"`
+	Position        int    `json:"position"`
+}
+
+type packDTO struct {
+	ID            string          `json:"id"`
+	Title         string          `json:"title"`
+	TitleLocked   bool            `json:"title_locked"`
+	CatalogLocked bool            `json:"catalog_locked"`
+	DocType       string          `json:"doc_type"`
+	SubjectCodes  []string        `json:"subject_codes"`
+	Grade         string          `json:"grade"`
+	Term          string          `json:"term"`
+	Cohort        int             `json:"cohort"`
+	Region        string          `json:"region"`
+	Organization  string          `json:"organization"`
+	ExamDate      string          `json:"exam_date"`
+	ExamName      string          `json:"exam_name"`
+	Chapter       string          `json:"chapter"`
+	Tags          []string        `json:"tags"`
+	Description   string          `json:"description"`
+	Stage         string          `json:"stage"`
+	IsExam        bool            `json:"is_exam"`
+	HasQuestions  bool            `json:"has_questions"`
+	HasAnswers    bool            `json:"has_answers"`
+	HasSheet      bool            `json:"has_answer_sheet"`
+	Members       []packMemberDTO `json:"members"`
+	Collections   []collectionDTO `json:"collections,omitempty"`
+	DeletedAt     *time.Time      `json:"deleted_at"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+type facetValueDTO struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+type packFacetsDTO struct {
+	Subjects      []facetValueDTO `json:"subjects"`
+	Grades        []facetValueDTO `json:"grades"`
+	DocTypes      []facetValueDTO `json:"doc_types"`
+	Cohorts       []facetValueDTO `json:"cohorts"`
+	Regions       []facetValueDTO `json:"regions"`
+	Organizations []facetValueDTO `json:"organizations"`
+	Tags          []facetValueDTO `json:"tags"`
 }
 
 type pullCacheDTO struct {
@@ -104,29 +181,17 @@ type replicaDTO struct {
 }
 
 type collectionDTO struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	Kind         string    `json:"kind"`
-	ParentID     string    `json:"parent_id"`
-	SubjectCodes []string  `json:"subject_codes"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-type collectionItemDTO struct {
-	ID           string       `json:"id"`
-	CollectionID string       `json:"collection_id"`
-	MaterialID   string       `json:"material_id"`
-	Position     int          `json:"position"`
-	Role         string       `json:"role"`
-	RelativePath string       `json:"relative_path"`
-	Material     *materialDTO `json:"material,omitempty"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	PackCount   int64     `json:"pack_count"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type collectionDetailDTO struct {
 	collectionDTO
-	Items []collectionItemDTO `json:"items"`
+	Packs []packDTO `json:"packs"`
 }
 
 type uploadEntryDTO struct {
@@ -137,20 +202,38 @@ type uploadEntryDTO struct {
 	Status       string `json:"status"`
 }
 
+type uploadHintsDTO struct {
+	SubjectCodes []string `json:"subject_codes"`
+	Grade        string   `json:"grade"`
+	DocType      string   `json:"doc_type"`
+	Cohort       int      `json:"cohort"`
+	Region       string   `json:"region"`
+	Organization string   `json:"organization"`
+	Tags         []string `json:"tags"`
+}
+
+type uploadResultDTO struct {
+	MaterialID string `json:"material_id"`
+	PackID     string `json:"pack_id"`
+	Title      string `json:"title"`
+	Path       string `json:"path"`
+	Duplicate  bool   `json:"duplicate"`
+	Stage      string `json:"stage"`
+	Part       string `json:"part"`
+}
+
 type uploadDTO struct {
-	ID             string           `json:"id"`
-	Title          string           `json:"title"`
-	CollectionKind string           `json:"collection_kind"`
-	SubjectCodes   []string         `json:"subject_codes"`
-	Grade          string           `json:"grade"`
-	AcademicYear   int              `json:"academic_year"`
-	Tags           []string         `json:"tags"`
-	Status         string           `json:"status"`
-	CollectionID   string           `json:"collection_id"`
-	MaterialID     string           `json:"material_id"`
-	JobID          string           `json:"job_id"`
-	CreatedAt      time.Time        `json:"created_at"`
-	Entries        []uploadEntryDTO `json:"entries"`
+	ID             string            `json:"id"`
+	Title          string            `json:"title"`
+	Hints          uploadHintsDTO    `json:"hints"`
+	Status         string            `json:"status"`
+	JobID          string            `json:"job_id"`
+	NewCount       int               `json:"new_count"`
+	DuplicateCount int               `json:"duplicate_count"`
+	Skipped        []string          `json:"skipped"`
+	CreatedAt      time.Time         `json:"created_at"`
+	Entries        []uploadEntryDTO  `json:"entries"`
+	Results        []uploadResultDTO `json:"results"`
 }
 
 type jobDTO struct {
@@ -246,30 +329,26 @@ func toAudit(a model.Audit) auditDTO {
 	return auditDTO{ID: a.ID, UserID: a.UserID, Username: a.Username, Action: a.Action, TargetID: a.TargetID, CreatedAt: a.CreatedAt}
 }
 
-func toMaterial(m model.Material, subjects []string) materialDTO {
-	if subjects == nil {
-		subjects = []string{}
+func toMaterial(v service.MaterialView) materialDTO {
+	m := v.Material
+	reasons := v.Reasons
+	if reasons == nil {
+		reasons = []string{}
 	}
-	return materialDTO{
-		ID:               m.ID,
-		Title:            m.Title,
-		Description:      m.Description,
-		SubjectCodes:     subjects,
-		Grade:            m.Grade,
-		AcademicYear:     m.AcademicYear,
-		Tags:             model.DecodeStrings(m.TagsJSON),
-		Role:             m.Role,
-		BlobID:           m.BlobID,
-		FileName:         m.FileName,
-		MediaType:        m.MediaType,
-		SizeBytes:        m.SizeBytes,
-		SHA256:           m.SHA256,
-		SourcePath:       m.SourcePath,
-		ParentMaterialID: m.ParentMaterialID,
-		Status:           m.Status,
-		CreatedAt:        m.CreatedAt,
-		UpdatedAt:        m.UpdatedAt,
+	out := materialDTO{
+		ID: m.ID, PackID: m.PackID, Position: m.Position, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
+		Title: m.Title, FileName: m.FileName, OriginalName: m.OriginalName, Stage: m.Stage, ReviewReasons: reasons,
+		Status: m.Status, MediaType: m.MediaType, SizeBytes: m.SizeBytes, SHA256: m.SHA256,
+		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
 	}
+	if v.Suggested != nil {
+		out.SuggestedPack = &packBriefDTO{ID: v.Suggested.ID, Title: v.Suggested.Title}
+	}
+	if v.Pack != nil {
+		p := toPack(*v.Pack)
+		out.Pack = &p
+	}
+	return out
 }
 
 func toMaterialDetail(v service.MaterialView) materialDetailDTO {
@@ -277,14 +356,62 @@ func toMaterialDetail(v service.MaterialView) materialDetailDTO {
 	for _, r := range v.Replicas {
 		replicas = append(replicas, toReplica(r))
 	}
-	collections := make([]collectionDTO, 0, len(v.Collections))
-	for _, collection := range v.Collections {
-		collections = append(collections, toCollection(collection))
+	sources := make([]materialSourceDTO, 0, len(v.Sources))
+	for _, src := range v.Sources {
+		sources = append(sources, materialSourceDTO{ID: src.ID, UploadID: src.UploadID, Path: src.Path, Duplicate: src.Duplicate, CreatedAt: src.CreatedAt})
 	}
-	return materialDetailDTO{
-		materialDTO: toMaterial(v.Material, v.Subjects),
-		Replicas:    replicas,
-		Collections: collections,
+	return materialDetailDTO{materialDTO: toMaterial(v), Sources: sources, Replicas: replicas}
+}
+
+func toPack(v service.PackView) packDTO {
+	p := v.Pack
+	members := make([]packMemberDTO, 0, len(v.Members))
+	for _, m := range v.Members {
+		members = append(members, packMemberDTO{
+			ID: m.ID, Title: m.Title, FileName: m.FileName, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
+			Stage: m.Stage, Status: m.Status, MediaType: m.MediaType, SizeBytes: m.SizeBytes, Position: m.Position,
+		})
+	}
+	subjects, tags := v.Subjects, v.Tags
+	if subjects == nil {
+		subjects = []string{}
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	var deleted *time.Time
+	if p.DeletedAt.Valid {
+		t := p.DeletedAt.Time
+		deleted = &t
+	}
+	var collections []collectionDTO
+	if v.Collections != nil {
+		collections = make([]collectionDTO, 0, len(v.Collections))
+		for _, c := range v.Collections {
+			collections = append(collections, toCollection(service.CollectionSummary{Collection: c}))
+		}
+	}
+	return packDTO{
+		ID: p.ID, Title: p.Title, TitleLocked: p.TitleLocked, CatalogLocked: p.CatalogLocked, DocType: p.DocType,
+		SubjectCodes: subjects, Grade: p.Grade, Term: p.Term, Cohort: p.Cohort, Region: p.Region,
+		Organization: p.Organization, ExamDate: p.ExamDate, ExamName: p.ExamName, Chapter: p.Chapter, Tags: tags,
+		Description: p.Description, Stage: v.Stage, IsExam: v.IsExam, HasQuestions: v.HasQuestions,
+		HasAnswers: v.HasAnswers, HasSheet: v.HasSheet, Members: members, Collections: collections,
+		DeletedAt: deleted, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+	}
+}
+
+func toFacets(f service.PackFacets) packFacetsDTO {
+	conv := func(in []service.FacetValue) []facetValueDTO {
+		out := make([]facetValueDTO, 0, len(in))
+		for _, v := range in {
+			out = append(out, facetValueDTO{Value: v.Value, Count: v.Count})
+		}
+		return out
+	}
+	return packFacetsDTO{
+		Subjects: conv(f.Subjects), Grades: conv(f.Grades), DocTypes: conv(f.DocTypes), Cohorts: conv(f.Cohorts),
+		Regions: conv(f.Regions), Organizations: conv(f.Organizations), Tags: conv(f.Tags),
 	}
 }
 
@@ -306,38 +433,23 @@ func toReplica(r model.Replica) replicaDTO {
 	}
 }
 
-func toCollection(c model.Collection) collectionDTO {
+func toCollection(v service.CollectionSummary) collectionDTO {
+	c := v.Collection
 	return collectionDTO{
-		ID:           c.ID,
-		Title:        c.Title,
-		Description:  c.Description,
-		Kind:         c.Kind,
-		ParentID:     c.ParentID,
-		SubjectCodes: model.DecodeStrings(c.SubjectsJSON),
-		CreatedAt:    c.CreatedAt,
-		UpdatedAt:    c.UpdatedAt,
+		ID: c.ID, Title: c.Title, Description: c.Description, PackCount: v.PackCount,
+		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 }
 
 func toCollectionDetail(v service.CollectionView) collectionDetailDTO {
-	items := make([]collectionItemDTO, 0, len(v.Items))
-	for _, it := range v.Items {
-		var material *materialDTO
-		if it.Material != nil {
-			m := toMaterial(it.Material.Material, it.Material.Subjects)
-			material = &m
-		}
-		items = append(items, collectionItemDTO{
-			ID:           it.Item.ID,
-			CollectionID: it.Item.CollectionID,
-			MaterialID:   it.Item.MaterialID,
-			Position:     it.Item.Position,
-			Role:         it.Item.Role,
-			RelativePath: it.Item.RelativePath,
-			Material:     material,
-		})
+	packs := make([]packDTO, 0, len(v.Packs))
+	for _, p := range v.Packs {
+		packs = append(packs, toPack(p))
 	}
-	return collectionDetailDTO{collectionDTO: toCollection(v.Collection), Items: items}
+	return collectionDetailDTO{
+		collectionDTO: toCollection(service.CollectionSummary{Collection: v.Collection, PackCount: int64(len(packs))}),
+		Packs:         packs,
+	}
 }
 
 func toUploadEntry(e model.UploadEntry) uploadEntryDTO {
@@ -352,20 +464,30 @@ func toUpload(v service.UploadView) uploadDTO {
 	for _, e := range v.Entries {
 		entries = append(entries, toUploadEntry(e))
 	}
+	results := make([]uploadResultDTO, 0, len(v.Results))
+	for _, r := range v.Results {
+		results = append(results, uploadResultDTO{
+			MaterialID: r.Source.MaterialID, PackID: r.PackID, Title: r.Material.Title, Path: r.Source.Path,
+			Duplicate: r.Source.Duplicate, Stage: r.Material.Stage, Part: r.Material.Part,
+		})
+	}
+	skipped := v.Skipped
+	if skipped == nil {
+		skipped = []string{}
+	}
+	h := v.Hints
+	if h.SubjectCodes == nil {
+		h.SubjectCodes = []string{}
+	}
+	if h.Tags == nil {
+		h.Tags = []string{}
+	}
 	return uploadDTO{
-		ID:             v.Upload.ID,
-		Title:          v.Upload.Title,
-		CollectionKind: v.Upload.CollectionKind,
-		SubjectCodes:   model.DecodeStrings(v.Upload.SubjectsJSON),
-		Grade:          v.Upload.Grade,
-		AcademicYear:   v.Upload.AcademicYear,
-		Tags:           model.DecodeStrings(v.Upload.TagsJSON),
-		Status:         v.Upload.Status,
-		CollectionID:   v.Upload.CollectionID,
-		MaterialID:     v.Upload.MaterialID,
-		JobID:          v.Upload.JobID,
-		CreatedAt:      v.Upload.CreatedAt,
-		Entries:        entries,
+		ID: v.Upload.ID, Title: v.Upload.Title, Status: v.Upload.Status, JobID: v.Upload.JobID,
+		Hints: uploadHintsDTO{SubjectCodes: h.SubjectCodes, Grade: h.Grade, DocType: h.DocType, Cohort: h.Cohort,
+			Region: h.Region, Organization: h.Organization, Tags: h.Tags},
+		NewCount: v.Upload.NewCount, DuplicateCount: v.Upload.DuplicateCount, Skipped: skipped,
+		CreatedAt: v.Upload.CreatedAt, Entries: entries, Results: results,
 	}
 }
 
@@ -444,6 +566,7 @@ type aiSettingsDTO struct {
 	MinerUBaseURL    string    `json:"mineru_base_url"`
 	MaxPages         int       `json:"max_pages"`
 	MaxImages        int       `json:"max_images"`
+	AutoAccept       float64   `json:"auto_accept_confidence"`
 	MinerUConfigured bool      `json:"mineru_configured"`
 	OCRConfigured    bool      `json:"ocr_configured"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -498,7 +621,7 @@ func toAISettings(v service.AISettingsView) aiSettingsDTO {
 	return aiSettingsDTO{
 		AnalysisEnabled: v.Settings.AnalysisEnabled, MinerUBaseURL: v.Settings.MinerUBaseURL,
 		OCRProviderID: v.Settings.OCRProviderID,
-		MaxPages:      v.Settings.MaxPages, MaxImages: v.Settings.MaxImages,
+		MaxPages:      v.Settings.MaxPages, MaxImages: v.Settings.MaxImages, AutoAccept: v.Settings.AutoAcceptConfidence,
 		MinerUConfigured: v.MinerUConfigured, OCRConfigured: v.OCRConfigured,
 		UpdatedAt: v.Settings.UpdatedAt,
 	}
@@ -526,16 +649,17 @@ func toMaterialAnalysis(v service.AnalysisView) materialAnalysisDTO {
 }
 
 type searchHitDTO struct {
-	QuestionID   string            `json:"question_id"`
-	QuestionNo   string            `json:"question_no"`
-	Text         string            `json:"text"`
-	Snippet      string            `json:"snippet"`
-	Highlights   [][2]int          `json:"highlights"`
-	Score        float64           `json:"score"`
-	PageNo       int               `json:"page_no"`
-	Material     searchMaterialDTO `json:"material"`
-	Subjects     []string          `json:"subject_codes"`
-	CollectionID string            `json:"collection_id"`
+	QuestionID string            `json:"question_id"`
+	QuestionNo string            `json:"question_no"`
+	Text       string            `json:"text"`
+	Snippet    string            `json:"snippet"`
+	Highlights [][2]int          `json:"highlights"`
+	Score      float64           `json:"score"`
+	PageNo     int               `json:"page_no"`
+	Material   searchMaterialDTO `json:"material"`
+	Pack       packBriefDTO      `json:"pack"`
+	Subjects   []string          `json:"subject_codes"`
+	AlsoIn     []packBriefDTO    `json:"also_in"`
 }
 
 type searchMaterialDTO struct {
@@ -586,11 +710,18 @@ func toSearchHit(h service.QuestionHit) searchHitDTO {
 	if highlights == nil {
 		highlights = [][2]int{}
 	}
+	also := make([]packBriefDTO, 0, len(h.AlsoIn))
+	for _, p := range h.AlsoIn {
+		also = append(also, packBriefDTO{ID: p.ID, Title: p.Title})
+	}
+	if h.Subjects == nil {
+		h.Subjects = []string{}
+	}
 	return searchHitDTO{
 		QuestionID: h.Question.ID, QuestionNo: h.Question.QuestionNo, Text: h.Question.Text,
 		Snippet: h.Snippet, Highlights: highlights, Score: h.Score, PageNo: h.Question.PageNo,
 		Material: searchMaterialDTO{ID: h.Material.ID, Title: h.Material.Title, FileName: h.Material.FileName},
-		Subjects: h.Subjects, CollectionID: h.CollectionID,
+		Pack:     packBriefDTO{ID: h.Pack.ID, Title: h.Pack.Title}, Subjects: h.Subjects, AlsoIn: also,
 	}
 }
 

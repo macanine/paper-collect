@@ -93,13 +93,25 @@ func destructive(o mcpOperation) mcpOperation          { o.destructive = true; r
 var mcpOperations = func() []mcpOperation {
 	page := queryI("page page_size")
 	id := pathFields("id")
-	meta := joined(bodyS("title description grade role"), bodyI("academic_year"), bodyA("subject_codes tags"))
-	collection := joined(bodyS("title description kind parent_id"), bodyA("subject_codes"))
+	packMeta := joined(bodyS("title doc_type grade term region organization exam_date exam_name chapter description"), bodyI("cohort"), bodyA("subject_codes tags"))
+	packPatch := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+		"doc_type": map[string]any{"type": "string"}, "grade": map[string]any{"type": "string"}, "term": map[string]any{"type": "string"},
+		"region": map[string]any{"type": "string"}, "organization": map[string]any{"type": "string"}, "exam_date": map[string]any{"type": "string"},
+		"exam_name": map[string]any{"type": "string"}, "chapter": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"},
+		"cohort": map[string]any{"type": "integer"}, "subject_codes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+	}}
+	hints := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+		"doc_type": map[string]any{"type": "string"}, "grade": map[string]any{"type": "string"}, "region": map[string]any{"type": "string"},
+		"organization": map[string]any{"type": "string"}, "cohort": map[string]any{"type": "integer"},
+		"subject_codes": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+	}}
+	ids := mustFields(bodyA("ids"), "ids")
 	ai := joined(bodyS("name base_url api_key default_model vision_model"), bodyA("models"), bodyB("enabled"), bodyI("priority"))
 	ocr := joined(bodyS("name base_url token model"), bodyB("enabled"), bodyI("priority"))
 	provider := joined(bodyS("name role"), bodyB("enabled"), bodyI("priority weight"), bodyO("config secret"))
 	str := map[string]any{"type": "string"}
-	items := map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"material_id"}, "properties": map[string]any{"material_id": str, "position": map[string]any{"type": "integer"}, "role": str, "relative_path": str}}}
 	entries := map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"relative_path", "size_bytes"}, "properties": map[string]any{"relative_path": str, "size_bytes": map[string]any{"type": "integer"}, "sha256": str}}}
 	return []mcpOperation{
 		op("account_me", "读取当前用户。", "GET", "/auth/me", ""),
@@ -110,7 +122,7 @@ var mcpOperations = func() []mcpOperation {
 		op("api_keys_create", "创建权限不超过当前密钥的新密钥；密钥仅在本次响应中返回。", "POST", "/api-keys", model.ScopeKeysManage, nullableField(mustFields(joined(bodyS("name expires_at"), bodyA("scopes")), "name scopes"), "expires_at")),
 		op("api_keys_revoke", "撤销 API 密钥。", "DELETE", "/api-keys/:id", model.ScopeKeysManage, id),
 		op("audit_logs_list", "分页读取审计日志。", "GET", "/audit-logs", model.ScopeAuditRead, page),
-		op("questions_search", "按题干和条件搜索题目。", "POST", "/search/questions", model.ScopeMaterialsRead, mustFields(joined(bodyS("query subject grade"), bodyI("academic_year limit offset")), "query")),
+		op("questions_search", "按题干和条件搜索题目；academic_year 表示届别。", "POST", "/search/questions", model.ScopeMaterialsRead, mustFields(joined(bodyS("query subject grade"), bodyI("academic_year limit offset")), "query")),
 		op("questions_get", "读取题目详情。", "GET", "/search/questions/:id", model.ScopeMaterialsRead, id),
 		op("search_settings_get", "读取题目索引设置。", "GET", "/search/settings", model.ScopeSearchRead),
 		op("search_settings_update", "更新题目索引设置。", "PUT", "/search/settings", model.ScopeSearchWrite, bodyB("enabled"), bodyI("max_pages batch_pages batch_chars"), bodyS("provider_id model")),
@@ -125,30 +137,44 @@ var mcpOperations = func() []mcpOperation {
 		op("ocr_providers_update", "更新 OCR 服务配置。", "PATCH", "/ocr/providers/:id", model.ScopeAIWrite, id, ocr),
 		op("ocr_providers_test", "测试 OCR 服务。", "POST", "/ocr/providers/:id/test", model.ScopeAIWrite, id),
 		op("ai_settings_get", "读取分析和 OCR 设置。", "GET", "/ai/settings", model.ScopeAIRead),
-		op("ai_settings_update", "更新分析和 OCR 设置。", "PUT", "/ai/settings", model.ScopeAIWrite, bodyB("analysis_enabled"), bodyS("ocr_provider_id mineru_base_url mineru_token"), bodyI("max_pages max_images")),
+		op("ai_settings_update", "更新分析和 OCR 设置。", "PUT", "/ai/settings", model.ScopeAIWrite, bodyB("analysis_enabled"), bodyS("ocr_provider_id mineru_base_url mineru_token"), bodyI("max_pages max_images"), customField("auto_accept_confidence", "number", map[string]any{"type": "number"})),
 		op("ai_mineru_test", "测试 MinerU 服务。", "POST", "/ai/mineru/test", model.ScopeAIWrite),
-		op("materials_search", "按关键词、学科、角色、状态、年级或内容指纹查询资料。", "GET", "/materials", model.ScopeMaterialsRead, queryS("q subject role status grade sha256"), page),
-		op("materials_stats", "统计资料总数及归档状态。", "GET", "/materials/stats", model.ScopeMaterialsRead),
-		op("materials_get", "读取资料详情和存储状态。", "GET", "/materials/:id", model.ScopeMaterialsRead, id),
-		op("materials_update", "编辑资料字段。", "PATCH", "/materials/:id", model.ScopeMaterialsWrite, id, meta),
+		op("packs_search", "查询资料库中的套卷：按关键词、学科、年级、类型、学期、届别、地区、机构、标签、整理状态、缺答案或专题筛选；content=true 时同时匹配正文。", "GET", "/packs", model.ScopeMaterialsRead, queryS("q subject grade doc_type term region organization tag stage missing collection_id material_id sort"), queryI("cohort"), queryB("content trashed"), page),
+		op("packs_facets", "读取资料库中已有的学科、年级、类型、届别、地区、机构和标签及数量。", "GET", "/packs/facets", model.ScopeMaterialsRead),
+		op("packs_get", "读取套卷详情、文件部件与齐全度。", "GET", "/packs/:id", model.ScopeMaterialsRead, id),
+		op("packs_update", "编辑套卷编目字段；title 为空字符串时恢复自动命名。", "PATCH", "/packs/:id", model.ScopeMaterialsWrite, id, packMeta),
+		op("packs_bulk_update", "对多个套卷应用相同的编目修改。", "POST", "/packs/bulk", model.ScopeMaterialsWrite, ids, mustFields(customField("patch", "object", packPatch), "patch")),
+		op("packs_merge", "把其他套卷的文件并入该套卷。", "POST", "/packs/:id/merge", model.ScopeMaterialsWrite, id, mustFields(bodyA("source_ids"), "source_ids")),
+		op("packs_reorder", "设置套卷内文件顺序，需包含全部文件。", "PUT", "/packs/:id/order", model.ScopeMaterialsWrite, id, mustFields(bodyA("material_ids"), "material_ids")),
+		op("packs_trash", "把套卷移入回收站，30 天内可恢复。", "POST", "/packs/trash", model.ScopeMaterialsWrite, ids),
+		op("packs_restore", "从回收站恢复套卷。", "POST", "/packs/restore", model.ScopeMaterialsWrite, ids),
+		destructive(op("packs_purge", "彻底删除回收站中的套卷及其本地原件。", "POST", "/packs/purge", model.ScopeMaterialsWrite, ids)),
+		special(op("packs_download", "取得整套 ZIP 的流式下载路径，使用当前密钥直接请求。", "GET", "/packs/:id/download", model.ScopeMaterialsRead, id), "pack_download"),
+		op("materials_search", "查询文件：按关键词、整理状态、部件、存储状态、待整理原因、套卷或内容指纹筛选；stage=review 即待整理收件箱。", "GET", "/materials", model.ScopeMaterialsRead, queryS("q stage part status reason pack_id sha256"), page),
+		op("materials_stats", "统计套卷、文件整理状态、缺答案与存储健康。", "GET", "/materials/stats", model.ScopeMaterialsRead),
+		op("materials_accept", "确认待整理文件；accept_suggestion=true 时同时并入建议的套卷。", "POST", "/materials/accept", model.ScopeMaterialsWrite, ids, bodyB("accept_suggestion")),
+		op("materials_get", "读取文件详情、来源记录和存储副本。", "GET", "/materials/:id", model.ScopeMaterialsRead, id),
+		op("materials_update", "修改文件部件、答案起始页，或移入其他套卷（pack_id）/拆成独立套卷（new_pack）。", "PATCH", "/materials/:id", model.ScopeMaterialsWrite, id, bodyS("part pack_id"), bodyI("answer_start_page"), bodyB("new_pack")),
 		special(op("materials_download", "取得流式下载路径，使用当前密钥直接请求。", "GET", "/materials/:id/download", model.ScopeMaterialsRead, id), "download"),
 		op("materials_pull_cache", "从可用云端副本拉取文件到临时缓存并校验 SHA-256，返回有时效的下载路径。", "POST", "/materials/:id/pull-cache", model.ScopeMaterialsRead, id),
 		special(op("materials_pull_cache_download", "取得已拉取临时文件的流式下载路径，使用当前密钥直接请求。", "GET", "/materials/:id/pull-cache", model.ScopeMaterialsRead, id), "pull_cache_download"),
 		special(op("materials_preview", "取得 PDF 预览路径，使用当前密钥直接请求。", "GET", "/materials/:id/preview", model.ScopeMaterialsRead, id), "preview"),
-		op("materials_delete", "删除资料，可指定是否级联。", "DELETE", "/materials/:id", model.ScopeMaterialsWrite, id, queryB("cascade")),
-		op("material_analysis_enqueue", "创建资料分析任务。", "POST", "/materials/:id/analysis", model.ScopeMaterialsWrite, id, bodyB("force")),
-		op("material_analysis_get", "读取资料分析结果。", "GET", "/materials/:id/analysis", model.ScopeMaterialsRead, id),
-		op("material_questions_list", "分页读取资料中的题目。", "GET", "/materials/:id/questions", model.ScopeMaterialsRead, id, page),
-		op("material_index_get", "读取资料题目索引状态。", "GET", "/materials/:id/index", model.ScopeMaterialsRead, id),
-		op("material_index_enqueue", "创建资料题目索引任务。", "POST", "/materials/:id/index", model.ScopeMaterialsWrite, id, bodyB("force")),
-		op("material_analysis_apply", "将分析结果应用到资料。", "POST", "/materials/:id/analysis/apply", model.ScopeMaterialsWrite, id, bodyS("title grade role"), bodyI("academic_year"), bodyA("subject_codes tags")),
-		op("collections_list", "查询合集，可按根合集、父合集或所含资料筛选。", "GET", "/collections", model.ScopeCollectionsRead, queryS("q parent_id material_id"), queryB("roots"), page),
-		op("collections_create", "创建合集。", "POST", "/collections", model.ScopeCollectionsWrite, mustFields(collection, "title")),
-		op("collections_get", "读取合集详情和条目。", "GET", "/collections/:id", model.ScopeCollectionsRead, id),
-		op("collections_update", "编辑合集。", "PATCH", "/collections/:id", model.ScopeCollectionsWrite, id, collection),
-		destructive(op("collections_items_replace", "替换合集的所有条目。", "PUT", "/collections/:id/items", model.ScopeCollectionsWrite, id, mustFields(customField("items", "array", items), "items"))),
-		op("collections_delete", "删除合集，可指定是否级联。", "DELETE", "/collections/:id", model.ScopeCollectionsWrite, id, queryB("cascade")),
-		op("uploads_create", "创建文件上传清单；sha256 可省略。", "POST", "/uploads", model.ScopeUploadsWrite, mustFields(joined(bodyS("title collection_kind grade"), bodyI("academic_year"), bodyA("subject_codes tags"), customField("entries", "array", entries)), "title entries")),
+		op("materials_delete", "把单个文件移入回收站。", "DELETE", "/materials/:id", model.ScopeMaterialsWrite, id),
+		op("material_analysis_enqueue", "创建文件识别任务。", "POST", "/materials/:id/analysis", model.ScopeMaterialsWrite, id, bodyB("force")),
+		op("material_analysis_get", "读取文件识别结果。", "GET", "/materials/:id/analysis", model.ScopeMaterialsRead, id),
+		op("material_questions_list", "分页读取文件中的题目。", "GET", "/materials/:id/questions", model.ScopeMaterialsRead, id, page),
+		op("material_index_get", "读取文件题目索引状态。", "GET", "/materials/:id/index", model.ScopeMaterialsRead, id),
+		op("material_index_enqueue", "创建文件题目索引任务。", "POST", "/materials/:id/index", model.ScopeMaterialsWrite, id, bodyB("force")),
+		op("material_analysis_apply", "按人工确认重新应用识别结果，覆盖套卷字段并移出待整理。", "POST", "/materials/:id/analysis/apply", model.ScopeMaterialsWrite, id),
+		op("collections_list", "查询专题，可按所含套卷筛选。", "GET", "/collections", model.ScopeCollectionsRead, queryS("q pack_id"), page),
+		op("collections_create", "创建专题，可同时放入套卷。", "POST", "/collections", model.ScopeCollectionsWrite, mustFields(joined(bodyS("title description"), bodyA("pack_ids")), "title")),
+		op("collections_get", "读取专题和其中的套卷。", "GET", "/collections/:id", model.ScopeCollectionsRead, id),
+		op("collections_update", "编辑专题标题或说明。", "PATCH", "/collections/:id", model.ScopeCollectionsWrite, id, bodyS("title description")),
+		op("collections_items_add", "向专题追加套卷，已在其中的会跳过。", "POST", "/collections/:id/items", model.ScopeCollectionsWrite, id, mustFields(bodyA("pack_ids"), "pack_ids")),
+		destructive(op("collections_items_replace", "替换专题中的全部套卷及顺序。", "PUT", "/collections/:id/items", model.ScopeCollectionsWrite, id, mustFields(bodyA("pack_ids"), "pack_ids"))),
+		op("collections_delete", "删除专题，套卷保留。", "DELETE", "/collections/:id", model.ScopeCollectionsWrite, id),
+		op("uploads_list", "分页读取上传历史。", "GET", "/uploads", model.ScopeUploadsWrite, page),
+		op("uploads_create", "创建文件上传清单；提供 sha256 时已存在的文件无需再传（状态 existing）。hints 是可选的批次提示。", "POST", "/uploads", model.ScopeUploadsWrite, mustFields(joined(bodyS("title"), customField("hints", "object", hints), customField("entries", "array", entries)), "entries")),
 		op("uploads_get", "读取当前用户的上传进度。", "GET", "/uploads/:id", model.ScopeUploadsWrite, id),
 		special(op("uploads_file_put", "上传不超过 512 KiB 的 Base64 文件；较大文件使用流式上传。", "PUT", "/uploads/:id/files/:entry_id", model.ScopeUploadsWrite, pathFields("id entry_id"), mustFields(bodyS("data_base64"), "data_base64")), "upload"),
 		special(op("uploads_transfer_info", "取得上传条目的流式上传路径。", "PUT", "/uploads/:id/files/:entry_id", model.ScopeUploadsWrite, pathFields("id entry_id")), "upload_info"),
@@ -318,6 +344,13 @@ func (s *Server) runOperation(c *gin.Context, o mcpOperation, args map[string]an
 			return nil, err
 		}
 		return map[string]any{"method": "GET", "path": path, "file_name": view.Material.FileName, "media_type": view.Material.MediaType, "size_bytes": view.Material.SizeBytes}, nil
+	}
+	if o.special == "pack_download" {
+		view, err := s.svc.GetPack(c.Request.Context(), args["id"].(string))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"method": "GET", "path": path, "file_name": view.Pack.Title + ".zip", "media_type": "application/zip"}, nil
 	}
 	if o.special == "preview" {
 		view, err := s.svc.GetMaterial(c.Request.Context(), args["id"].(string))

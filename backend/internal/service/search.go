@@ -40,9 +40,13 @@ func defaultSearchSettings() model.SearchSettings {
 	}
 }
 
-func materialNeedsQuestionIndex(role string) bool {
-	return role == model.RoleExam || role == model.RoleQuestionsAnswers
+// materialNeedsQuestionIndex: only files that contain the questions are cut
+// into searchable items. Answer files and teacher copies would duplicate them.
+func materialNeedsQuestionIndex(part string) bool {
+	return part == model.PartQuestions || part == model.PartFull
 }
+
+var indexParts = []string{model.PartQuestions, model.PartFull}
 
 func (s *Service) ensureSearchSettings(ctx context.Context) (model.SearchSettings, error) {
 	db := s.db.WithContext(ctx)
@@ -106,10 +110,10 @@ func (s *Service) PutSearchSettings(ctx context.Context, p auth.Principal, in mo
 // not applicable without persisting a synthetic row.
 func (s *Service) GetMaterialIndexState(ctx context.Context, materialID string) (model.MaterialIndexState, error) {
 	var material model.Material
-	if err := s.db.WithContext(ctx).Select("id", "role").Where("id = ?", materialID).First(&material).Error; err != nil {
+	if err := s.db.WithContext(ctx).Select("id", "part").Where("id = ?", materialID).First(&material).Error; err != nil {
 		return model.MaterialIndexState{}, apperr.NotFound("资料不存在")
 	}
-	if !materialNeedsQuestionIndex(material.Role) {
+	if !materialNeedsQuestionIndex(material.Part) {
 		return model.MaterialIndexState{MaterialID: materialID, Status: model.IndexStatusNotApplicable}, nil
 	}
 	var row model.MaterialIndexState
@@ -133,7 +137,7 @@ func (s *Service) EnqueueMaterialIndex(ctx context.Context, p auth.Principal, ma
 	if material.MediaType == "application/zip" {
 		return model.MaterialIndexState{}, "", apperr.Validation("ZIP 容器本身不索引，请索引展开后的资料")
 	}
-	if !materialNeedsQuestionIndex(material.Role) {
+	if !materialNeedsQuestionIndex(material.Part) {
 		return model.MaterialIndexState{}, "", apperr.Validation("只有试卷和试卷+答案资料需要建立题目索引")
 	}
 	now := s.now()
@@ -186,7 +190,7 @@ func (s *Service) RunIndex(ctx context.Context, jobID string) {
 		s.failIndex(job.ID, job.LeaseOwner, job.MaterialID, "资料不存在")
 		return
 	}
-	if !materialNeedsQuestionIndex(material.Role) {
+	if !materialNeedsQuestionIndex(material.Part) {
 		err := db.Transaction(func(tx *gorm.DB) error {
 			if err := deleteQuestionIndexForMaterials(tx, []string{material.ID}); err != nil {
 				return err
@@ -823,15 +827,17 @@ func (s *Service) segmentBatch(ctx context.Context, client *ai.OpenAI, modelName
 	return reply.Questions, nil
 }
 
-// QuestionHit is one search result (no cross-material aggregation).
+// QuestionHit is one search result. The same question text found in other
+// packs is folded into AlsoIn instead of repeating the hit.
 type QuestionHit struct {
-	Question     model.QuestionBlock
-	Material     model.Material
-	CollectionID string
-	Subjects     []string
-	Snippet      string
-	Highlights   [][2]int
-	Score        float64
+	Question   model.QuestionBlock
+	Material   model.Material
+	Pack       model.Pack
+	Subjects   []string
+	AlsoIn     []model.Pack
+	Snippet    string
+	Highlights [][2]int
+	Score      float64
 }
 
 // SearchResult is a page of question hits.
@@ -905,7 +911,8 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 	where.WriteString(` FROM question_terms qt
 		JOIN question_blocks qb ON qb.id = qt.question_id
 		JOIN materials m ON m.id = qb.material_id
-		WHERE qt.term IN ? AND m.status IN ('archived','degraded')`)
+		JOIN packs p ON p.id = m.pack_id
+		WHERE qt.term IN ? AND m.status IN ('archived','degraded') AND m.deleted_at IS NULL AND p.deleted_at IS NULL`)
 	args = append(args, termList)
 	if len(mathList) > 0 {
 		// A matching formula contains every selected formula n-gram. Require
@@ -917,15 +924,15 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 		args = append(args, mathList, len(mathList))
 	}
 	if subject != "" {
-		where.WriteString(` AND EXISTS (SELECT 1 FROM material_subjects ms WHERE ms.material_id = qb.material_id AND ms.code = ?)`)
+		where.WriteString(` AND EXISTS (SELECT 1 FROM pack_subjects ps WHERE ps.pack_id = m.pack_id AND ps.code = ?)`)
 		args = append(args, subject)
 	}
 	if grade != "" {
-		where.WriteString(` AND m.grade = ?`)
+		where.WriteString(` AND p.grade = ?`)
 		args = append(args, grade)
 	}
 	if year > 0 {
-		where.WriteString(` AND m.academic_year = ?`)
+		where.WriteString(` AND p.cohort = ?`)
 		args = append(args, year)
 	}
 	type candidate struct {
@@ -965,13 +972,9 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 	for _, m := range materials {
 		materialMap[m.ID] = m
 	}
-	collectionMap, err := s.collectionIDs(ctx, materialIDs)
+	packMap, err := s.packsForMaterials(ctx, materials)
 	if err != nil {
 		return SearchResult{}, apperr.Internal(err)
-	}
-	subjectMap, subjErr := s.subjectsByMaterial(s.db.WithContext(ctx), materialIDs)
-	if subjErr != nil {
-		return SearchResult{}, apperr.Internal(subjErr)
 	}
 	fullHits := make([]QuestionHit, 0, len(blocks))
 	queryTermCount := len(termList)
@@ -1017,9 +1020,10 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 			score += 12
 		}
 		score -= math.Min(2, float64(len([]rune(block.Text)))/2000)
+		pack := packMap[material.PackID]
 		fullHits = append(fullHits, QuestionHit{
-			Question: block, Material: material, CollectionID: collectionMap[material.ID],
-			Subjects: subjectMap[material.ID], Score: score,
+			Question: block, Material: material, Pack: pack,
+			Subjects: sortSubjects(model.DecodeStrings(pack.SubjectsJSON)), Score: score,
 		})
 	}
 	sort.SliceStable(fullHits, func(i, j int) bool {
@@ -1031,6 +1035,7 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 		}
 		return fullHits[i].Question.ID < fullHits[j].Question.ID
 	})
+	fullHits = foldRepeatedQuestions(fullHits)
 	total := len(fullHits)
 	if offset > len(fullHits) {
 		offset = len(fullHits)
@@ -1055,21 +1060,48 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 	return SearchResult{Items: page, Total: total, TookMS: time.Since(started).Milliseconds()}, nil
 }
 
-func (s *Service) collectionIDs(ctx context.Context, materialIDs []string) (map[string]string, error) {
-	out := map[string]string{}
-	if len(materialIDs) == 0 {
+func (s *Service) packsForMaterials(ctx context.Context, materials []model.Material) (map[string]model.Pack, error) {
+	out := map[string]model.Pack{}
+	ids := make([]string, 0, len(materials))
+	for _, m := range materials {
+		ids = append(ids, m.PackID)
+	}
+	if len(ids) == 0 {
 		return out, nil
 	}
-	var rows []model.CollectionItem
-	if err := s.db.WithContext(ctx).Where("material_id IN ?", materialIDs).Find(&rows).Error; err != nil {
+	var rows []model.Pack
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	for _, row := range rows {
-		if _, ok := out[row.MaterialID]; !ok {
-			out[row.MaterialID] = row.CollectionID
-		}
+	for _, p := range rows {
+		out[p.ID] = p
 	}
 	return out, nil
+}
+
+// foldRepeatedQuestions keeps the best hit per normalized question text; the
+// same question reprinted in other packs is listed under AlsoIn.
+func foldRepeatedQuestions(hits []QuestionHit) []QuestionHit {
+	out := make([]QuestionHit, 0, len(hits))
+	index := map[string]int{}
+	for _, h := range hits {
+		key := h.Question.Normalized
+		if len([]rune(key)) < 12 {
+			out = append(out, h)
+			continue
+		}
+		// Repeats inside one pack are distinct questions; only reprints in
+		// other packs are folded.
+		if i, ok := index[key]; ok && out[i].Pack.ID != h.Pack.ID {
+			if len(out[i].AlsoIn) < 10 {
+				out[i].AlsoIn = append(out[i].AlsoIn, h.Pack)
+			}
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, h)
+	}
+	return out
 }
 
 // GetQuestion returns one question block with material summary.
@@ -1080,21 +1112,15 @@ func (s *Service) GetQuestion(ctx context.Context, id string) (QuestionHit, erro
 	}
 	var material model.Material
 	if err := s.db.WithContext(ctx).Where("id = ?", block.MaterialID).First(&material).Error; err != nil {
-		return QuestionHit{}, apperr.NotFound("资料不存在")
+		return QuestionHit{}, apperr.NotFound("文件不存在")
 	}
-	collection, err := s.collectionIDs(ctx, []string{material.ID})
-	if err != nil {
-		return QuestionHit{}, apperr.Internal(err)
-	}
-	subjects, err := s.subjectsByMaterial(s.db.WithContext(ctx), []string{material.ID})
-	if err != nil {
-		return QuestionHit{}, apperr.Internal(err)
-	}
+	var pack model.Pack
+	_ = s.db.WithContext(ctx).Where("id = ?", material.PackID).First(&pack).Error
 	// A detail request has no search query, so it has no matching highlight.
 	snippet, highlights := snippetForMatch(block.Text, -1, -1, 400)
 	return QuestionHit{
-		Question: block, Material: material, CollectionID: collection[material.ID],
-		Subjects: subjects[material.ID], Snippet: snippet, Highlights: highlights,
+		Question: block, Material: material, Pack: pack,
+		Subjects: sortSubjects(model.DecodeStrings(pack.SubjectsJSON)), Snippet: snippet, Highlights: highlights,
 	}, nil
 }
 
@@ -1154,11 +1180,11 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	db := s.db.WithContext(ctx)
-	eligibleRoles := []string{model.RoleExam, model.RoleQuestionsAnswers}
+	eligibleRoles := indexParts
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		var staleIDs []string
 		if err := tx.Model(&model.Material{}).
-			Where("role NOT IN ?", eligibleRoles).
+			Where("part NOT IN ?", eligibleRoles).
 			Where("id IN (?)", tx.Model(&model.MaterialIndexState{}).Select("material_id")).
 			Pluck("id", &staleIDs).Error; err != nil {
 			return err
@@ -1169,7 +1195,7 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 		return tx.Where(
 			"kind = ? AND material_id IN (?)",
 			model.JobIndex,
-			tx.Model(&model.Material{}).Select("id").Where("role NOT IN ?", eligibleRoles),
+			tx.Model(&model.Material{}).Select("id").Where("part NOT IN ?", eligibleRoles),
 		).Delete(&model.Job{}).Error
 	}); err != nil {
 		return 0, err
@@ -1179,7 +1205,7 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 	}
 	var materialIDs []string
 	if err := db.Model(&model.Material{}).
-		Where("role IN ?", eligibleRoles).
+		Where("part IN ?", eligibleRoles).
 		Where("status IN ? AND media_type <> ?", []string{model.StatusArchived, model.StatusDegraded}, "application/zip").
 		Where("id NOT IN (?)", db.Model(&model.MaterialIndexState{}).Select("material_id")).
 		Pluck("id", &materialIDs).Error; err != nil {
@@ -1208,7 +1234,7 @@ func (s *Service) EnqueueMissingIndexes(ctx context.Context) (int, error) {
 }
 
 // autoEnqueueIndexTx queues indexing only for new exam-like materials.
-func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, now time.Time) error {
+func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*model.Material, now time.Time) error {
 	var settings model.SearchSettings
 	if err := tx.Where("id = ?", 1).First(&settings).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1221,7 +1247,7 @@ func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, 
 		return nil
 	}
 	for _, pm := range materials {
-		if pm.MediaType == "application/zip" || !materialNeedsQuestionIndex(pm.Role) {
+		if !analyzable(pm.MediaType) || !materialNeedsQuestionIndex(pm.Part) {
 			continue
 		}
 		if _, err := enqueueIndexTx(tx, pm.ID, now); err != nil {
@@ -1231,10 +1257,10 @@ func (s *Service) autoEnqueueIndexTx(tx *gorm.DB, materials []*plannedMaterial, 
 	return nil
 }
 
-// syncMaterialIndexForRoleTx keeps index state aligned with a role change or an
-// automatically applied role suggestion.
-func (s *Service) syncMaterialIndexForRoleTx(tx *gorm.DB, materialID, role string, now time.Time) error {
-	if !materialNeedsQuestionIndex(role) {
+// syncMaterialIndexForPartTx keeps index state aligned with a part change or
+// an automatically applied part suggestion.
+func (s *Service) syncMaterialIndexForPartTx(tx *gorm.DB, materialID, part string, now time.Time) error {
+	if !materialNeedsQuestionIndex(part) {
 		if err := deleteQuestionIndexForMaterials(tx, []string{materialID}); err != nil {
 			return err
 		}

@@ -10,15 +10,19 @@ import (
 	"github.com/nic/paper-collect/backend/internal/model"
 )
 
-func TestQuestionIndexOnlyAppliesToExamRoles(t *testing.T) {
+func TestQuestionIndexOnlyAppliesToQuestionParts(t *testing.T) {
 	svc, db := newWorkerTestService(t, t.TempDir(), "index-eligibility")
 	ctx := context.Background()
 	now := time.Now().UTC()
+	pack := model.Pack{ID: newID(), Title: "讲义", SubjectsJSON: "[]", TagsJSON: "[]", CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(&pack).Error; err != nil {
+		t.Fatal(err)
+	}
 	material := model.Material{
-		ID: newID(), Title: "讲义", Description: "", Grade: "", TagsJSON: "[]",
-		Role: model.RoleLecture, Status: model.StatusArchived, BlobID: "blob",
+		ID: newID(), PackID: pack.ID, Title: "讲义", OriginalName: "讲义.pdf", ReviewReasonsJSON: "[]",
+		Part: model.PartMain, Stage: model.StageReady, Status: model.StatusArchived, BlobID: "blob",
 		FileName: "讲义.pdf", MediaType: "application/pdf", SizeBytes: 1,
-		SHA256: strings.Repeat("a", 64), SourcePath: "讲义.pdf", CreatedAt: now, UpdatedAt: now,
+		SHA256: strings.Repeat("a", 64), CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
@@ -33,8 +37,8 @@ func TestQuestionIndexOnlyAppliesToExamRoles(t *testing.T) {
 		t.Fatal("lecture must not be manually queued for indexing")
 	}
 
-	exam := model.RoleExam
-	if _, err := svc.UpdateMaterial(ctx, principal, material.ID, MaterialPatch{Role: &exam}); err != nil {
+	exam := model.PartQuestions
+	if _, err := svc.UpdateMaterial(ctx, principal, material.ID, MaterialPatch{Part: &exam}); err != nil {
 		t.Fatal(err)
 	}
 	state, err = svc.GetMaterialIndexState(ctx, material.ID)
@@ -42,8 +46,8 @@ func TestQuestionIndexOnlyAppliesToExamRoles(t *testing.T) {
 		t.Fatalf("exam must be queued after role change: %+v err=%v", state, err)
 	}
 
-	lecture := model.RoleLecture
-	if _, err := svc.UpdateMaterial(ctx, principal, material.ID, MaterialPatch{Role: &lecture}); err != nil {
+	lecture := model.PartMain
+	if _, err := svc.UpdateMaterial(ctx, principal, material.ID, MaterialPatch{Part: &lecture}); err != nil {
 		t.Fatal(err)
 	}
 	var stateCount, jobCount int64

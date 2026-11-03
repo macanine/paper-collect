@@ -188,11 +188,20 @@ func (s *Service) StartWorker(ctx context.Context) {
 func (s *Service) reaperLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.worker.HeartbeatInterval)
 	defer ticker.Stop()
+	lastPurge := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if time.Since(lastPurge) > time.Hour {
+				lastPurge = time.Now()
+				if n, err := s.PurgeExpiredTrash(ctx); err != nil {
+					s.logf("purge expired trash: %v", err)
+				} else if n > 0 {
+					s.logf("purged %d expired trashed packs", n)
+				}
+			}
 			recovered, err := s.RecoverExpiredLeases(ctx)
 			if err != nil {
 				s.logf("recover expired leases: %v", err)

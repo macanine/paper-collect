@@ -62,14 +62,21 @@ func Inspect(zipPath string, lim Limits) ([]Member, error) {
 	return inspect(zipPath, lim, &skipped)
 }
 
-// InspectWithSkipped also counts non-ignored files whose formats are unsupported.
-func InspectWithSkipped(zipPath string, lim Limits) ([]Member, int, error) {
-	var skipped int
-	members, err := inspect(zipPath, lim, &skipped)
+// InspectWithSkipped also lists non-ignored files whose formats are unsupported.
+func InspectWithSkipped(zipPath string, lim Limits) ([]Member, []string, error) {
+	var skipped []string
+	members, err := inspectNames(zipPath, lim, &skipped)
 	return members, skipped, err
 }
 
 func inspect(zipPath string, lim Limits, skipped *int) ([]Member, error) {
+	var names []string
+	members, err := inspectNames(zipPath, lim, &names)
+	*skipped = len(names)
+	return members, err
+}
+
+func inspectNames(zipPath string, lim Limits, skipped *[]string) ([]Member, error) {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return nil, reject("压缩包结构损坏，无法读取")
@@ -131,7 +138,7 @@ func inspect(zipPath string, lim Limits, skipped *int) ([]Member, error) {
 		if isSupported(name) {
 			members = append(members, Member{Path: name, Index: i, Size: sz})
 		} else {
-			(*skipped)++
+			*skipped = append(*skipped, name)
 		}
 	}
 	return members, nil
@@ -217,7 +224,9 @@ func validateEntryName(name string) error {
 	return nil
 }
 
-func isSupported(name string) bool {
+// IsSupported decides which members are extracted. The service replaces it
+// with the upload format whitelist so packages accept the same formats.
+var IsSupported = func(name string) bool {
 	lower := strings.ToLower(name)
 	for _, ext := range SupportedExtensions {
 		if strings.HasSuffix(lower, ext) {
@@ -226,6 +235,8 @@ func isSupported(name string) bool {
 	}
 	return false
 }
+
+func isSupported(name string) bool { return IsSupported(name) }
 
 // Legacy ZIP tools often store GBK/Big5/Shift-JIS filenames without the UTF-8
 // flag. Rather than assuming one encoding, score every candidate over the

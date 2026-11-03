@@ -11,366 +11,152 @@ import (
 	"gorm.io/gorm"
 )
 
-// CollectionView is a collection with its items in position order.
+// CollectionFilter holds optional topic-list filters.
+type CollectionFilter struct {
+	Q      string
+	PackID string
+}
+
+// CollectionSummary is a topic with its pack count.
+type CollectionSummary struct {
+	Collection model.Collection
+	PackCount  int64
+}
+
+// CollectionView is a topic with its packs in order.
 type CollectionView struct {
 	Collection model.Collection
-	Items      []CollectionItemView
+	Packs      []PackView
 }
 
-// CollectionItemView is one placement with the material summary (no replicas).
-type CollectionItemView struct {
-	Item     model.CollectionItem
-	Material *MaterialView
-}
-
-// CollectionInput is the body of a create request.
+// CollectionInput creates a topic.
 type CollectionInput struct {
-	Title        string
-	Description  string
-	Kind         string
-	ParentID     string
-	SubjectCodes []string
+	Title       string
+	Description string
+	PackIDs     []string
 }
 
-// CollectionPatch is a partial update. Nil means "leave unchanged".
+// CollectionPatch is a partial topic update.
 type CollectionPatch struct {
-	Title        *string
-	Description  *string
-	Kind         *string
-	ParentID     *string
-	SubjectCodes *[]string
+	Title       *string
+	Description *string
 }
 
-// ItemInput is one entry of a whole-set replacement. Nil optional fields take defaults:
-// position = index in the request, role = the material's role, relative path = "".
-type ItemInput struct {
-	MaterialID   string
-	Position     *int
-	Role         *string
-	RelativePath *string
-}
-
-const maxCycleDepth = 10000
-
-// CollectionFilter narrows a collection list. ParentID and RootsOnly are
-// mutually exclusive; RootsOnly lists top-level collections only.
-type CollectionFilter struct {
-	Q          string
-	ParentID   string
-	RootsOnly  bool
-	MaterialID string
-}
-
-// ListCollections returns paginated collections, newest first.
-func (s *Service) ListCollections(ctx context.Context, f CollectionFilter, pg PageQuery) (Page[model.Collection], error) {
+// ListCollections lists topics, newest first.
+func (s *Service) ListCollections(ctx context.Context, f CollectionFilter, pg PageQuery) (Page[CollectionSummary], error) {
 	db := s.db.WithContext(ctx)
-	build := func() *gorm.DB {
-		tx := db.Model(&model.Collection{})
-		if f.Q != "" {
-			pat := likePattern(f.Q)
-			tx = tx.Where("(LOWER(title) LIKE ? ESCAPE '!' OR LOWER(description) LIKE ? ESCAPE '!')", pat, pat)
-		}
-		if f.ParentID != "" {
-			tx = tx.Where("parent_id = ?", f.ParentID)
-		} else if f.RootsOnly {
-			tx = tx.Where("parent_id = ?", "")
-		}
-		if f.MaterialID != "" {
-			itemIDs := db.Model(&model.CollectionItem{}).Select("collection_id").Where("material_id = ?", f.MaterialID)
-			tx = tx.Where("id IN (?)", itemIDs)
-		}
-		return tx
+	q := db.Model(&model.Collection{})
+	if f.Q != "" {
+		pat := likePattern(f.Q)
+		q = q.Where("(LOWER(title) LIKE ? ESCAPE '!' OR LOWER(description) LIKE ? ESCAPE '!')", pat, pat)
+	}
+	if f.PackID != "" {
+		q = q.Where("id IN (?)", db.Model(&model.CollectionItem{}).Select("collection_id").Where("pack_id = ?", f.PackID))
 	}
 	var total int64
-	if err := build().Count(&total).Error; err != nil {
-		return Page[model.Collection]{}, wrap("count collections", err)
+	if err := q.Count(&total).Error; err != nil {
+		return Page[CollectionSummary]{}, wrap("count topics", err)
 	}
-	items := []model.Collection{}
-	if err := build().Order("created_at DESC").Order("id DESC").
-		Limit(pg.PageSize).Offset(pg.offset()).Find(&items).Error; err != nil {
-		return Page[model.Collection]{}, wrap("list collections", err)
+	var rows []model.Collection
+	if err := q.Order("updated_at DESC").Order("id ASC").Limit(pg.PageSize).Offset(pg.offset()).Find(&rows).Error; err != nil {
+		return Page[CollectionSummary]{}, wrap("list topics", err)
+	}
+	items := make([]CollectionSummary, 0, len(rows))
+	for _, c := range rows {
+		var n int64
+		if err := db.Model(&model.CollectionItem{}).Where("collection_id = ?", c.ID).
+			Where("pack_id IN (?)", db.Model(&model.Pack{}).Select("id")).Count(&n).Error; err != nil {
+			return Page[CollectionSummary]{}, wrap("count topic packs", err)
+		}
+		items = append(items, CollectionSummary{Collection: c, PackCount: n})
 	}
 	return newPage(items, total, pg), nil
 }
 
-// GetCollection returns a collection with its items and material summaries.
+// GetCollection returns a topic with its packs in order. Trashed packs are hidden.
 func (s *Service) GetCollection(ctx context.Context, id string) (CollectionView, error) {
 	db := s.db.WithContext(ctx)
 	var c model.Collection
 	if err := db.Where("id = ?", id).First(&c).Error; err != nil {
-		return CollectionView{}, apperr.NotFound("合集不存在")
+		return CollectionView{}, apperr.NotFound("专题不存在")
 	}
 	var items []model.CollectionItem
-	if err := db.Where("collection_id = ?", id).Order("position ASC").Order("id ASC").Find(&items).Error; err != nil {
-		return CollectionView{}, wrap("load items", err)
+	if err := db.Where("collection_id = ?", id).Order("position ASC").Find(&items).Error; err != nil {
+		return CollectionView{}, wrap("load topic items", err)
 	}
-	materials, err := s.materialSummaries(db, items)
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.PackID)
+	}
+	packs, err := s.packViewsByID(db, ids, false)
 	if err != nil {
 		return CollectionView{}, err
 	}
-	views := make([]CollectionItemView, 0, len(items))
+	view := CollectionView{Collection: c, Packs: []PackView{}}
 	for _, it := range items {
-		item := it
-		// The material is the single source of truth for the role.
-		if mv := materials[item.MaterialID]; mv != nil {
-			item.Role = mv.Material.Role
+		if p, ok := packs[it.PackID]; ok {
+			view.Packs = append(view.Packs, p)
 		}
-		views = append(views, CollectionItemView{Item: item, Material: materials[item.MaterialID]})
 	}
-	return CollectionView{Collection: c, Items: views}, nil
+	return view, nil
 }
 
-// materialSummaries loads referenced materials (no replicas) keyed by id.
-func (s *Service) materialSummaries(db *gorm.DB, items []model.CollectionItem) (map[string]*MaterialView, error) {
-	out := map[string]*MaterialView{}
-	ids := make([]string, 0, len(items))
-	for _, it := range items {
-		ids = append(ids, it.MaterialID)
-	}
-	for start := 0; start < len(ids); start += 500 {
-		end := start + 500
-		if end > len(ids) {
-			end = len(ids)
-		}
-		var rows []model.Material
-		if err := db.Where("id IN ?", ids[start:end]).Find(&rows).Error; err != nil {
-			return nil, wrap("load materials", err)
-		}
-		chunk := make([]string, 0, len(rows))
-		for _, m := range rows {
-			chunk = append(chunk, m.ID)
-		}
-		subjects, err := s.subjectsByMaterial(db, chunk)
-		if err != nil {
-			return nil, err
-		}
-		for _, m := range rows {
-			mv := MaterialView{Material: m, Subjects: subjects[m.ID]}
-			out[m.ID] = &mv
-		}
-	}
-	return out, nil
-}
-
-// CreateCollection adds a collection. A non-empty parent must exist.
-func (s *Service) CreateCollection(ctx context.Context, p auth.Principal, in CollectionInput) (model.Collection, error) {
+// CreateCollection creates a topic, optionally with packs.
+func (s *Service) CreateCollection(ctx context.Context, p auth.Principal, in CollectionInput) (CollectionView, error) {
 	title, err := validateTitle(in.Title)
 	if err != nil {
-		return model.Collection{}, err
+		return CollectionView{}, err
 	}
 	desc, err := validateDescription(in.Description)
 	if err != nil {
-		return model.Collection{}, err
-	}
-	if err := validateCollectionKind(in.Kind); err != nil {
-		return model.Collection{}, err
-	}
-	subjects, err := validateOptionalSubjects(in.SubjectCodes)
-	if err != nil {
-		return model.Collection{}, err
-	}
-	db := s.db.WithContext(ctx)
-	if in.ParentID != "" {
-		var parent model.Collection
-		if err := db.Where("id = ?", in.ParentID).First(&parent).Error; err != nil {
-			return model.Collection{}, apperr.Validation("父合集不存在")
-		}
+		return CollectionView{}, err
 	}
 	now := s.now()
-	c := model.Collection{
-		ID:           newID(),
-		Title:        title,
-		Description:  desc,
-		Kind:         in.Kind,
-		ParentID:     in.ParentID,
-		SubjectsJSON: model.EncodeStrings(subjects),
-		CreatedAt:    now,
-		UpdatedAt:    now,
-	}
-	err = db.Transaction(func(tx *gorm.DB) error {
+	c := model.Collection{ID: newID(), Title: title, Description: desc, CreatedAt: now, UpdatedAt: now}
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&c).Error; err != nil {
-			return wrap("create collection", err)
+			return wrap("create topic", err)
+		}
+		if err := s.addPacksTx(tx, c.ID, in.PackIDs); err != nil {
+			return err
 		}
 		return s.audit(tx, p, "collection.create", c.ID)
 	})
 	if err != nil {
-		return model.Collection{}, err
+		return CollectionView{}, err
 	}
-	return c, nil
+	return s.GetCollection(ctx, c.ID)
 }
 
-// UpdateCollection applies a partial update and rejects parent cycles.
-func (s *Service) UpdateCollection(ctx context.Context, p auth.Principal, id string, pt CollectionPatch) (model.Collection, error) {
-	if pt.Title == nil && pt.Description == nil && pt.Kind == nil && pt.ParentID == nil && pt.SubjectCodes == nil {
-		return model.Collection{}, apperr.Validation("至少需要提供一个可修改字段")
+// UpdateCollection edits a topic's title or description.
+func (s *Service) UpdateCollection(ctx context.Context, p auth.Principal, id string, pt CollectionPatch) (CollectionView, error) {
+	if pt.Title == nil && pt.Description == nil {
+		return CollectionView{}, apperr.Validation("至少需要提供一个可修改字段")
 	}
 	updates := map[string]any{"updated_at": s.now()}
 	if pt.Title != nil {
 		t, err := validateTitle(*pt.Title)
 		if err != nil {
-			return model.Collection{}, err
+			return CollectionView{}, err
 		}
 		updates["title"] = t
 	}
 	if pt.Description != nil {
 		d, err := validateDescription(*pt.Description)
 		if err != nil {
-			return model.Collection{}, err
+			return CollectionView{}, err
 		}
 		updates["description"] = d
 	}
-	if pt.Kind != nil {
-		if err := validateCollectionKind(*pt.Kind); err != nil {
-			return model.Collection{}, err
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.Collection{}).Where("id = ?", id).Updates(updates)
+		if res.Error != nil {
+			return wrap("update topic", res.Error)
 		}
-		updates["kind"] = *pt.Kind
-	}
-	if pt.SubjectCodes != nil {
-		subjects, err := validateOptionalSubjects(*pt.SubjectCodes)
-		if err != nil {
-			return model.Collection{}, err
-		}
-		updates["subjects_json"] = model.EncodeStrings(subjects)
-	}
-
-	db := s.db.WithContext(ctx)
-	var result model.Collection
-	err := db.Transaction(func(tx *gorm.DB) error {
-		var c model.Collection
-		if err := tx.Where("id = ?", id).First(&c).Error; err != nil {
-			return apperr.NotFound("合集不存在")
-		}
-		if pt.ParentID != nil {
-			newParent := *pt.ParentID
-			if newParent != "" {
-				if newParent == id {
-					return apperr.Conflict("父合集不能是合集自身")
-				}
-				cyc, err := wouldCycle(tx, id, newParent)
-				if err != nil {
-					return err
-				}
-				if cyc {
-					return apperr.Conflict("父合集会形成循环")
-				}
-			}
-			updates["parent_id"] = newParent
-		}
-		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-			return wrap("update collection", err)
-		}
-		if err := tx.Where("id = ?", id).First(&result).Error; err != nil {
-			return wrap("reload collection", err)
+		if res.RowsAffected == 0 {
+			return apperr.NotFound("专题不存在")
 		}
 		return s.audit(tx, p, "collection.update", id)
-	})
-	if err != nil {
-		return model.Collection{}, err
-	}
-	return result, nil
-}
-
-// wouldCycle reports whether making parent the parent of collection id creates a loop.
-func wouldCycle(tx *gorm.DB, id, parent string) (bool, error) {
-	cur := parent
-	for depth := 0; cur != "" && depth < maxCycleDepth; depth++ {
-		if cur == id {
-			return true, nil
-		}
-		var c model.Collection
-		err := tx.Select("id", "parent_id").Where("id = ?", cur).First(&c).Error
-		if err != nil {
-			return false, nil
-		}
-		cur = c.ParentID
-	}
-	return false, nil
-}
-
-// ReplaceItems replaces the whole item set in one transaction. An empty list clears the
-// collection without deleting materials or replicas.
-func (s *Service) ReplaceItems(ctx context.Context, p auth.Principal, id string, in []ItemInput) (CollectionView, error) {
-	if len(in) > maxCollectionItems {
-		return CollectionView{}, apperr.Validation("合集条目最多 5000 条")
-	}
-	db := s.db.WithContext(ctx)
-
-	ids := make([]string, 0, len(in))
-	seen := map[string]bool{}
-	for _, it := range in {
-		if it.MaterialID == "" {
-			return CollectionView{}, apperr.Validation("material_id 不能为空")
-		}
-		if seen[it.MaterialID] {
-			return CollectionView{}, apperr.Validation("同一合集中资料不能重复")
-		}
-		seen[it.MaterialID] = true
-		ids = append(ids, it.MaterialID)
-		if it.Position != nil && *it.Position < 0 {
-			return CollectionView{}, apperr.Validation("position 必须大于等于 0")
-		}
-		if it.RelativePath != nil && *it.RelativePath != "" {
-			if err := validateRelativePath(*it.RelativePath); err != nil {
-				return CollectionView{}, err
-			}
-		}
-	}
-
-	err := db.Transaction(func(tx *gorm.DB) error {
-		var c model.Collection
-		if err := tx.Where("id = ?", id).First(&c).Error; err != nil {
-			return apperr.NotFound("合集不存在")
-		}
-		materials := map[string]model.Material{}
-		for start := 0; start < len(ids); start += 500 {
-			end := start + 500
-			if end > len(ids) {
-				end = len(ids)
-			}
-			var rows []model.Material
-			if err := tx.Where("id IN ?", ids[start:end]).Find(&rows).Error; err != nil {
-				return wrap("load materials", err)
-			}
-			for _, m := range rows {
-				materials[m.ID] = m
-			}
-		}
-		if len(materials) != len(ids) {
-			return apperr.Validation("存在不存在的资料")
-		}
-
-		if err := tx.Where("collection_id = ?", id).Delete(&model.CollectionItem{}).Error; err != nil {
-			return wrap("clear items", err)
-		}
-		now := s.now()
-		rows := make([]model.CollectionItem, 0, len(in))
-		for i, it := range in {
-			pos := i
-			if it.Position != nil {
-				pos = *it.Position
-			}
-			// Role is owned by the material; callers cannot override it here.
-			role := materials[it.MaterialID].Role
-			rel := ""
-			if it.RelativePath != nil {
-				rel = *it.RelativePath
-			}
-			rows = append(rows, model.CollectionItem{
-				ID:           newID(),
-				CollectionID: id,
-				MaterialID:   it.MaterialID,
-				Position:     pos,
-				Role:         role,
-				RelativePath: rel,
-				CreatedAt:    now,
-			})
-		}
-		if len(rows) > 0 {
-			if err := tx.Create(&rows).Error; err != nil {
-				return wrap("insert items", err)
-			}
-		}
-		return s.audit(tx, p, "collection.items", id)
 	})
 	if err != nil {
 		return CollectionView{}, err
@@ -378,7 +164,128 @@ func (s *Service) ReplaceItems(ctx context.Context, p auth.Principal, id string,
 	return s.GetCollection(ctx, id)
 }
 
-// sortedByNatural orders relative paths naturally; used when building manifest positions.
+// AddCollectionPacks appends packs to a topic, skipping ones already in it.
+func (s *Service) AddCollectionPacks(ctx context.Context, p auth.Principal, id string, packIDs []string) (CollectionView, error) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Count(&n).Error; err != nil {
+			return wrap("check topic", err)
+		}
+		if n == 0 {
+			return apperr.NotFound("专题不存在")
+		}
+		if err := s.addPacksTx(tx, id, packIDs); err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Update("updated_at", s.now()).Error; err != nil {
+			return wrap("touch topic", err)
+		}
+		return s.audit(tx, p, "collection.add_packs", id)
+	})
+	if err != nil {
+		return CollectionView{}, err
+	}
+	return s.GetCollection(ctx, id)
+}
+
+func (s *Service) addPacksTx(tx *gorm.DB, collectionID string, packIDs []string) error {
+	if len(packIDs) == 0 {
+		return nil
+	}
+	if len(packIDs) > maxCollectionItems {
+		return apperr.Validation("专题最多 5000 个套卷")
+	}
+	var found int64
+	if err := tx.Model(&model.Pack{}).Where("id IN ?", packIDs).Count(&found).Error; err != nil {
+		return wrap("check packs", err)
+	}
+	unique := map[string]bool{}
+	for _, id := range packIDs {
+		unique[id] = true
+	}
+	if int(found) != len(unique) {
+		return apperr.Validation("部分套卷不存在")
+	}
+	var maxPos struct{ N int }
+	if err := tx.Model(&model.CollectionItem{}).Select("COALESCE(MAX(position), -1) AS n").
+		Where("collection_id = ?", collectionID).Scan(&maxPos).Error; err != nil {
+		return wrap("topic position", err)
+	}
+	var existing []string
+	if err := tx.Model(&model.CollectionItem{}).Where("collection_id = ?", collectionID).Pluck("pack_id", &existing).Error; err != nil {
+		return wrap("load topic items", err)
+	}
+	have := map[string]bool{}
+	for _, id := range existing {
+		have[id] = true
+	}
+	now := s.now()
+	pos := maxPos.N
+	for _, id := range packIDs {
+		if have[id] {
+			continue
+		}
+		have[id] = true
+		pos++
+		if err := tx.Create(&model.CollectionItem{ID: newID(), CollectionID: collectionID, PackID: id, Position: pos, CreatedAt: now}).Error; err != nil {
+			return wrap("add topic item", err)
+		}
+	}
+	return nil
+}
+
+// ReplaceItems sets the complete ordered pack list of a topic.
+func (s *Service) ReplaceItems(ctx context.Context, p auth.Principal, id string, packIDs []string) (CollectionView, error) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Count(&n).Error; err != nil {
+			return wrap("check topic", err)
+		}
+		if n == 0 {
+			return apperr.NotFound("专题不存在")
+		}
+		seen := map[string]bool{}
+		for _, pid := range packIDs {
+			if seen[pid] {
+				return apperr.Validation("专题中存在重复套卷")
+			}
+			seen[pid] = true
+		}
+		if err := tx.Where("collection_id = ?", id).Delete(&model.CollectionItem{}).Error; err != nil {
+			return wrap("clear topic items", err)
+		}
+		if err := s.addPacksTx(tx, id, packIDs); err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Update("updated_at", s.now()).Error; err != nil {
+			return wrap("touch topic", err)
+		}
+		return s.audit(tx, p, "collection.replace_items", id)
+	})
+	if err != nil {
+		return CollectionView{}, err
+	}
+	return s.GetCollection(ctx, id)
+}
+
+// DeleteCollection removes a topic and its placements; packs are kept.
+func (s *Service) DeleteCollection(ctx context.Context, p auth.Principal, id string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("id = ?", id).Delete(&model.Collection{})
+		if res.Error != nil {
+			return wrap("delete topic", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return apperr.NotFound("专题不存在")
+		}
+		if err := tx.Where("collection_id = ?", id).Delete(&model.CollectionItem{}).Error; err != nil {
+			return wrap("delete topic items", err)
+		}
+		return s.audit(tx, p, "collection.delete", id)
+	})
+}
+
+// sortedByNatural returns values in natural file-name order.
 func sortedByNatural(values []string) []string {
 	out := append([]string{}, values...)
 	sort.SliceStable(out, func(i, j int) bool { return paths.NaturalLess(out[i], out[j]) })

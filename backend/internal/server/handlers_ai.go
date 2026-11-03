@@ -141,12 +141,13 @@ func (s *Server) handleGetAISettings(c *gin.Context) {
 
 func (s *Server) handlePutAISettings(c *gin.Context) {
 	var req struct {
-		AnalysisEnabled bool    `json:"analysis_enabled"`
-		OCRProviderID   *string `json:"ocr_provider_id"`
-		MinerUBaseURL   string  `json:"mineru_base_url"`
-		MinerUToken     *string `json:"mineru_token"`
-		MaxPages        int     `json:"max_pages"`
-		MaxImages       int     `json:"max_images"`
+		AnalysisEnabled bool     `json:"analysis_enabled"`
+		OCRProviderID   *string  `json:"ocr_provider_id"`
+		MinerUBaseURL   string   `json:"mineru_base_url"`
+		MinerUToken     *string  `json:"mineru_token"`
+		MaxPages        int      `json:"max_pages"`
+		MaxImages       int      `json:"max_images"`
+		AutoAccept      *float64 `json:"auto_accept_confidence"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
@@ -156,6 +157,7 @@ func (s *Server) handlePutAISettings(c *gin.Context) {
 		AnalysisEnabled: req.AnalysisEnabled, OCRProviderID: req.OCRProviderID,
 		MinerUBaseURL: req.MinerUBaseURL,
 		MinerUToken:   req.MinerUToken, MaxPages: req.MaxPages, MaxImages: req.MaxImages,
+		AutoAcceptConfidence: req.AutoAccept,
 	})
 	if err != nil {
 		respondError(c, err)
@@ -282,22 +284,11 @@ func (s *Server) handleGetAnalysis(c *gin.Context) {
 }
 
 func (s *Server) handleApplyAnalysis(c *gin.Context) {
-	var req struct {
-		Title        *string   `json:"title"`
-		SubjectCodes *[]string `json:"subject_codes"`
-		Grade        *string   `json:"grade"`
-		AcademicYear *int      `json:"academic_year"`
-		Role         *string   `json:"role"`
-		Tags         *[]string `json:"tags"`
-	}
-	if _, _, ae := decodeOptionalJSON(c, &req); ae != nil {
+	if _, _, ae := decodeOptionalJSON(c, &struct{}{}); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	view, err := s.svc.ApplyMaterialAnalysis(c.Request.Context(), principal(c), c.Param("id"), &service.MaterialPatch{
-		Title: req.Title, SubjectCodes: req.SubjectCodes, Grade: req.Grade,
-		AcademicYear: req.AcademicYear, Role: req.Role, Tags: req.Tags,
-	})
+	view, err := s.svc.ApplyMaterialAnalysis(c.Request.Context(), principal(c), c.Param("id"))
 	if err != nil {
 		respondError(c, err)
 		return

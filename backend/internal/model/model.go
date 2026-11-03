@@ -5,6 +5,8 @@ package model
 import (
 	"encoding/json"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // Roles of human accounts.
@@ -42,48 +44,68 @@ var AllScopes = []string{
 	ScopeAIRead, ScopeAIWrite, ScopeSearchRead, ScopeSearchWrite,
 }
 
-// Material roles describe the answer layout, not who the file is for.
+// Material parts describe what one file is inside its pack.
 const (
-	// RoleExam is a paper with questions only (typically the student copy).
-	RoleExam = "exam"
-	// RoleAnswer contains answers only (answer key or answer sheet).
-	RoleAnswer = "answer"
-	// RoleQuestionsAnswers contains questions and answers, with answers grouped
-	// at the end or in a separate answer section.
-	RoleQuestionsAnswers = "questions_answers"
-	// RoleTeacherEdition is a teacher copy where the answer/explanation follows
-	// each question.
-	RoleTeacherEdition = "teacher_edition"
-	// RoleLecture is tutorial material: explanations, worked examples and
-	// exercises are mixed together rather than forming a standalone exam.
-	RoleLecture = "lecture"
-	// RoleOther is used only when the material cannot be classified.
-	RoleOther = "other"
+	// PartQuestions is the question paper without answers.
+	PartQuestions = "questions"
+	// PartAnswers holds only answers or worked solutions.
+	PartAnswers = "answers"
+	// PartFull is questions followed by a separate answer section in one file.
+	PartFull = "full"
+	// PartTeacher is a teacher copy where each answer follows its question.
+	PartTeacher = "teacher"
+	// PartAnswerSheet is the blank answer sheet.
+	PartAnswerSheet = "answer_sheet"
+	// PartListening is listening audio or its transcript.
+	PartListening = "listening"
+	// PartMain is the body of a single-document pack (lecture notes, slides, guides).
+	PartMain = "main"
+	// PartOther is used only when the file cannot be classified.
+	PartOther = "other"
 )
 
-// MaterialRoles lists the accepted material roles.
-var MaterialRoles = []string{RoleExam, RoleAnswer, RoleQuestionsAnswers, RoleTeacherEdition, RoleLecture, RoleOther}
+// MaterialParts lists the accepted material parts.
+var MaterialParts = []string{PartQuestions, PartAnswers, PartFull, PartTeacher, PartAnswerSheet, PartListening, PartMain, PartOther}
 
-// Material statuses.
+// Material storage statuses (replica health, secondary to the curation stage).
 const (
 	StatusPendingStorage = "pending_storage"
 	StatusArchived       = "archived"
 	StatusDegraded       = "degraded"
 )
 
-// Collection kinds.
+// Material curation stages: the one status a person needs to read.
 const (
-	KindSeries = "series"
-	KindExam   = "exam"
-	KindFolder = "folder"
-	KindZip    = "zip"
-	KindCustom = "custom"
+	StageProcessing = "processing"
+	StageReview     = "review"
+	StageReady      = "ready"
+	StageFailed     = "failed"
 )
 
-var CollectionKinds = []string{KindSeries, KindExam, KindFolder, KindZip, KindCustom}
+// MaterialStages lists curation stages.
+var MaterialStages = []string{StageProcessing, StageReview, StageReady, StageFailed}
 
-// Grade values.
-var Grades = []string{"", "grade10", "grade11", "grade12"}
+// Reasons a material waits in the review inbox.
+const (
+	ReviewLowConfidence  = "low_confidence"
+	ReviewPackSuggestion = "pack_suggestion"
+	ReviewDuplicate      = "duplicate_suspect"
+	ReviewAnalysisFailed = "analysis_failed"
+	ReviewManual         = "manual"
+)
+
+// Pack document types: what kind of material a pack is.
+var DocTypes = []string{
+	"gaokao_real", "gaokao_mock", "zhongkao_real", "zhongkao_mock",
+	"joint", "monthly", "midterm", "final", "opening", "unit", "weekly",
+	"topic", "lecture", "study_guide", "courseware", "homework", "other",
+}
+
+// Grade values: junior grades are reserved for middle-school material.
+var Grades = []string{"", "grade7", "grade8", "grade9", "grade10", "grade11", "grade12"}
+
+// Term values.
+var Terms = []string{"", "first", "second"}
 
 // Upload and entry statuses.
 const (
@@ -94,6 +116,7 @@ const (
 
 	EntryPending  = "pending"
 	EntryReceived = "received"
+	EntryExisting = "existing"
 )
 
 // Job kinds and statuses.
@@ -226,75 +249,109 @@ type Blob struct {
 	CreatedAt time.Time
 }
 
-// Material is one logical archived file with its cataloguing metadata.
+// Material is one unique file (one SHA-256). Re-uploading the same content adds
+// a MaterialSource instead of a new row; parse, analysis and index results hang
+// off the material, so each content is processed and paid for once.
 type Material struct {
-	ID               string `gorm:"primaryKey;size:36"`
-	Title            string `gorm:"size:255;not null"`
-	Description      string `gorm:"type:text;not null"`
-	Grade            string `gorm:"size:16;not null"`
-	AcademicYear     int    `gorm:"not null"`
-	TagsJSON         string `gorm:"type:text;not null"`
-	Role             string `gorm:"size:32;not null;index"`
-	Status           string `gorm:"size:24;not null;index"`
-	BlobID           string `gorm:"size:36;not null;index"`
-	FileName         string `gorm:"type:text;not null"`
-	MediaType        string `gorm:"size:128;not null"`
-	SizeBytes        int64  `gorm:"not null"`
-	SHA256           string `gorm:"size:64;not null;index"`
-	SourcePath       string `gorm:"type:text;not null"`
-	ParentMaterialID string `gorm:"size:36;index"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                string `gorm:"primaryKey;size:36"`
+	PackID            string `gorm:"size:36;not null;index"`
+	Position          int    `gorm:"not null"`
+	Part              string `gorm:"size:32;not null;index"`
+	AnswerStartPage   int    `gorm:"not null"`
+	Title             string `gorm:"size:255;not null"`
+	FileName          string `gorm:"type:text;not null"`
+	OriginalName      string `gorm:"type:text;not null"`
+	Stage             string `gorm:"size:16;not null;index"`
+	ReviewReasonsJSON string `gorm:"type:text;not null"`
+	SuggestedPackID   string `gorm:"size:36"`
+	Status            string `gorm:"size:24;not null;index"`
+	BlobID            string `gorm:"size:36;not null;index"`
+	MediaType         string `gorm:"size:128;not null"`
+	SizeBytes         int64  `gorm:"not null"`
+	SHA256            string `gorm:"size:64;not null;uniqueIndex"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
 }
 
-// MaterialSubject links a material to subject codes (filterable).
-type MaterialSubject struct {
-	MaterialID string `gorm:"primaryKey;size:36"`
-	Code       string `gorm:"primaryKey;size:32;index"`
+// MaterialSource records each time and place a file arrived.
+type MaterialSource struct {
+	ID         string `gorm:"primaryKey;size:36"`
+	MaterialID string `gorm:"size:36;not null;index"`
+	UploadID   string `gorm:"size:36;index"`
+	UserID     string `gorm:"size:36"`
+	Path       string `gorm:"type:text;not null"`
+	Duplicate  bool   `gorm:"not null"`
+	CreatedAt  time.Time
 }
 
-// Collection groups materials. ParentID is empty for roots.
+// Pack is the unit people browse: one exam set (questions, answers, answer
+// sheet...) or one single-document resource. Catalogue fields live here and
+// every member file inherits them.
+type Pack struct {
+	ID            string `gorm:"primaryKey;size:36"`
+	Title         string `gorm:"size:255;not null"`
+	TitleLocked   bool   `gorm:"not null"`
+	CatalogLocked bool   `gorm:"not null"`
+	DocType       string `gorm:"size:32;not null;index"`
+	SubjectsJSON  string `gorm:"type:text;not null"`
+	Grade         string `gorm:"size:16;not null;index"`
+	Term          string `gorm:"size:16;not null"`
+	Cohort        int    `gorm:"not null;index"`
+	Region        string `gorm:"size:64;not null;index"`
+	Organization  string `gorm:"size:128;not null"`
+	ExamDate      string `gorm:"size:7;not null"`
+	ExamName      string `gorm:"size:255;not null"`
+	Chapter       string `gorm:"size:255;not null"`
+	TagsJSON      string `gorm:"type:text;not null"`
+	Description   string `gorm:"type:text;not null"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	DeletedAt     gorm.DeletedAt `gorm:"index"`
+}
+
+// PackSubject links a pack to subject codes (filterable).
+type PackSubject struct {
+	PackID string `gorm:"primaryKey;size:36"`
+	Code   string `gorm:"primaryKey;size:32;index"`
+}
+
+// Collection is a hand-curated topic ("专题") of packs.
 type Collection struct {
-	ID           string `gorm:"primaryKey;size:36"`
-	Title        string `gorm:"size:255;not null"`
-	Description  string `gorm:"type:text;not null"`
-	Kind         string `gorm:"size:16;not null"`
-	ParentID     string `gorm:"size:36;index"`
-	SubjectsJSON string `gorm:"type:text;not null"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID          string `gorm:"primaryKey;size:36"`
+	Title       string `gorm:"size:255;not null"`
+	Description string `gorm:"type:text;not null"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
-// CollectionItem places a material in a collection at an explicit position.
+// CollectionItem places a pack in a topic at an explicit position.
 type CollectionItem struct {
 	ID           string `gorm:"primaryKey;size:36"`
-	CollectionID string `gorm:"size:36;not null;uniqueIndex:uq_collection_material,priority:1;index"`
-	MaterialID   string `gorm:"size:36;not null;uniqueIndex:uq_collection_material,priority:2;index"`
+	CollectionID string `gorm:"size:36;not null;uniqueIndex:uq_collection_pack,priority:1;index"`
+	PackID       string `gorm:"size:36;not null;uniqueIndex:uq_collection_pack,priority:2;index"`
 	Position     int    `gorm:"not null"`
-	Role         string `gorm:"size:32;not null"`
-	RelativePath string `gorm:"type:text;not null"`
 	CreatedAt    time.Time
 }
 
-// Upload is a client-provided manifest of files to archive.
+// Upload is one batch of dropped files. It never creates collections; hints
+// are optional priors for analysis and the initial pack fields.
 type Upload struct {
 	ID             string `gorm:"primaryKey;size:36"`
 	UserID         string `gorm:"size:36;not null;index"`
 	Title          string `gorm:"size:255;not null"`
-	CollectionKind string `gorm:"size:16;not null"`
-	SubjectsJSON   string `gorm:"type:text;not null"`
-	Grade          string `gorm:"size:16;not null"`
-	AcademicYear   int    `gorm:"not null"`
-	TagsJSON       string `gorm:"type:text;not null"`
+	HintsJSON      string `gorm:"type:text;not null"`
 	Status         string `gorm:"size:16;not null;index"`
-	CollectionID   string `gorm:"size:36"`
-	MaterialID     string `gorm:"size:36"`
 	JobID          string `gorm:"size:36;index"`
+	NewCount       int    `gorm:"not null"`
+	DuplicateCount int    `gorm:"not null"`
+	SkippedJSON    string `gorm:"type:text;not null"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
 
-// UploadEntry is one file slot of an upload manifest.
+// UploadEntry is one file slot of an upload manifest. Status "existing" means
+// the declared SHA-256 is already archived, so no bytes need to be sent.
 type UploadEntry struct {
 	ID           string `gorm:"primaryKey;size:36"`
 	UploadID     string `gorm:"size:36;not null;index"`
@@ -456,7 +513,10 @@ type AISettings struct {
 	MinerUTokenCipher string `gorm:"column:mineru_token_cipher;type:text"`
 	MaxPages          int    `gorm:"not null"`
 	MaxImages         int    `gorm:"not null"`
-	UpdatedAt         time.Time
+	// AutoAcceptConfidence is the overall confidence at or above which an
+	// analysed file goes straight to ready instead of the review inbox.
+	AutoAcceptConfidence float64 `gorm:"not null;default:0.8"`
+	UpdatedAt            time.Time
 }
 
 // TableName pins the singleton settings table name.
@@ -551,7 +611,7 @@ type MaterialIndexState struct {
 func Models() []any {
 	return []any{
 		&User{}, &APIKey{}, &Session{}, &Audit{},
-		&Blob{}, &Material{}, &MaterialSubject{},
+		&Blob{}, &Material{}, &MaterialSource{}, &Pack{}, &PackSubject{},
 		&Collection{}, &CollectionItem{},
 		&Upload{}, &UploadEntry{}, &Job{}, &JobLock{},
 		&StorageProvider{}, &Replica{}, &Policy{},

@@ -91,6 +91,14 @@ type Service struct {
 var ErrBootstrapNeeded = errors.New("数据库中没有用户，需要设置 ADMIN_USERNAME 与 ADMIN_PASSWORD 进行首次自举")
 
 // New validates options and returns a Service.
+func init() {
+	// Packages accept the same formats as direct uploads.
+	archive.IsSupported = func(name string) bool {
+		_, ok := blob.ExtensionKind(name)
+		return ok
+	}
+}
+
 func New(opts Options) (*Service, error) {
 	if opts.DB == nil || opts.Blobs == nil || opts.Box == nil || opts.Signer == nil || opts.Limiter == nil {
 		return nil, errors.New("service: 缺少必要依赖")

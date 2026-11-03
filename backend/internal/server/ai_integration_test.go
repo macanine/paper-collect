@@ -114,7 +114,7 @@ func newFakeAI(t *testing.T) *fakeAI {
 			f.bodySeen = true
 		}
 		f.mu.Unlock()
-		content := `{"title":"2026 高三数学一轮练习","subject_codes":["math"],"grade":"grade12","academic_year":2026,"role":"exam","tags":["一轮复习","函数"],"confidence":0.87}`
+		content := `{"exam_name":"2026 高三数学一轮练习","doc_type":"topic","subject_codes":["math"],"grade":"grade12","cohort":2026,"part":"questions","tags":["一轮复习","函数"],"confidence":0.87}`
 		if bytes.Contains(raw, []byte("[PAGE")) {
 			pageRe := regexp.MustCompile(`\[PAGE (\d+)\]`)
 			matches := pageRe.FindAllSubmatch(raw, -1)
@@ -270,9 +270,9 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 			Confidence   float64 `json:"confidence"`
 			AppliedAt    *string `json:"applied_at"`
 			Suggestions  struct {
-				Title    string   `json:"title"`
+				ExamName string   `json:"exam_name"`
 				Subjects []string `json:"subject_codes"`
-				Role     string   `json:"role"`
+				Part     string   `json:"part"`
 			} `json:"suggestions"`
 			Error string `json:"error"`
 		} `json:"data"`
@@ -283,7 +283,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	if analysis.Data.Status != "succeeded" || analysis.Data.Error != "" {
 		t.Fatalf("analysis failed: %s", body)
 	}
-	if analysis.Data.Suggestions.Title == "" || analysis.Data.Suggestions.Role != "exam" {
+	if analysis.Data.Suggestions.ExamName == "" || analysis.Data.Suggestions.Part != "questions" {
 		t.Fatalf("unexpected suggestions: %s", body)
 	}
 	if analysis.Data.ImageCount != 0 || analysis.Data.ProviderName != "测试网关" {
@@ -306,37 +306,36 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	}
 	var automatic struct {
 		Data struct {
-			Title    string   `json:"title"`
-			FileName string   `json:"file_name"`
-			Subjects []string `json:"subject_codes"`
-			Year     int      `json:"academic_year"`
+			Title    string `json:"title"`
+			FileName string `json:"file_name"`
+			Stage    string `json:"stage"`
+			Pack     struct {
+				Cohort   int      `json:"cohort"`
+				Subjects []string `json:"subject_codes"`
+				ExamName string   `json:"exam_name"`
+			} `json:"pack"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &automatic); err != nil {
 		t.Fatalf("automatic apply body: %s", body)
 	}
-	if automatic.Data.Title != "2026 高三数学一轮练习" ||
-		automatic.Data.FileName != "2026 高三数学一轮练习.pdf" ||
-		automatic.Data.Year != 2026 {
+	// Confidence 0.87 is above the default 0.8 threshold: straight to ready.
+	if automatic.Data.Title != "2026届 专题练习 高三 数学 试题卷" ||
+		automatic.Data.FileName != "2026届 专题练习 高三 数学 试题卷.pdf" ||
+		automatic.Data.Pack.Cohort != 2026 || automatic.Data.Stage != "ready" {
 		t.Fatalf("automatic AI metadata not applied: %s", body)
 	}
 
+	// A manual edit locks the catalogue; re-applying is an explicit override.
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+materialID, nil, nil)
+	packID := jsonField(t, body, "pack_id")
+	status, body = env.do(t, http.MethodPatch, "/api/v1/packs/"+packID, map[string]any{"cohort": 2025}, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"cohort":2025`) {
+		t.Fatalf("manual edit %d: %s", status, body)
+	}
 	status, body = env.do(t, http.MethodPost, "/api/v1/materials/"+materialID+"/analysis/apply", map[string]any{}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("apply %d: %s", status, body)
-	}
-	var applied struct {
-		Data struct {
-			Title    string   `json:"title"`
-			Subjects []string `json:"subject_codes"`
-			Year     int      `json:"academic_year"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &applied); err != nil {
-		t.Fatalf("apply body: %s", body)
-	}
-	if applied.Data.Title != "2026 高三数学一轮练习" || applied.Data.Year != 2026 {
-		t.Fatalf("suggestions could not be reapplied: %s", body)
+	if status != http.StatusOK || !strings.Contains(string(body), `"cohort":2026`) {
+		t.Fatalf("suggestions could not be reapplied: %d %s", status, body)
 	}
 
 	// Idempotent second enqueue returns the existing analysis, not a new job.

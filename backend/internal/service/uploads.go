@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
@@ -15,15 +18,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// UploadInput is the manifest submitted by a client. Empty collection kind means "custom".
+// UploadInput is the manifest submitted by a client. Hints are optional
+// priors for analysis and the initial pack fields; nothing is required.
 type UploadInput struct {
-	Title          string
-	CollectionKind string
-	SubjectCodes   []string
-	Grade          string
-	AcademicYear   int
-	Tags           []string
-	Entries        []UploadEntryInput
+	Title   string
+	Hints   UploadHints
+	Entries []UploadEntryInput
+}
+
+// UploadHints describe a batch ("these are all 2025届 高三 数学").
+type UploadHints struct {
+	SubjectCodes []string `json:"subject_codes"`
+	Grade        string   `json:"grade"`
+	DocType      string   `json:"doc_type"`
+	Cohort       int      `json:"cohort"`
+	Region       string   `json:"region"`
+	Organization string   `json:"organization"`
+	Tags         []string `json:"tags"`
 }
 
 // UploadEntryInput declares one file. SHA256 may be empty and is then computed on receipt.
@@ -33,41 +44,82 @@ type UploadEntryInput struct {
 	SHA256       string
 }
 
-// UploadView is an upload with its entries in manifest order.
+// UploadView is an upload with its entries in manifest order and, once
+// processed, the files it produced.
 type UploadView struct {
 	Upload  model.Upload
+	Hints   UploadHints
+	Skipped []string
 	Entries []model.UploadEntry
+	Results []UploadResult
 }
 
-// CreateUpload records a manifest. It creates no materials; that happens when the upload is finalized.
-func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadInput) (UploadView, error) {
-	title, err := validateTitle(in.Title)
-	if err != nil {
-		return UploadView{}, err
-	}
-	kind := in.CollectionKind
-	if kind == "" {
-		kind = "custom"
-	}
-	if err := validateCollectionKind(kind); err != nil {
-		return UploadView{}, err
-	}
+// UploadResult is one file an upload produced or matched.
+type UploadResult struct {
+	Source   model.MaterialSource
+	Material model.Material
+	PackID   string
+}
+
+func validateHints(in UploadHints) (UploadHints, error) {
 	subjects, err := validateOptionalSubjects(in.SubjectCodes)
 	if err != nil {
-		return UploadView{}, err
+		return UploadHints{}, err
 	}
 	if err := validateGrade(in.Grade); err != nil {
-		return UploadView{}, err
+		return UploadHints{}, err
 	}
-	if err := validateYear(in.AcademicYear); err != nil {
-		return UploadView{}, err
+	if err := validateDocType(in.DocType); err != nil {
+		return UploadHints{}, err
+	}
+	if err := validateCohort(in.Cohort); err != nil {
+		return UploadHints{}, err
+	}
+	region, err := validateShortText("地区", in.Region, 64)
+	if err != nil {
+		return UploadHints{}, err
+	}
+	org, err := validateShortText("来源机构", in.Organization, 128)
+	if err != nil {
+		return UploadHints{}, err
 	}
 	tags, err := validateTags(in.Tags)
+	if err != nil {
+		return UploadHints{}, err
+	}
+	return UploadHints{SubjectCodes: subjects, Grade: in.Grade, DocType: in.DocType, Cohort: in.Cohort,
+		Region: region, Organization: org, Tags: tags}, nil
+}
+
+func decodeHints(raw string) UploadHints {
+	var h UploadHints
+	_ = json.Unmarshal([]byte(raw), &h)
+	if h.SubjectCodes == nil {
+		h.SubjectCodes = []string{}
+	}
+	if h.Tags == nil {
+		h.Tags = []string{}
+	}
+	return h
+}
+
+// CreateUpload records a manifest. Entries whose declared SHA-256 is already
+// archived are marked existing and need no transfer ("秒传").
+func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadInput) (UploadView, error) {
+	hints, err := validateHints(in.Hints)
 	if err != nil {
 		return UploadView{}, err
 	}
 	if n := len(in.Entries); n < 1 || n > maxUploadEntries {
 		return UploadView{}, apperr.Validation("清单文件数必须为 1 到 2000 个")
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = defaultUploadTitle(in.Entries)
+	}
+	title, err = validateTitle(truncateRunes(title, maxTitleRunes))
+	if err != nil {
+		return UploadView{}, err
 	}
 
 	seen := map[string]bool{}
@@ -80,7 +132,7 @@ func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadI
 		}
 		_, ok := blob.ExtensionKind(e.RelativePath)
 		if !ok {
-			return UploadView{}, apperr.UnsupportedMedia("仅支持 PDF、DOC、DOCX、PPTX 和 ZIP")
+			return UploadView{}, apperr.UnsupportedMedia("不支持该文件格式：" + path.Base(e.RelativePath))
 		}
 		if e.SizeBytes < 1 || e.SizeBytes > maxUploadBytes {
 			return UploadView{}, apperr.Validation("单文件大小必须为 1 字节到 512 MiB")
@@ -102,37 +154,31 @@ func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadI
 		sizes[e.RelativePath] = e
 	}
 
+	db := s.db.WithContext(ctx)
+	known, err := s.knownContent(db, sizes)
+	if err != nil {
+		return UploadView{}, err
+	}
+	hintsJSON, _ := json.Marshal(hints)
 	now := s.now()
 	up := model.Upload{
-		ID:             newID(),
-		UserID:         p.UserID,
-		Title:          title,
-		CollectionKind: kind,
-		SubjectsJSON:   model.EncodeStrings(subjects),
-		Grade:          in.Grade,
-		AcademicYear:   in.AcademicYear,
-		TagsJSON:       model.EncodeStrings(tags),
-		Status:         model.UploadPending,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID: newID(), UserID: p.UserID, Title: title, HintsJSON: string(hintsJSON),
+		Status: model.UploadPending, SkippedJSON: "[]", CreatedAt: now, UpdatedAt: now,
 	}
 	entries := make([]model.UploadEntry, 0, len(relPaths))
 	for i, rel := range sortedByNatural(relPaths) {
 		src := sizes[rel]
 		entry := model.UploadEntry{
-			ID:           newID(),
-			UploadID:     up.ID,
-			Position:     i,
-			RelativePath: rel,
-			SizeBytes:    src.SizeBytes,
-			SHA256:       src.SHA256,
-			Status:       model.EntryPending,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID: newID(), UploadID: up.ID, Position: i, RelativePath: rel, SizeBytes: src.SizeBytes,
+			SHA256: src.SHA256, Status: model.EntryPending, CreatedAt: now, UpdatedAt: now,
+		}
+		if mediaType, ok := known[src.SHA256]; ok && src.SHA256 != "" {
+			entry.Status = model.EntryExisting
+			entry.MediaType = mediaType
 		}
 		entries = append(entries, entry)
 	}
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&up).Error; err != nil {
 			return wrap("create upload", err)
 		}
@@ -144,7 +190,72 @@ func (s *Service) CreateUpload(ctx context.Context, p auth.Principal, in UploadI
 	if err != nil {
 		return UploadView{}, err
 	}
-	return UploadView{Upload: up, Entries: entries}, nil
+	return UploadView{Upload: up, Hints: hints, Skipped: []string{}, Entries: entries, Results: []UploadResult{}}, nil
+}
+
+// knownContent returns media types of declared hashes that are already
+// archived with matching size and whose original is still in the local CAS.
+// ZIP containers are never archived as files, so they always transfer.
+func (s *Service) knownContent(db *gorm.DB, entries map[string]UploadEntryInput) (map[string]string, error) {
+	out := map[string]string{}
+	sizes := map[string]int64{}
+	hashes := []string{}
+	for _, e := range entries {
+		if e.SHA256 != "" {
+			sizes[e.SHA256] = e.SizeBytes
+			hashes = append(hashes, e.SHA256)
+		}
+	}
+	for start := 0; start < len(hashes); start += 400 {
+		end := min(start+400, len(hashes))
+		var rows []model.Material
+		if err := db.Unscoped().Select("sha256", "size_bytes", "media_type").
+			Where("sha256 IN ?", hashes[start:end]).Find(&rows).Error; err != nil {
+			return nil, wrap("find known content", err)
+		}
+		for _, m := range rows {
+			if sizes[m.SHA256] == m.SizeBytes && s.blobs.Exists(m.SHA256) {
+				out[m.SHA256] = m.MediaType
+			}
+		}
+	}
+	return out, nil
+}
+
+func defaultUploadTitle(entries []UploadEntryInput) string {
+	if len(entries) == 0 {
+		return "上传"
+	}
+	first := entries[0].RelativePath
+	if i := strings.Index(first, "/"); i > 0 {
+		return first[:i]
+	}
+	name := strings.TrimSuffix(path.Base(first), path.Ext(first))
+	if len(entries) > 1 {
+		return fmt.Sprintf("%s 等 %d 个文件", name, len(entries))
+	}
+	return name
+}
+
+// ListUploads returns the caller's upload history (all uploads for admins).
+func (s *Service) ListUploads(ctx context.Context, p auth.Principal, pg PageQuery) (Page[UploadView], error) {
+	q := s.db.WithContext(ctx).Model(&model.Upload{})
+	if !p.IsAdmin() {
+		q = q.Where("user_id = ?", p.UserID)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return Page[UploadView]{}, wrap("count uploads", err)
+	}
+	var rows []model.Upload
+	if err := q.Order("created_at DESC").Order("id DESC").Limit(pg.PageSize).Offset(pg.offset()).Find(&rows).Error; err != nil {
+		return Page[UploadView]{}, wrap("list uploads", err)
+	}
+	items := make([]UploadView, 0, len(rows))
+	for _, up := range rows {
+		items = append(items, UploadView{Upload: up, Hints: decodeHints(up.HintsJSON), Skipped: model.DecodeStrings(up.SkippedJSON)})
+	}
+	return newPage(items, total, pg), nil
 }
 
 // GetUpload returns a manifest with entry status, so an interrupted client can resume.
@@ -161,7 +272,30 @@ func (s *Service) GetUpload(ctx context.Context, p auth.Principal, id string) (U
 	if err := db.Where("upload_id = ?", id).Order("position ASC").Find(&entries).Error; err != nil {
 		return UploadView{}, wrap("load entries", err)
 	}
-	return UploadView{Upload: up, Entries: entries}, nil
+	view := UploadView{Upload: up, Hints: decodeHints(up.HintsJSON), Skipped: model.DecodeStrings(up.SkippedJSON), Entries: entries, Results: []UploadResult{}}
+	var sources []model.MaterialSource
+	if err := db.Where("upload_id = ?", id).Order("created_at ASC").Order("path ASC").Find(&sources).Error; err != nil {
+		return UploadView{}, wrap("load upload results", err)
+	}
+	ids := make([]string, 0, len(sources))
+	for _, src := range sources {
+		ids = append(ids, src.MaterialID)
+	}
+	materials := map[string]model.Material{}
+	if len(ids) > 0 {
+		var rows []model.Material
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return UploadView{}, wrap("load upload materials", err)
+		}
+		for _, m := range rows {
+			materials[m.ID] = m
+		}
+	}
+	for _, src := range sources {
+		m := materials[src.MaterialID]
+		view.Results = append(view.Results, UploadResult{Source: src, Material: m, PackID: m.PackID})
+	}
+	return view, nil
 }
 
 // PutEntry streams and validates a file, then stores documents in the CAS or
@@ -179,6 +313,9 @@ func (s *Service) PutEntry(ctx context.Context, p auth.Principal, uploadID, entr
 	var entry model.UploadEntry
 	if err := db.Where("id = ? AND upload_id = ?", entryID, uploadID).First(&entry).Error; err != nil {
 		return model.UploadEntry{}, apperr.NotFound("文件条目不存在")
+	}
+	if entry.Status == model.EntryExisting {
+		return entry, nil
 	}
 	if up.Status != model.UploadPending {
 		return model.UploadEntry{}, apperr.Conflict("上传会话已完成，不能再上传文件")
@@ -227,7 +364,7 @@ func (s *Service) PutEntry(ctx context.Context, p auth.Principal, uploadID, entr
 		return model.UploadEntry{}, apperr.UnsupportedMedia("文件内容无法识别，或压缩包结构无效")
 	}
 	expected, ok := blob.ExtensionKind(entry.RelativePath)
-	if !ok || kind != expected {
+	if !ok || !blob.Compatible(kind, expected) {
 		return model.UploadEntry{}, apperr.UnsupportedMedia("文件真实格式与扩展名不一致")
 	}
 	archivePath := ""
@@ -246,7 +383,7 @@ func (s *Service) PutEntry(ctx context.Context, p auth.Principal, uploadID, entr
 		Updates(map[string]any{
 			"status":     model.EntryReceived,
 			"sha256":     sum,
-			"media_type": blob.MediaTypes[kind],
+			"media_type": blob.MediaTypes[expected],
 			"updated_at": s.now(),
 		})
 	if res.Error != nil {
@@ -290,7 +427,7 @@ func (s *Service) Finalize(ctx context.Context, p auth.Principal, uploadID strin
 	}
 	var missing int64
 	if err := db.Model(&model.UploadEntry{}).
-		Where("upload_id = ? AND status <> ?", uploadID, model.EntryReceived).Count(&missing).Error; err != nil {
+		Where("upload_id = ? AND status NOT IN ?", uploadID, []string{model.EntryReceived, model.EntryExisting}).Count(&missing).Error; err != nil {
 		return "", wrap("count missing", err)
 	}
 	if missing > 0 {

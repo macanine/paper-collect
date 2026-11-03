@@ -30,41 +30,38 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 		}
 		filter.Q = strings.TrimSpace(q)
 	}
-	if subject, ok := c.GetQuery("subject"); ok && subject != "" {
-		if !model.IsSubject(subject) {
-			respondError(c, apperr.Validation("subject 不在固定学科字典中"))
+	if stage := c.Query("stage"); stage != "" {
+		if !isOneOf(stage, model.MaterialStages...) {
+			respondError(c, apperr.Validation("stage 不在允许范围内"))
 			return
 		}
-		filter.Subject = subject
+		filter.Stage = stage
 	}
-	if role, ok := c.GetQuery("role"); ok && role != "" {
-		if !isOneOf(role, model.MaterialRoles...) {
-			respondError(c, apperr.Validation("role 不在允许范围内"))
+	if part := c.Query("part"); part != "" {
+		if !isOneOf(part, model.MaterialParts...) {
+			respondError(c, apperr.Validation("part 不在允许范围内"))
 			return
 		}
-		filter.Role = role
+		filter.Part = part
 	}
-	if status, ok := c.GetQuery("status"); ok && status != "" {
+	if status := c.Query("status"); status != "" {
 		if !isOneOf(status, model.StatusPendingStorage, model.StatusArchived, model.StatusDegraded) {
 			respondError(c, apperr.Validation("status 不在允许范围内"))
 			return
 		}
 		filter.Status = status
 	}
-	if grade, ok := c.GetQuery("grade"); ok && grade != "" {
-		if !isOneOf(grade, model.Grades...) {
-			respondError(c, apperr.Validation("grade 不在允许范围内"))
+	if reason := c.Query("reason"); reason != "" {
+		if !isOneOf(reason, model.ReviewLowConfidence, model.ReviewPackSuggestion, model.ReviewDuplicate, model.ReviewAnalysisFailed, model.ReviewManual) {
+			respondError(c, apperr.Validation("reason 不在允许范围内"))
 			return
 		}
-		filter.Grade = grade
+		filter.Reason = reason
 	}
+	filter.PackID = strings.TrimSpace(c.Query("pack_id"))
 	if sha, ok := c.GetQuery("sha256"); ok && sha != "" {
 		value := strings.ToLower(strings.TrimSpace(sha))
-		if len(value) != 64 {
-			respondError(c, apperr.Validation("sha256 必须是 64 位十六进制字符串"))
-			return
-		}
-		if _, err := hex.DecodeString(value); err != nil {
+		if _, err := hex.DecodeString(value); err != nil || len(value) != 64 {
 			respondError(c, apperr.Validation("sha256 必须是 64 位十六进制字符串"))
 			return
 		}
@@ -75,20 +72,19 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, toPage(page, func(v service.MaterialView) materialDTO {
-		return toMaterial(v.Material, v.Subjects)
-	}))
+	s.respondData(c, http.StatusOK, toPage(page, toMaterial))
 }
 
-func (s *Server) handleMaterialStats(c *gin.Context) {
-	counts, err := s.svc.GetMaterialStats(c.Request.Context())
+func (s *Server) handleLibraryStats(c *gin.Context) {
+	counts, err := s.svc.GetLibraryStats(c.Request.Context())
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, materialStatsDTO{
-		Total: counts.Total, PendingStorage: counts.PendingStorage,
-		Archived: counts.Archived, Degraded: counts.Degraded,
+	s.respondData(c, http.StatusOK, libraryStatsDTO{
+		Packs: counts.Packs, Files: counts.Files, Processing: counts.Processing, Review: counts.Review,
+		Ready: counts.Ready, Failed: counts.Failed, MissingAnswers: counts.MissingAnswers, Trashed: counts.Trashed,
+		PendingStorage: counts.PendingStorage, Archived: counts.Archived, Degraded: counts.Degraded,
 	})
 }
 
@@ -103,33 +99,39 @@ func (s *Server) handleGetMaterial(c *gin.Context) {
 
 func (s *Server) handlePatchMaterial(c *gin.Context) {
 	var req struct {
-		Title        *string   `json:"title"`
-		Description  *string   `json:"description"`
-		SubjectCodes *[]string `json:"subject_codes"`
-		Grade        *string   `json:"grade"`
-		AcademicYear *int      `json:"academic_year"`
-		Tags         *[]string `json:"tags"`
-		Role         *string   `json:"role"`
+		Part            *string `json:"part"`
+		AnswerStartPage *int    `json:"answer_start_page"`
+		PackID          *string `json:"pack_id"`
+		NewPack         bool    `json:"new_pack"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	patch := service.MaterialPatch{
-		Title:        req.Title,
-		Description:  req.Description,
-		SubjectCodes: req.SubjectCodes,
-		Grade:        req.Grade,
-		AcademicYear: req.AcademicYear,
-		Tags:         req.Tags,
-		Role:         req.Role,
-	}
+	patch := service.MaterialPatch{Part: req.Part, AnswerStartPage: req.AnswerStartPage, PackID: req.PackID, NewPack: req.NewPack}
 	view, err := s.svc.UpdateMaterial(c.Request.Context(), principal(c), c.Param("id"), patch)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
 	s.respondData(c, http.StatusOK, toMaterialDetail(view))
+}
+
+func (s *Server) handleAcceptMaterials(c *gin.Context) {
+	var req struct {
+		IDs              []string `json:"ids"`
+		AcceptSuggestion bool     `json:"accept_suggestion"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	n, err := s.svc.AcceptMaterials(c.Request.Context(), principal(c), req.IDs, req.AcceptSuggestion)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, countDTO{Count: n})
 }
 
 func (s *Server) handleDownloadMaterial(c *gin.Context) {
@@ -240,8 +242,7 @@ func isOneOf(value string, options ...string) bool {
 }
 
 func (s *Server) handleDeleteMaterial(c *gin.Context) {
-	cascade := isTrueQuery(c, "cascade")
-	if err := s.svc.DeleteMaterial(c.Request.Context(), principal(c), c.Param("id"), cascade); err != nil {
+	if err := s.svc.TrashMaterial(c.Request.Context(), principal(c), c.Param("id")); err != nil {
 		respondError(c, err)
 		return
 	}

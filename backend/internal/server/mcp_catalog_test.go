@@ -104,6 +104,12 @@ func handlerFieldKind(expr ast.Expr) string {
 			return "boolean"
 		case "int", "int64":
 			return "integer"
+		case "float64":
+			return "number"
+		}
+		if typ.Obj != nil || (typ.Name != "" && typ.Name[0] >= 'a' && typ.Name[0] <= 'z') {
+			// A named request struct is sent as one JSON object.
+			return "object"
 		}
 	case *ast.ArrayType:
 		if name, ok := typ.Elt.(*ast.Ident); ok && name.Name == "string" {

@@ -16,7 +16,7 @@ import (
 
 func TestBackfillMathIndexPreservesExistingQuestionsAndSearchesFormulas(t *testing.T) {
 	svc, db := newWorkerTestService(t, t.TempDir(), "math-backfill")
-	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam}
+	material := model.Material{ID: newID(), PackID: testPackID(t, db), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()}
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestBackfillMathIndexPreservesExistingQuestionsAndSearchesFormulas(t *testi
 
 func TestSearchQuestionsPaginatesStableMatchedPassages(t *testing.T) {
 	svc, db := newWorkerTestService(t, t.TempDir(), "matched-passage")
-	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam}
+	material := model.Material{ID: newID(), PackID: testPackID(t, db), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()}
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestSearchQuestionsPaginatesStableMatchedPassages(t *testing.T) {
 
 func TestFormulaSearchKeepsMatchesAheadOfTextOnlyCandidates(t *testing.T) {
 	svc, db := newWorkerTestService(t, t.TempDir(), "math-candidate-limit")
-	material := model.Material{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Role: model.RoleExam}
+	material := model.Material{ID: newID(), PackID: testPackID(t, db), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()}
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}

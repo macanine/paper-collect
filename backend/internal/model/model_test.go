@@ -8,28 +8,35 @@ import (
 	"testing"
 )
 
-func TestMaterialRoleColumnsFitAllowedValues(t *testing.T) {
-	longest := 0
-	for _, role := range MaterialRoles {
-		if len(role) > longest {
-			longest = len(role)
-		}
+func TestEnumColumnsFitAllowedValues(t *testing.T) {
+	cases := []struct {
+		value  any
+		field  string
+		values []string
+	}{
+		{Material{}, "Part", MaterialParts},
+		{Material{}, "Stage", MaterialStages},
+		{Pack{}, "DocType", DocTypes},
+		{Pack{}, "Grade", Grades},
+		{Pack{}, "Term", Terms},
 	}
-
-	for name, value := range map[string]any{
-		"Material":       Material{},
-		"CollectionItem": CollectionItem{},
-	} {
-		field, ok := reflect.TypeOf(value).FieldByName("Role")
+	for _, tc := range cases {
+		longest := 0
+		for _, v := range tc.values {
+			if len(v) > longest {
+				longest = len(v)
+			}
+		}
+		field, ok := reflect.TypeOf(tc.value).FieldByName(tc.field)
 		if !ok {
-			t.Fatalf("%s.Role not found", name)
+			t.Fatalf("%T.%s not found", tc.value, tc.field)
 		}
 		size, err := gormSize(field.Tag.Get("gorm"))
 		if err != nil {
-			t.Fatalf("%s.Role: %v", name, err)
+			t.Fatalf("%T.%s: %v", tc.value, tc.field, err)
 		}
 		if size < longest {
-			t.Errorf("%s.Role column size is %d; longest allowed role requires %d", name, size, longest)
+			t.Errorf("%T.%s column size is %d; longest allowed value requires %d", tc.value, tc.field, size, longest)
 		}
 	}
 }

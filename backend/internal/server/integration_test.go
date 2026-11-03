@@ -149,7 +149,7 @@ func (e *testEnv) upload(t *testing.T, title string, files map[string][]byte) (u
 		names = append(names, name)
 	}
 	manifest := map[string]any{
-		"title": title, "collection_kind": "folder", "subject_codes": []string{"math"},
+		"title": title, "hints": map[string]any{"subject_codes": []string{"math"}},
 	}
 	list := make([]map[string]any, 0, len(names))
 	for _, name := range names {
@@ -233,10 +233,11 @@ func (e *testEnv) finalizeAndWait(t *testing.T, uploadID string) {
 
 func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 	env := newEnv(t)
-	pdf := minimalPDF()
+	pdf := pdfWith("student")
 	packageZip := zipWith(t, map[string][]byte{
 		"学生版.pdf":    pdf,
-		"答案/教师版.pdf": pdf,
+		"答案/教师版.pdf": pdfWith("teacher"),
+		"答案/答案.pdf":  pdfWith("answers"),
 	})
 	uploadID, _ := env.upload(t, "2026 高三数学一套", map[string][]byte{
 		"试卷/学生版.pdf": pdf,
@@ -265,19 +266,20 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 		Data struct {
 			Total int `json:"total"`
 			Items []struct {
-				Title      string `json:"title"`
-				Role       string `json:"role"`
-				Status     string `json:"status"`
-				FileName   string `json:"file_name"`
-				SourcePath string `json:"source_path"`
+				ID           string `json:"id"`
+				Part         string `json:"part"`
+				Status       string `json:"status"`
+				FileName     string `json:"file_name"`
+				OriginalName string `json:"original_name"`
 			} `json:"items"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
 		t.Fatalf("list body: %s", body)
 	}
+	// The same student copy arrived twice (folder and ZIP): one file, two sources.
 	if list.Data.Total != 3 {
-		t.Fatalf("expected only three documents, got %d: %s", list.Data.Total, body)
+		t.Fatalf("expected three unique documents, got %d: %s", list.Data.Total, body)
 	}
 	foundZipMember := false
 	for _, item := range list.Data.Items {
@@ -287,10 +289,10 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 		if item.Status != "archived" {
 			t.Fatalf("material %s status %s, want archived (replica not ready)", item.FileName, item.Status)
 		}
-		if strings.Contains(item.SourcePath, "答案/教师版.pdf") {
+		if item.OriginalName == "教师版.pdf" {
 			foundZipMember = true
-			if item.Role != "teacher_edition" {
-				t.Fatalf("expected role suggestion teacher_edition, got %s", item.Role)
+			if item.Part != "teacher" {
+				t.Fatalf("expected part suggestion teacher, got %s", item.Part)
 			}
 		}
 	}
@@ -299,50 +301,17 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 	}
 
 	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), "\"zip\"") {
-		t.Fatalf("expected a zip collection: %d %s", status, body)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":0`) {
+		t.Fatalf("uploads must not create topics: %d %s", status, body)
 	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/uploads/"+uploadID, nil, nil)
-	var upload struct {
-		Data struct {
-			CollectionID string `json:"collection_id"`
-		} `json:"data"`
+	result := env.uploadResult(t, uploadID)
+	if result.Data.NewCount != 3 || result.Data.DuplicateCount != 1 || len(result.Data.Results) != 4 {
+		t.Fatalf("upload results must list every arrival: %+v", result.Data)
 	}
-	if status != http.StatusOK || json.Unmarshal(body, &upload) != nil || upload.Data.CollectionID == "" {
-		t.Fatalf("load root collection id: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+upload.Data.CollectionID, nil, nil)
-	var root struct {
-		Data struct {
-			Items []struct {
-				RelativePath string `json:"relative_path"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if status != http.StatusOK || json.Unmarshal(body, &root) != nil || len(root.Data.Items) != 1 || root.Data.Items[0].RelativePath != "试卷/学生版.pdf" {
-		t.Fatalf("root should contain only the ordinary top-level file: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections?parent_id="+upload.Data.CollectionID, nil, nil)
-	var children struct {
-		Data struct {
-			Items []struct {
-				ID string `json:"id"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if status != http.StatusOK || json.Unmarshal(body, &children) != nil || len(children.Data.Items) != 1 {
-		t.Fatalf("expected one ZIP child: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+children.Data.Items[0].ID, nil, nil)
-	var child struct {
-		Data struct {
-			Items []struct {
-				RelativePath string `json:"relative_path"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if status != http.StatusOK || json.Unmarshal(body, &child) != nil || len(child.Data.Items) != 2 {
-		t.Fatalf("ZIP child should contain its two members: %s", body)
+	// 教师版 and 答案 are named only by their part, so the folder they share
+	// makes them one set; the student copy sits elsewhere.
+	if got := env.listPacks(t, ""); got.Data.Total != 2 {
+		t.Fatalf("expected two packs: %+v", got.Data)
 	}
 }
 
@@ -623,172 +592,188 @@ func TestUnauthenticatedRequestsAreRejected(t *testing.T) {
 	}
 }
 
-func TestDeleteCollectionsAndMaterials(t *testing.T) {
+// pdfWith returns a minimal PDF whose bytes (and so SHA-256) depend on text.
+func pdfWith(text string) []byte {
+	return []byte("%PDF-1.4\n% " + text + "\n1 0 obj<</Type/Catalog>>endobj\ntrailer<<>>\n%%EOF\n")
+}
+
+type packListBody struct {
+	Data struct {
+		Total int `json:"total"`
+		Items []struct {
+			ID         string `json:"id"`
+			Title      string `json:"title"`
+			HasAnswers bool   `json:"has_answers"`
+			Members    []struct {
+				ID       string `json:"id"`
+				Part     string `json:"part"`
+				FileName string `json:"file_name"`
+			} `json:"members"`
+		} `json:"items"`
+	} `json:"data"`
+}
+
+func (e *testEnv) listPacks(t *testing.T, query string) packListBody {
+	t.Helper()
+	status, body := e.do(t, http.MethodGet, "/api/v1/packs?page=1&page_size=50"+query, nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("list packs %d: %s", status, body)
+	}
+	var out packListBody
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("packs body: %s", body)
+	}
+	return out
+}
+
+func TestDedupPairingTrashAndTopics(t *testing.T) {
 	env := newEnv(t)
-	zipBytes := zipWith(t, map[string][]byte{"学生版.pdf": minimalPDF(), "答案.pdf": minimalPDF()})
-	uploadID, _ := env.upload(t, "待删除合集", map[string][]byte{"资料.zip": zipBytes})
+	first := map[string][]byte{
+		"2025联考/数学试题.pdf": pdfWith("math-q"),
+		"2025联考/数学答案.pdf": pdfWith("math-a"),
+		"其他/物理讲义.pdf":     pdfWith("physics"),
+	}
+	uploadID, _ := env.upload(t, "第一批", first)
 	env.finalizeAndWait(t, uploadID)
 
-	status, body := env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=20&roots=true", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("roots %d: %s", status, body)
+	packs := env.listPacks(t, "")
+	if packs.Data.Total != 2 {
+		t.Fatalf("siblings must pair into one pack: %+v", packs.Data)
 	}
-	var roots struct {
-		Data struct {
-			Items []struct {
-				ID string `json:"id"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &roots); err != nil || len(roots.Data.Items) != 1 {
-		t.Fatalf("roots body: %s", body)
-	}
-	rootID := roots.Data.Items[0].ID
-
-	// Deleting the root collection cascades into the ZIP child but keeps materials.
-	status, body = env.do(t, http.MethodDelete, "/api/v1/collections/"+rootID, nil, nil)
-	if status != http.StatusConflict {
-		t.Fatalf("expected a conflict for the ZIP child collection: %d %s", status, body)
-	}
-	status, body = env.do(t, http.MethodDelete, "/api/v1/collections/"+rootID+"?cascade=true", nil, nil)
-	if status != http.StatusNoContent {
-		t.Fatalf("delete collection %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), "\"total\":2") {
-		t.Fatalf("materials must survive collection deletion: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), "\"total\":0") {
-		t.Fatalf("collections not deleted: %s", body)
-	}
-
-	// Simulate a ZIP material and children from an older version.
-	var saved []model.Material
-	if err := env.db.Find(&saved).Error; err != nil || len(saved) != 2 {
-		t.Fatalf("load members: %v", err)
-	}
-	parent := saved[0]
-	parent.ID, parent.FileName, parent.Title, parent.SourcePath = "legacy-parent", "旧资料.zip", "旧资料", "旧资料.zip"
-	parent.MediaType = "application/zip"
-	if err := env.db.Create(&parent).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := env.db.Model(&model.Material{}).Where("id IN ?", []string{saved[0].ID, saved[1].ID}).Update("parent_material_id", parent.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	// Find the historical ZIP container and require explicit cascade for its children.
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("list legacy materials %d: %s", status, body)
-	}
-	var list struct {
-		Data struct {
-			Items []struct {
-				ID       string `json:"id"`
-				FileName string `json:"file_name"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		t.Fatalf("materials body: %s", body)
-	}
-	zipID := ""
-	for _, item := range list.Data.Items {
-		if strings.HasSuffix(item.FileName, ".zip") {
-			zipID = item.ID
+	var mathPack string
+	for _, p := range packs.Data.Items {
+		if len(p.Members) == 2 {
+			mathPack = p.ID
+			if !p.HasAnswers {
+				t.Fatalf("paired pack must report answers: %+v", p)
+			}
+			for _, m := range p.Members {
+				if !strings.Contains(m.FileName, "试题卷") && !strings.Contains(m.FileName, "答案解析") {
+					t.Fatalf("member file names must follow the canonical part name: %+v", p.Members)
+				}
+			}
 		}
 	}
-	if zipID == "" {
-		t.Fatalf("zip material not found: %s", body)
+	if mathPack == "" {
+		t.Fatalf("math pack not found: %+v", packs.Data)
 	}
-	status, body = env.do(t, http.MethodDelete, "/api/v1/materials/"+zipID, nil, nil)
-	if status != http.StatusConflict {
-		t.Fatalf("expected 409 without cascade, got %d: %s", status, body)
+
+	// Re-uploading the same content only adds sources.
+	second := map[string][]byte{
+		"转发/数学试题(1).pdf": pdfWith("math-q"),
+		"转发/化学周测.pdf":    pdfWith("chem"),
 	}
-	status, body = env.do(t, http.MethodDelete, "/api/v1/materials/"+zipID+"?cascade=true", nil, nil)
+	uploadID, _ = env.upload(t, "第二批", second)
+	env.finalizeAndWait(t, uploadID)
+	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+uploadID, nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"new_count":1`) || !strings.Contains(string(body), `"duplicate_count":1`) {
+		t.Fatalf("upload must report one new and one duplicate file: %s", body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=50", nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":4`) {
+		t.Fatalf("duplicates must not create files: %s", body)
+	}
+
+	// Topics keep packs when deleted.
+	status, body = env.do(t, http.MethodPost, "/api/v1/collections", map[string]any{"title": "导数专题", "pack_ids": []string{mathPack}}, nil)
+	if status != http.StatusCreated || !strings.Contains(string(body), `"pack_count":1`) {
+		t.Fatalf("create topic %d: %s", status, body)
+	}
+	if got := env.listPacks(t, "&collection_id="+jsonField(t, body, "id")); got.Data.Total != 1 {
+		t.Fatalf("topic filter: %+v", got.Data)
+	}
+	status, body = env.do(t, http.MethodDelete, "/api/v1/collections/"+jsonField(t, body, "id"), nil, nil)
 	if status != http.StatusNoContent {
-		t.Fatalf("delete zip %d: %s", status, body)
+		t.Fatalf("delete topic %d: %s", status, body)
 	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), "\"total\":0") {
-		t.Fatalf("cascade did not remove children: %s", body)
+
+	// Trash, restore, purge.
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/trash", map[string]any{"ids": []string{mathPack}}, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"count":1`) {
+		t.Fatalf("trash %d: %s", status, body)
+	}
+	if got := env.listPacks(t, ""); got.Data.Total != 2 {
+		t.Fatalf("trashed pack must leave the library: %+v", got.Data)
+	}
+	if got := env.listPacks(t, "&trashed=true"); got.Data.Total != 1 {
+		t.Fatalf("trashed pack must be listed in the bin: %+v", got.Data)
+	}
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/purge", map[string]any{"ids": []string{packs.Data.Items[0].ID, packs.Data.Items[1].ID}}, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("purging live packs must be refused: %d %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/restore", map[string]any{"ids": []string{mathPack}}, nil)
+	if status != http.StatusOK || env.listPacks(t, "").Data.Total != 3 {
+		t.Fatalf("restore %d: %s", status, body)
+	}
+	env.do(t, http.MethodPost, "/api/v1/packs/trash", map[string]any{"ids": []string{mathPack}}, nil)
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/purge", map[string]any{"ids": []string{mathPack}}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("purge %d: %s", status, body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=50", nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"total":2`) {
+		t.Fatalf("purge must remove the pack files: %s", body)
+	}
+	if got := env.listPacks(t, "&trashed=true"); got.Data.Total != 0 {
+		t.Fatalf("bin must be empty: %+v", got.Data)
 	}
 }
 
-func TestMaterialRoleSyncsCollectionItems(t *testing.T) {
+func TestSplitMergeAndBulkEditPacks(t *testing.T) {
 	env := newEnv(t)
-	uploadID, _ := env.upload(t, "角色同步测试", map[string][]byte{"学生版.pdf": minimalPDF()})
+	uploadID, _ := env.upload(t, "配套", map[string][]byte{
+		"卷/英语试题.pdf": pdfWith("en-q"),
+		"卷/英语答案.pdf": pdfWith("en-a"),
+	})
 	env.finalizeAndWait(t, uploadID)
-
-	status, body := env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10", nil, nil)
+	packs := env.listPacks(t, "")
+	if packs.Data.Total != 1 || len(packs.Data.Items[0].Members) != 2 {
+		t.Fatalf("expected one pair: %+v", packs.Data)
+	}
+	pack := packs.Data.Items[0]
+	answer := pack.Members[1].ID
+	status, body := env.do(t, http.MethodPatch, "/api/v1/materials/"+answer, map[string]any{"new_pack": true}, nil)
 	if status != http.StatusOK {
-		t.Fatalf("materials %d: %s", status, body)
+		t.Fatalf("split %d: %s", status, body)
 	}
-	var list struct {
-		Data struct {
-			Items []struct {
-				ID   string `json:"id"`
-				Role string `json:"role"`
-			} `json:"items"`
-		} `json:"data"`
+	if got := env.listPacks(t, ""); got.Data.Total != 2 {
+		t.Fatalf("split must create a pack: %+v", got.Data)
 	}
-	if err := json.Unmarshal(body, &list); err != nil || len(list.Data.Items) != 1 {
-		t.Fatalf("materials body: %s", body)
+	newPack := jsonField(t, body, "pack_id")
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/"+pack.ID+"/merge", map[string]any{"source_ids": []string{newPack}}, nil)
+	if status != http.StatusOK || env.listPacks(t, "").Data.Total != 1 {
+		t.Fatalf("merge %d: %s", status, body)
 	}
-	materialID := list.Data.Items[0].ID
-
-	status, body = env.do(t, http.MethodPatch, "/api/v1/materials/"+materialID, map[string]any{"role": "questions_answers"}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("patch role %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=10&roots=true", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("collections %d: %s", status, body)
-	}
-	var roots struct {
-		Data struct {
-			Items []struct {
-				ID string `json:"id"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &roots); err != nil || len(roots.Data.Items) != 1 {
-		t.Fatalf("roots body: %s", body)
-	}
-	collectionID := roots.Data.Items[0].ID
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+collectionID, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"role":"questions_answers"`) {
-		t.Fatalf("item role not synced: %s", body)
-	}
-
-	// Item role is always derived from the material; PUT cannot override it.
-	status, body = env.do(t, http.MethodPut, "/api/v1/collections/"+collectionID+"/items", map[string]any{
-		"items": []map[string]any{{
-			"material_id": materialID, "position": 0, "role": "answer", "relative_path": "学生版.pdf",
-		}},
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/bulk", map[string]any{
+		"ids": []string{pack.ID}, "patch": map[string]any{"doc_type": "monthly", "grade": "grade11", "cohort": 2026, "subject_codes": []string{"english"}, "exam_date": "2025-03"},
 	}, nil)
 	if status != http.StatusOK {
-		t.Fatalf("put items %d: %s", status, body)
+		t.Fatalf("bulk %d: %s", status, body)
 	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+collectionID, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"role":"questions_answers"`) {
-		t.Fatalf("item role must follow material, got: %s", body)
+	got := env.listPacks(t, "&doc_type=monthly&grade=grade11&cohort=2026&subject=english")
+	if got.Data.Total != 1 || got.Data.Items[0].Title != "2026届 3月月考 高二 英语" {
+		t.Fatalf("bulk edit must rename the pack: %+v", got.Data)
 	}
-	status, body = env.do(t, http.MethodPatch, "/api/v1/materials/"+materialID, map[string]any{"role": "teacher_edition"}, nil)
+	if missing := env.listPacks(t, "&missing=answers"); missing.Data.Total != 0 {
+		t.Fatalf("complete pack must not be listed as missing answers: %+v", missing.Data)
+	}
+	status, _ = env.do(t, http.MethodGet, "/api/v1/packs/"+pack.ID+"/download", nil, nil)
 	if status != http.StatusOK {
-		t.Fatalf("patch role again %d: %s", status, body)
+		t.Fatalf("pack download %d", status)
 	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+collectionID, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"role":"teacher_edition"`) {
-		t.Fatalf("role change did not follow material: %s", body)
-	}
+}
 
-	// Title and filename are one name: editing the title rewrites the filename.
-	status, body = env.do(t, http.MethodPatch, "/api/v1/materials/"+materialID, map[string]any{"title": "改名后的资料"}, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"file_name":"改名后的资料.pdf"`) {
-		t.Fatalf("filename not synced with title: %s", body)
+func jsonField(t *testing.T, body []byte, field string) string {
+	t.Helper()
+	var envelope struct {
+		Data map[string]any `json:"data"`
 	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("body: %s", body)
+	}
+	v, _ := envelope.Data[field].(string)
+	return v
 }
 
 func TestZIPReportsUnsupportedMembers(t *testing.T) {
@@ -907,7 +892,7 @@ func TestConcurrentZIPUploadsDoNotReplaceWinningContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	upload, err := env.svc.CreateUpload(t.Context(), principal, service.UploadInput{
-		Title: "竞争上传", CollectionKind: "zip", Entries: []service.UploadEntryInput{{RelativePath: "资料.zip", SizeBytes: int64(len(first))}},
+		Title: "竞争上传", Entries: []service.UploadEntryInput{{RelativePath: "资料.zip", SizeBytes: int64(len(first))}},
 	})
 	if err != nil {
 		t.Fatal(err)

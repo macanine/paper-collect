@@ -67,19 +67,76 @@ func validateOptionalSubjects(codes []string) ([]string, error) {
 }
 
 func validateGrade(g string) error {
-	for _, v := range model.Grades {
-		if v == g {
-			return nil
-		}
+	if oneOf(g, model.Grades) {
+		return nil
 	}
-	return apperr.Validation("年级只能是空、grade10、grade11 或 grade12")
+	return apperr.Validation("年级只能是空或 grade7 到 grade12")
 }
 
-func validateYear(y int) error {
+func validateTerm(t string) error {
+	if oneOf(t, model.Terms) {
+		return nil
+	}
+	return apperr.Validation("学期只能是空、first 或 second")
+}
+
+func validateDocType(t string) error {
+	if t == "" || oneOf(t, model.DocTypes) {
+		return nil
+	}
+	return apperr.Validation("资料类型不在允许范围内")
+}
+
+func validatePart(part string) error {
+	if oneOf(part, model.MaterialParts) {
+		return nil
+	}
+	return apperr.Validation("文件部件类型不在允许范围内")
+}
+
+// validateCohort accepts 0 (unknown) or a graduation year ("届").
+func validateCohort(y int) error {
 	if y != 0 && (y < minYear || y > maxYear) {
-		return apperr.Validation("学年必须为 0 或 1900 到 2200 之间的整数")
+		return apperr.Validation("届别必须为 0 或 1900 到 2200 之间的整数")
 	}
 	return nil
+}
+
+// validateExamDate accepts "" or YYYY-MM.
+func validateExamDate(v string) error {
+	if v == "" {
+		return nil
+	}
+	if len(v) != 7 || v[4] != '-' {
+		return apperr.Validation("考试时间格式必须为 YYYY-MM")
+	}
+	for i, r := range v {
+		if i != 4 && (r < '0' || r > '9') {
+			return apperr.Validation("考试时间格式必须为 YYYY-MM")
+		}
+	}
+	if month := v[5:]; month < "01" || month > "12" {
+		return apperr.Validation("考试时间月份必须为 01 到 12")
+	}
+	return nil
+}
+
+// validateShortText trims and bounds a free-text catalogue field.
+func validateShortText(label, raw string, limit int) (string, error) {
+	v := strings.TrimSpace(raw)
+	if runeLen(v) > limit {
+		return "", apperr.Validation(label + "过长")
+	}
+	return v, nil
+}
+
+func oneOf(v string, allowed []string) bool {
+	for _, a := range allowed {
+		if a == v {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTags(raw []string) ([]string, error) {
@@ -100,24 +157,6 @@ func validateTags(raw []string) ([]string, error) {
 		out = append(out, t)
 	}
 	return out, nil
-}
-
-func validateRole(role string) error {
-	for _, r := range model.MaterialRoles {
-		if r == role {
-			return nil
-		}
-	}
-	return apperr.Validation("资料角色不在允许范围内")
-}
-
-func validateCollectionKind(kind string) error {
-	for _, k := range model.CollectionKinds {
-		if k == kind {
-			return nil
-		}
-	}
-	return apperr.Validation("合集类型不在允许范围内")
 }
 
 func validateRelativePath(p string) error {
@@ -148,6 +187,10 @@ var DefaultPage = PageQuery{Page: 1, PageSize: 20}
 
 // likePattern escapes LIKE wildcards with '!' so the ESCAPE clause works on both databases.
 func likePattern(q string) string {
-	r := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
-	return "%" + r.Replace(strings.ToLower(q)) + "%"
+	return "%" + likeEscape(strings.ToLower(q)) + "%"
+}
+
+// likeEscape escapes LIKE wildcards without changing case.
+func likeEscape(q string) string {
+	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(q)
 }

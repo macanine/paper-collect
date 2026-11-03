@@ -112,8 +112,20 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `ai_settings_get` | `GET /api/v1/ai/settings` | `ai:read` |
 | `ai_settings_update` | `PUT /api/v1/ai/settings` | `ai:write` |
 | `ai_mineru_test` | `POST /api/v1/ai/mineru/test` | `ai:write` |
+| `packs_search` | `GET /api/v1/packs` | `materials:read` |
+| `packs_facets` | `GET /api/v1/packs/facets` | `materials:read` |
+| `packs_get` | `GET /api/v1/packs/:id` | `materials:read` |
+| `packs_update` | `PATCH /api/v1/packs/:id` | `materials:write` |
+| `packs_bulk_update` | `POST /api/v1/packs/bulk` | `materials:write` |
+| `packs_merge` | `POST /api/v1/packs/:id/merge` | `materials:write` |
+| `packs_reorder` | `PUT /api/v1/packs/:id/order` | `materials:write` |
+| `packs_trash` | `POST /api/v1/packs/trash` | `materials:write` |
+| `packs_restore` | `POST /api/v1/packs/restore` | `materials:write` |
+| `packs_purge` | `POST /api/v1/packs/purge` | `materials:write` |
+| `packs_download` | `GET /api/v1/packs/:id/download` | `materials:read` |
 | `materials_search` | `GET /api/v1/materials` | `materials:read` |
 | `materials_stats` | `GET /api/v1/materials/stats` | `materials:read` |
+| `materials_accept` | `POST /api/v1/materials/accept` | `materials:write` |
 | `materials_get` | `GET /api/v1/materials/:id` | `materials:read` |
 | `materials_update` | `PATCH /api/v1/materials/:id` | `materials:write` |
 | `materials_download` | `GET /api/v1/materials/:id/download` | `materials:read` |
@@ -131,8 +143,10 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `collections_create` | `POST /api/v1/collections` | `collections:write` |
 | `collections_get` | `GET /api/v1/collections/:id` | `collections:read` |
 | `collections_update` | `PATCH /api/v1/collections/:id` | `collections:write` |
+| `collections_items_add` | `POST /api/v1/collections/:id/items` | `collections:write` |
 | `collections_items_replace` | `PUT /api/v1/collections/:id/items` | `collections:write` |
 | `collections_delete` | `DELETE /api/v1/collections/:id` | `collections:write` |
+| `uploads_list` | `GET /api/v1/uploads` | `uploads:write` |
 | `uploads_create` | `POST /api/v1/uploads` | `uploads:write` |
 | `uploads_get` | `GET /api/v1/uploads/:id` | `uploads:write` |
 | `uploads_file_put` | `PUT /api/v1/uploads/:id/files/:entry_id` | `uploads:write` |
@@ -151,13 +165,13 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `storage_reconcile` | `POST /api/v1/storage/reconcile` | `storage:write` |
 | `storage_replica_share` | `POST /api/v1/storage/replicas/:id/share` | `storage:write` |
 
-例如，`materials_search` 支持 `q`、`subject`、`role`、`status`、`grade`、`page` 和 `page_size`；`collections_list` 支持 `roots` 和 `parent_id`；`questions_search` 支持 `academic_year` 和 `offset`。`collections_items_replace` 会整体替换合集条目；删除工具的 `cascade` 控制级联删除。
+资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。`materials_search` 的 `stage=review` 就是待整理收件箱，`materials_accept` 批量确认。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
 
 OneDrive 使用现成 OpenList 应用时，`storage_providers_create` 的 `config` 可填写 `{"auth_mode":"openlist"}`，`secret` 填写在 OpenList Token 页面取得的 `refresh_token`。续期依赖 OpenList 第三方服务，令牌按其协议放在请求 URL 查询参数中；使用自有微软应用时填写 `auth_mode=direct` 和 `client_id`，并提供对应刷新令牌。变更授权方式时必须提交对应的新令牌。
 
 ### 文件上传与下载
 
-1. 使用 `uploads_create` 创建清单，条目提供 `relative_path` 和 `size_bytes`，可选 `sha256`；ZIP 使用原文件建立条目并上传，服务端负责解压且不归档 ZIP 原件。返回的上传 ID 和条目 ID 用于后续调用。
+1. 使用 `uploads_create` 创建清单，条目提供 `relative_path` 和 `size_bytes`，建议同时提供 `sha256`：已归档的相同内容会返回 `status=existing`，无需再传字节。可选 `hints`（学科、年级、类型、届别、地区、机构、标签）作为整批资料的提示。ZIP 使用原文件建立条目并上传，服务端负责解压（含嵌套压缩包）且不归档 ZIP 原件。返回的上传 ID 和条目 ID 用于后续调用。
 2. 小文件可用 `uploads_file_put` 的 `data_base64` 直接上传，解码后不超过 512 KiB；MCP 请求本身最多 1 MiB。较大文件调用 `uploads_transfer_info` 获取 `method`、相对 `path` 和大小，在同一服务地址用相同 Bearer 密钥以 `application/octet-stream` 流式 PUT。服务端单文件上限为 512 MiB。
 3. 调用 `uploads_finalize`，再用 `jobs_get` 查询处理进度。
 4. 调用 `materials_download` 获取 GET 相对路径、文件名、类型和大小，再在同一服务地址使用相同 Bearer 密钥流式下载。返回路径不包含密钥，下载内容不经过 MCP JSON 缓冲。

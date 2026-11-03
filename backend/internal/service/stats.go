@@ -7,8 +7,12 @@ import (
 	"gorm.io/gorm"
 )
 
-type MaterialStats struct {
-	Total, PendingStorage, Archived, Degraded int64
+// LibraryStats summarises the library for the dashboard.
+type LibraryStats struct {
+	Packs, Files                       int64
+	Processing, Review, Ready, Failed  int64
+	MissingAnswers, Trashed            int64
+	PendingStorage, Archived, Degraded int64
 }
 
 type JobStats struct {
@@ -29,24 +33,54 @@ func groupedStatusCounts(db *gorm.DB, table any) ([]statusCount, error) {
 	return counts, nil
 }
 
-func (s *Service) GetMaterialStats(ctx context.Context) (MaterialStats, error) {
-	rows, err := groupedStatusCounts(s.db.WithContext(ctx), &model.Material{})
-	if err != nil {
-		return MaterialStats{}, err
+// GetLibraryStats counts packs, files by curation stage and storage health.
+func (s *Service) GetLibraryStats(ctx context.Context) (LibraryStats, error) {
+	db := s.db.WithContext(ctx)
+	var out LibraryStats
+	if err := db.Model(&model.Pack{}).Count(&out.Packs).Error; err != nil {
+		return out, wrap("count packs", err)
 	}
-	var result MaterialStats
-	for _, row := range rows {
-		result.Total += row.N
-		switch row.Status {
-		case model.StatusPendingStorage:
-			result.PendingStorage = row.N
-		case model.StatusArchived:
-			result.Archived = row.N
-		case model.StatusDegraded:
-			result.Degraded = row.N
+	if err := db.Unscoped().Model(&model.Pack{}).Where("deleted_at IS NOT NULL").Count(&out.Trashed).Error; err != nil {
+		return out, wrap("count trash", err)
+	}
+	if err := s.packQuery(db, PackFilter{Missing: "answers"}).Count(&out.MissingAnswers).Error; err != nil {
+		return out, wrap("count incomplete packs", err)
+	}
+	var stages []struct {
+		Stage string
+		N     int64
+	}
+	if err := db.Model(&model.Material{}).Select("stage, COUNT(*) AS n").Group("stage").Scan(&stages).Error; err != nil {
+		return out, wrap("count stages", err)
+	}
+	for _, row := range stages {
+		out.Files += row.N
+		switch row.Stage {
+		case model.StageProcessing:
+			out.Processing = row.N
+		case model.StageReview:
+			out.Review = row.N
+		case model.StageReady:
+			out.Ready = row.N
+		case model.StageFailed:
+			out.Failed = row.N
 		}
 	}
-	return result, nil
+	rows, err := groupedStatusCounts(db, &model.Material{})
+	if err != nil {
+		return out, err
+	}
+	for _, row := range rows {
+		switch row.Status {
+		case model.StatusPendingStorage:
+			out.PendingStorage = row.N
+		case model.StatusArchived:
+			out.Archived = row.N
+		case model.StatusDegraded:
+			out.Degraded = row.N
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) GetJobStats(ctx context.Context) (JobStats, error) {

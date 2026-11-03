@@ -17,9 +17,18 @@ import (
 // Kinds of accepted content.
 const (
 	KindPDF  = "pdf"
-	KindDOC  = "doc"
+	KindDOC  = "doc" // also the sniffed kind of any OLE compound file
+	KindPPT  = "ppt"
+	KindXLS  = "xls"
 	KindDOCX = "docx"
 	KindPPTX = "pptx"
+	KindXLSX = "xlsx"
+	KindJPEG = "jpeg"
+	KindPNG  = "png"
+	KindWEBP = "webp"
+	KindMP3  = "mp3"
+	KindM4A  = "m4a"
+	KindWAV  = "wav"
 	KindZIP  = "zip"
 )
 
@@ -27,9 +36,27 @@ const (
 var MediaTypes = map[string]string{
 	KindPDF:  "application/pdf",
 	KindDOC:  "application/msword",
+	KindPPT:  "application/vnd.ms-powerpoint",
+	KindXLS:  "application/vnd.ms-excel",
 	KindDOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	KindPPTX: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	KindXLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	KindJPEG: "image/jpeg",
+	KindPNG:  "image/png",
+	KindWEBP: "image/webp",
+	KindMP3:  "audio/mpeg",
+	KindM4A:  "audio/mp4",
+	KindWAV:  "audio/wav",
 	KindZIP:  "application/zip",
+}
+
+// Compatible reports whether sniffed content satisfies the kind its extension
+// requires. Legacy Office formats share one OLE container signature.
+func Compatible(sniffed, expected string) bool {
+	if sniffed == expected {
+		return true
+	}
+	return sniffed == KindDOC && (expected == KindPPT || expected == KindXLS)
 }
 
 // ErrUnknownContent means the bytes are not one of the accepted kinds.
@@ -117,6 +144,18 @@ func Sniff(path string) (string, error) {
 		return KindPDF, nil
 	case bytes.HasPrefix(head, []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}):
 		return KindDOC, nil
+	case bytes.HasPrefix(head, []byte{0xFF, 0xD8, 0xFF}):
+		return KindJPEG, nil
+	case bytes.HasPrefix(head, []byte("\x89PNG\r\n\x1a\n")):
+		return KindPNG, nil
+	case len(head) >= 12 && bytes.Equal(head[:4], []byte("RIFF")) && bytes.Equal(head[8:12], []byte("WEBP")):
+		return KindWEBP, nil
+	case len(head) >= 12 && bytes.Equal(head[:4], []byte("RIFF")) && bytes.Equal(head[8:12], []byte("WAVE")):
+		return KindWAV, nil
+	case bytes.HasPrefix(head, []byte("ID3")) || (len(head) >= 2 && head[0] == 0xFF && head[1]&0xE0 == 0xE0):
+		return KindMP3, nil
+	case len(head) >= 12 && bytes.Equal(head[4:8], []byte("ftyp")) && isAudioBrand(head[8:12]):
+		return KindM4A, nil
 	default:
 		return "", ErrUnknownContent
 	}
@@ -140,6 +179,8 @@ func sniffZIP(path string) (string, error) {
 			return KindDOCX, nil
 		case names["ppt/presentation.xml"]:
 			return KindPPTX, nil
+		case names["xl/workbook.xml"]:
+			return KindXLSX, nil
 		}
 	}
 	return KindZIP, nil
@@ -156,8 +197,40 @@ func ExtensionKind(name string) (string, bool) {
 		return KindDOCX, true
 	case ".pptx":
 		return KindPPTX, true
+	case ".ppt":
+		return KindPPT, true
+	case ".xls":
+		return KindXLS, true
+	case ".xlsx":
+		return KindXLSX, true
+	case ".jpg", ".jpeg":
+		return KindJPEG, true
+	case ".png":
+		return KindPNG, true
+	case ".webp":
+		return KindWEBP, true
+	case ".mp3":
+		return KindMP3, true
+	case ".m4a":
+		return KindM4A, true
+	case ".wav":
+		return KindWAV, true
 	case ".zip":
 		return KindZIP, true
 	}
 	return "", false
+}
+
+// SupportedExtensions lists every accepted upload extension.
+var SupportedExtensions = []string{
+	".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+	".jpg", ".jpeg", ".png", ".webp", ".mp3", ".m4a", ".wav", ".zip",
+}
+
+func isAudioBrand(brand []byte) bool {
+	switch string(brand) {
+	case "M4A ", "M4B ", "mp42", "isom", "dash":
+		return true
+	}
+	return false
 }
