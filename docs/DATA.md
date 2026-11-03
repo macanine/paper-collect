@@ -1,6 +1,6 @@
 # 数据结构、存储与备份
 
-版本 1.4.0 · 2026-10-30。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
+版本 1.5.0 · 2026-11-03。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
 
 ## 1. 数据库与运行形态
 
@@ -21,13 +21,15 @@
 | `api_keys` | `APIKey` | Agent 密钥；只存随机 secret 的 SHA-256，并为 `secret_hash` 建索引用于直接鉴权；`user_id`、`expires_at`；`scopes_json`；`revoked`/`revoked_at` |
 | `sessions` | `Session` | 浏览器会话；`refresh_hash` 唯一；`prev_hash` 记录上一枚 token 用于重放检测；`expires_at`、`revoked` |
 | `audits` | `Audit` | 审计元数据；`user_id`、`action`、`target_id`、`created_at`；不含正文、令牌、Cookie、密钥、分享链接 |
-| `blobs` | `Blob` | 不可变内容；`sha256` 唯一；大小/媒体类型/原始文件名；一个 Blob 可被多个 Material 引用 |
-| `materials` | `Material` | 编目资料；`blob_id`、`sha256`、`role`、`status`、`parent_material_id` 索引；标题/文件名/来源路径/大小等 |
-| `material_subjects` | `MaterialSubject` | 资料-学科连接；主键 `(material_id, code)`；`code` 索引；用于列表与搜题筛选 |
-| `collections` | `Collection` | 合集；`parent_id` 索引；`subjects_json`；kind 为 series/exam/folder/zip/custom |
-| `collection_items` | `CollectionItem` | 资料摆放；唯一索引 `(collection_id, material_id)`；`position`、存储时角色、`relative_path`；读取时角色以资料为准 |
-| `uploads` | `Upload` | 上传清单；`user_id`、`status`、`job_id` 索引；标题/类型/学科/年级/学年/标签；完成后记录 `collection_id`/`material_id` |
-| `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status` |
+| `blobs` | `Blob` | 不可变内容；`sha256` 唯一；大小/媒体类型/原始文件名；一份内容对应一个 Blob |
+| `packs` | `Pack` | 套卷（浏览单位）；`doc_type`/`grade`/`cohort`/`region` 索引；`title_locked`、`catalog_locked`、`deleted_at`（回收站）；编目字段与 JSON 列表 |
+| `materials` | `Material` | 单个文件（一份 SHA-256）；`pack_id`、`part`、`stage`、`status` 索引；`sha256` 唯一；`suggested_pack_id`、`review_reasons_json`；`deleted_at` 随套卷进回收站 |
+| `material_sources` | `MaterialSource` | 每次到达记录；`material_id`、`upload_id` 索引；`path`、`duplicate`、`user_id`；同一内容重复上传只追加此行 |
+| `pack_subjects` | `PackSubject` | 套卷-学科连接；主键 `(pack_id, code)`；`code` 索引；用于列表与搜题筛选 |
+| `collections` | `Collection` | 专题；`title`/`description`；只收纳套卷，无父子层级 |
+| `collection_items` | `CollectionItem` | 专题收录；唯一索引 `(collection_id, pack_id)`；`position` 显式排序 |
+| `uploads` | `Upload` | 上传批次；`user_id`、`status`、`job_id` 索引；`title`、`hints_json`、`new_count`/`duplicate_count`、`skipped_json` |
+| `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status`（pending/received/existing） |
 | `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
 | `job_locks` | `JobLock` | 同资料 analyze/index/group 互斥；资源键、任务 ID、租约到期时间 |
 | `storage_providers` | `StorageProvider` | 存储端点；`enabled`、`priority` 索引；kind/role/weight/config JSON/加密 secret；kind 不可改 |
@@ -49,30 +51,35 @@
 User ──< APIKey
 User ──< Session
 User ──< Upload ──< UploadEntry
-Blob ──< Material >── MaterialSubject
+Blob ── Material（一份 SHA 对应一个文件）
+Pack ──< Material ──< MaterialSource
+Pack ──< PackSubject
+Pack ──< CollectionItem >── Collection
 Material ──< MaterialAnalysis
 Material ──< MaterialText
 Material ──< QuestionBlock ──< QuestionTerm
 Material ──< MaterialIndexState
-Collection ──< CollectionItem >── Material
 Blob ──< Replica >── StorageProvider
 Job ──< Upload / Replica / Material（按 kind 关联）
 ```
 
-- `Material` 与 `Blob` 是多对一：同一份原件可被不同编目资料引用。
-- `Replica` 与 `Material` 不直接关联，而是挂在 Blob 上；共享 Blob 的资料看到同一组副本和同一归档状态。
-- `CollectionItem` 与 `Material` 是多对多（带 position/relative_path/缓存角色）；同一资料可在多个合集。
-- `MaterialAnalysis`、`MaterialText`、`MaterialIndexState` 都是每资料最多一行；重跑覆盖自身。
+- `Material` 与 `Blob` 一对一：`materials.sha256` 唯一，同一内容只建一份文件；再次上传只写 `MaterialSource`，`duplicate=true`。
+- `Material` 属于唯一 `Pack`；套卷持有编目字段，文件继承套卷的学科/年级/届别等，只有 `part`、`answer_start_page` 和 `position` 是文件级字段。
+- `Replica` 与 `Material` 不直接关联，而是挂在 Blob 上；资料 `status` 按 Blob 的副本事实刷新。
+- `CollectionItem` 是套卷与专题的多对多（带 position）；一个套卷可在多个专题，专题不嵌套。
+- `MaterialAnalysis`、`MaterialText`、`MaterialIndexState` 都是每文件最多一行；重跑覆盖自身。
 - Job 的关联是弱引用：ingest 带 `upload_id`，replicate 带 `replica_id`，analyze/index/group 带 `material_id`；没有数据库外键。
 
 ### 2.2 状态与派生字段
 
 - `Material.status` 由 Blob 的副本事实刷新：ready 数 ≥ `minimum_replicas` 为 `archived`；0 ready、0 pending/uploading、至少 1 failed 为 `degraded`；其他不足情况为 `pending_storage`。
-- `Material.role` 是唯一角色来源；`CollectionItem.role` 是写入时缓存，读取时被资料角色覆盖；资料角色变化时会同步仍等于旧默认值的条目。
-- `Material.title` 与 `file_name` 合一：改名会更新文件名和本地副本名；云盘远端保留上传时名字。
-- `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received。
+- `Material.stage` 是人工整理阶段：processing（识别中）、review（待整理）、ready（已入库）、failed（识别失败）；`review_reasons_json` 记录 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual，`suggested_pack_id` 指向待确认的配套套卷。套卷 stage 取成员中最靠后的阶段。
+- `Material.part` 是文件在套卷中的部件：questions、answers、full、teacher、answer_sheet、listening、main、other；`answer_start_page` 记录同一文件内答案起始页。
+- `Material.title` 与 `file_name` 由「套卷标题 + part 中文标签」派生；套卷 `title_locked=true` 时固定不变，人工 PATCH 设置 `catalog_locked=true` 阻止自动编目覆盖。云盘远端对象保留上传时名字。
+- `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received（或 existing 秒传）→ 归档后写入 `results`。
 - `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；`group` 无匹配时记为 succeeded 并在进度/日志说明原因，手动重新分析可重新入队；启动时把遗留 running 改回 pending。
 - `Replica.status`：pending → uploading → ready/failed；failed 可重试回 pending；分享状态独立为 pending/ready/unsupported/failed。
+- `Pack.deleted_at` 非空即回收站；同一事务把成员 `materials.deleted_at` 置为非空。30 天后 `PurgeExpiredTrash` 彻底删除，`packs_purge` 只能处理回收站中的套卷。
 - `MaterialAnalysis.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
 - `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
 - RapidOCR 的 DOCX 解析键额外包含 `docx-native-v2`，保存常见公式结构。已有题目的 `math_index_version=0` 表示尚未补建公式词项；后台按批次事务补建为 1，公式搜索会先完成剩余补建。该操作不修改题干、不调用外部服务；旧题干已丢失的结构需从原件重建索引才能恢复。
