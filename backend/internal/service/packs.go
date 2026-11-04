@@ -478,6 +478,28 @@ func (s *Service) mergePacksTx(tx *gorm.DB, targetID string, sourceIDs []string,
 			return nil, apperr.NotFound("待合并的套卷不存在")
 		}
 		fillEmptyPackFields(&fill, target, source)
+		// Topic placements must follow the files before moving the last member
+		// removes the now-empty source pack.
+		var placements []model.CollectionItem
+		if err := tx.Where("pack_id = ?", sourceID).Find(&placements).Error; err != nil {
+			return nil, wrap("load source topic placements", err)
+		}
+		for _, item := range placements {
+			var exists int64
+			if err := tx.Model(&model.CollectionItem{}).
+				Where("collection_id = ? AND pack_id = ?", item.CollectionID, targetID).
+				Count(&exists).Error; err != nil {
+				return nil, wrap("check target topic placement", err)
+			}
+			if exists == 0 {
+				if err := tx.Create(&model.CollectionItem{
+					ID: newID(), CollectionID: item.CollectionID, PackID: targetID,
+					Position: item.Position, CreatedAt: now,
+				}).Error; err != nil {
+					return nil, wrap("move topic placement", err)
+				}
+			}
+		}
 		var members []model.Material
 		if err := tx.Where("pack_id = ?", sourceID).Order("position ASC").Find(&members).Error; err != nil {
 			return nil, wrap("load members", err)
@@ -485,17 +507,6 @@ func (s *Service) mergePacksTx(tx *gorm.DB, targetID string, sourceIDs []string,
 		for _, m := range members {
 			if err := s.moveMaterialTx(tx, m, targetID, now); err != nil {
 				return nil, err
-			}
-		}
-		// Topic placements follow the files to the surviving pack.
-		var placements []model.CollectionItem
-		if err := tx.Where("pack_id = ?", sourceID).Find(&placements).Error; err == nil {
-			for _, item := range placements {
-				var exists int64
-				tx.Model(&model.CollectionItem{}).Where("collection_id = ? AND pack_id = ?", item.CollectionID, targetID).Count(&exists)
-				if exists == 0 {
-					_ = tx.Create(&model.CollectionItem{ID: newID(), CollectionID: item.CollectionID, PackID: targetID, Position: item.Position, CreatedAt: now}).Error
-				}
 			}
 		}
 		if err := s.dropPackIfEmptyTx(tx, sourceID); err != nil {

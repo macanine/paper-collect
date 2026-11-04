@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,23 +19,18 @@ func TestDOCXUploadPreviewDownloadAndMCP(t *testing.T) {
 	}
 	env := newEnv(t)
 	id := directUpload(t, env, map[string][]byte{"数学.docx": original})
-	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
-	var upload struct {
-		Data struct {
-			MaterialID string `json:"material_id"`
-		} `json:"data"`
+	upload := env.uploadResult(t, id)
+	if upload.Data.Status != "completed" || len(upload.Data.Results) != 1 || upload.Data.Results[0].MaterialID == "" {
+		t.Fatalf("upload: %+v", upload.Data)
 	}
-	if status != http.StatusOK || json.Unmarshal(body, &upload) != nil || upload.Data.MaterialID == "" {
-		t.Fatalf("upload: %d %s", status, body)
-	}
-	materialID := upload.Data.MaterialID
+	materialID := upload.Data.Results[0].MaterialID
 	status, downloaded := env.do(t, http.MethodGet, "/api/v1/materials/"+materialID+"/download", nil, nil)
 	if status != http.StatusOK || !bytes.Equal(downloaded, original) {
 		t.Fatal("downloaded DOCX differs from original")
 	}
 	status, preview := env.do(t, http.MethodGet, "/api/v1/materials/"+materialID+"/preview", nil, nil)
 	if status != http.StatusOK || !bytes.HasPrefix(preview, []byte("%PDF-")) {
-		t.Fatalf("invalid preview: %d %s", status, body)
+		t.Fatalf("invalid preview: %d %s", status, preview)
 	}
 	key := createAgentKey(t, env, []string{"materials:read"})
 	descriptor := toolData(t, callTool(t, env, key, "materials_preview", map[string]any{"id": materialID}))

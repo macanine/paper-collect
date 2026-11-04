@@ -741,9 +741,29 @@ func TestSplitMergeAndBulkEditPacks(t *testing.T) {
 		t.Fatalf("split must create a pack: %+v", got.Data)
 	}
 	newPack := jsonField(t, body, "pack_id")
+	status, body = env.do(t, http.MethodPost, "/api/v1/collections", map[string]any{
+		"title": "合并专题", "pack_ids": []string{newPack},
+	}, nil)
+	collectionID := jsonField(t, body, "id")
+	if status != http.StatusCreated || collectionID == "" {
+		t.Fatalf("create source topic %d: %s", status, body)
+	}
 	status, body = env.do(t, http.MethodPost, "/api/v1/packs/"+pack.ID+"/merge", map[string]any{"source_ids": []string{newPack}}, nil)
 	if status != http.StatusOK || env.listPacks(t, "").Data.Total != 1 {
 		t.Fatalf("merge %d: %s", status, body)
+	}
+	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+collectionID, nil, nil)
+	var topic struct {
+		Data struct {
+			PackCount int `json:"pack_count"`
+			Packs     []struct {
+				ID string `json:"id"`
+			} `json:"packs"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &topic) != nil ||
+		topic.Data.PackCount != 1 || len(topic.Data.Packs) != 1 || topic.Data.Packs[0].ID != pack.ID {
+		t.Fatalf("merged pack must retain source topics %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodPost, "/api/v1/packs/bulk", map[string]any{
 		"ids": []string{pack.ID}, "patch": map[string]any{"doc_type": "monthly", "grade": "grade11", "cohort": 2026, "subject_codes": []string{"english"}, "exam_date": "2025-03"},
