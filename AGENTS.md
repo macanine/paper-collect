@@ -1,6 +1,6 @@
 # 项目协作约定
 
-- 文档入口见 [docs/README.md](docs/README.md)，用户说明看 [README.md](README.md)，接口以 [docs/API.md](docs/API.md) 为准，技术架构与数据流见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，数据库与备份见 [docs/DATA.md](docs/DATA.md)；不保留与当前实现冲突的历史计划文档。
+- 文档入口见 [docs/README.md](docs/README.md)，项目概览看 [README.md](README.md)，部署与环境变量看 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，用户操作看 [docs/USAGE.md](docs/USAGE.md)，接口以 [docs/API.md](docs/API.md) 为准，技术架构与数据流见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，数据库与备份见 [docs/DATA.md](docs/DATA.md)；不保留与当前实现冲突的历史计划文档。
 - `backend/internal/server` 负责 HTTP/MCP 与权限，`internal/service` 负责业务，`internal/model`/`db` 负责模型和迁移，`internal/storage` 负责存储适配；前端按 `web/src/features` 组织。
 - 资料是一份逻辑文件，Blob 按 SHA-256 去重；合集条目角色读取资料角色。修改接口、状态或字段时同步 API 文档及前端类型。
 - 默认 SQLite 单连接、单实例。PostgreSQL 多实例使用任务租约、心跳、`SKIP LOCKED` 和资料锁；所有实例必须共享 `DATA_DIR`。事务内使用传入的 `tx`，不要通过 `s.db` 再取连接。

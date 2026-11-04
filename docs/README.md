@@ -4,12 +4,14 @@
 
 | 文档 | 用途 | 主要读者 |
 | --- | --- | --- |
-| [README.md](../README.md) | 项目定位、快速启动、配置、使用流程、测试与能力边界 | 使用者、部署者、开发者 |
+| [README.md](../README.md) | 项目定位、核心能力、最短启动、文档导航、测试与能力边界 | 所有读者 |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | 本机开发、Docker Compose、镜像发布、云端部署、环境变量与存储配置 | 部署者、运维、开发者 |
+| [USAGE.md](USAGE.md) | 上传归档、资料整理、AI 识别、搜题、角色与状态 | 使用者 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 分层、运行时拓扑、上传/存储/AI/检索数据流、事务与安全边界 | 后端与前端开发者 |
 | [API.md](API.md) | HTTP/MCP 接口、字段、状态、错误码与权限合同 | 前后端、Agent 集成方 |
 | [MCP.md](MCP.md) | MCP 密钥、客户端配置、工具与排查 | Agent 与 MCP 客户端集成方 |
 | [DATA.md](DATA.md) | 数据库表、数据目录、备份恢复、增长控制与恢复检查 | 部署者、运维、后端开发者 |
-| [backend/README.md](../backend/README.md) | 后端职责划分与验证入口 | 后端开发者 |
+| [BACKEND.md](BACKEND.md) | 后端职责划分与验证入口 | 后端开发者 |
 
 维护约定：
 

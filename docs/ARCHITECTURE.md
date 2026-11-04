@@ -1,6 +1,6 @@
 # 高中资料归档系统技术架构
 
-版本 1.6.0 · 2026-11-03。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [README](../README.md)，文档索引见 [README.md](README.md)。
+版本 1.6.0 · 2026-11-03。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)，文档索引见 [README.md](README.md)。
 
 本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。自建 RapidOCR 已在远端 Compose 用真实扫描 PDF 验证。
 
@@ -246,7 +246,7 @@ Eligible: part in (questions, full); other parts are not_applicable
 
 - 拒绝路径穿越、绝对路径/盘符、反斜杠、控制字符、空段、`.`/`..`、符号链接、特殊文件、加密条目和重复路径；
 - 每个 ZIP 限制声明展开总大小 2 GiB、非忽略文件 5000 条、单条压缩比 200；忽略 `.DS_Store`、`._*` 和 `__MACOSX`；
-- 按整包候选编码（UTF-8、GB18030、Big5、Shift-JIS）打分还原文件名；提取 PDF/DOC/DOCX/PPTX 与 ZIP，嵌套 ZIP 作为成员保留、不递归展开；
+- 按整包候选编码（UTF-8、GB18030、Big5、Shift-JIS）打分还原文件名；提取 PDF/DOC/DOCX/PPTX 与 ZIP，嵌套 ZIP 最多递归展开 3 层，超过上限或其他不支持格式跳过；
 - 其他格式跳过，任务日志记录总数并在完成页提示；没有可归档成员时任务失败。每个提取成员的字节数和真实格式必须与声明一致。
 
 新上传的 ZIP 原件只保存在 `tmp/upload-archives/`，处理成功且数据库提交后删除；失败或取消时保留供重试。ZIP 原件不会创建资料或副本。处理前已在 CAS 的历史 ZIP 仍可使用，但不会自动删除。文件系统和数据库无法原子提交，崩溃或清理失败可能留下临时文件，当前没有自动清理。
@@ -501,7 +501,7 @@ DATA_DIR/
 | `MASTER_KEY` | 必填 | 32 字节 base64，AES-256-GCM |
 | `PULL_CACHE_TTL` | `15m` | 云端副本拉取到临时目录后的可下载时长 |
 
-完整说明见 [README](../README.md)；`MASTER_KEY` 丢失后已保存的存储/AI 凭据无法解密。
+完整说明见 [DEPLOYMENT.md](DEPLOYMENT.md)；`MASTER_KEY` 丢失后已保存的存储/AI 凭据无法解密。
 
 ## 14. 安全边界
 
@@ -571,7 +571,10 @@ docker compose up -d
 
 ## 18. 文档关系
 
-- [README.md](../README.md)：上手、配置、能力边界。
+- [README.md](../README.md)：项目定位、核心能力、最短启动与文档导航。
+- [DEPLOYMENT.md](DEPLOYMENT.md)：开发、部署、环境变量与存储配置。
+- [USAGE.md](USAGE.md)：管理台操作、AI、搜题、角色与状态。
 - [README.md](README.md)：当前文档索引与维护约定。
+- [BACKEND.md](BACKEND.md)：后端职责划分与验证入口。
 - [API.md](API.md)：逐接口合同、字段、状态、错误。
 - [DATA.md](DATA.md)：表清单、数据目录、备份/恢复、增长控制。
