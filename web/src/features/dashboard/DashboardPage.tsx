@@ -52,11 +52,11 @@ export function DashboardPage() {
         </div>
       ) : null}
 
-      {s && (s.degraded > 0 || s.pending_storage > 0) && can('storage:read') ? (
+      {s && s.attention > 0 && can('storage:read') ? (
         <Card size="small">
-          存储：{s.pending_storage} 个文件等待副本，{s.degraded} 个文件副本异常。
+          存储：{s.attention} 个文件同步需要注意。
           <Link to="/storage" className="ml-2">
-            查看存储端点
+            查看存储
           </Link>
         </Card>
       ) : null}

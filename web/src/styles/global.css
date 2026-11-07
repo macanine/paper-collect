@@ -24,6 +24,7 @@
   --ant-motion-mid: 0.2s;
   --ant-motion-ease: cubic-bezier(0.645, 0.045, 0.355, 1);
   --ant-primary-border: #91caff;
+  --chart-series-2: #fa8c16;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
   --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 1px 6px -1px rgba(0, 0, 0, 0.03), 0 2px 4px 0 rgba(0, 0, 0, 0.03);
@@ -1786,4 +1787,115 @@ a.compact-entity:hover {
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
+}
+
+/* 节点监控 */
+.node-sparkline {
+  display: block;
+  width: 64px;
+  height: 20px;
+  color: var(--ant-primary);
+}
+
+.node-chart-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+
+.node-chart__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.node-chart__title {
+  font-weight: 600;
+}
+
+.node-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--ant-text-secondary);
+  font-size: 12px;
+}
+
+.node-chart__key {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.node-chart__plot {
+  position: relative;
+  height: 140px;
+  outline-offset: 2px;
+  touch-action: pan-y;
+}
+
+.node-chart__plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.node-chart__scale {
+  position: absolute;
+  left: 0;
+  color: var(--ant-text-tertiary);
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.node-chart__tooltip {
+  position: absolute;
+  top: 0;
+  z-index: 1;
+  min-width: 128px;
+  padding: 8px;
+  border: 1px solid var(--ant-border-secondary);
+  border-radius: 8px;
+  background: var(--ant-container);
+  box-shadow: var(--shadow-card);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.node-chart__tooltip-time {
+  margin-bottom: 4px;
+  color: var(--ant-text-tertiary);
+}
+
+.node-chart__tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.node-chart__tooltip-row strong {
+  font-weight: 600;
+}
+
+.node-chart__tooltip-row span:last-child {
+  color: var(--ant-text-secondary);
+}
+
+.node-token {
+  margin: 0 0 12px;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--ant-container-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre;
 }

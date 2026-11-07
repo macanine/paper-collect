@@ -1,34 +1,72 @@
 import { apiRequest } from '../../shared/api/client';
 import { segment } from '../../shared/api/paths';
-import type { ProviderTestResult, Replica, ReconcileResult, StoragePolicy, StorageProvider } from '../../shared/api/types';
+import type {
+  Drive,
+  DriveTestResult,
+  Page,
+  ReconcileResult,
+  Replica,
+  ReplicaBulkResult,
+  SyncAction,
+  SyncPreview,
+  SyncRule,
+} from '../../shared/api/types';
 import type { ProviderDraft, ProviderPatch } from './providerFields';
 
-export function listProviders(): Promise<StorageProvider[]> {
-  return apiRequest<StorageProvider[]>('/storage/providers');
+export function listDrives(): Promise<Drive[]> {
+  return apiRequest<Drive[]>('/storage/drives');
 }
 
-export function createProvider(draft: ProviderDraft): Promise<StorageProvider> {
-  return apiRequest<StorageProvider>('/storage/providers', { method: 'POST', body: draft });
+export function createDrive(draft: ProviderDraft): Promise<Drive> {
+  return apiRequest<Drive>('/storage/drives', { method: 'POST', body: draft });
 }
 
-export function updateProvider(id: string, patch: ProviderPatch): Promise<StorageProvider> {
-  return apiRequest<StorageProvider>(`/storage/providers/${segment(id)}`, { method: 'PATCH', body: patch });
+export function updateDrive(id: string, patch: ProviderPatch): Promise<Drive> {
+  return apiRequest<Drive>(`/storage/drives/${segment(id)}`, { method: 'PATCH', body: patch });
 }
 
-export function testProvider(id: string): Promise<ProviderTestResult> {
-  return apiRequest<ProviderTestResult>(`/storage/providers/${segment(id)}/test`, { method: 'POST' });
+export function testDrive(id: string): Promise<DriveTestResult> {
+  return apiRequest<DriveTestResult>(`/storage/drives/${segment(id)}/test`, { method: 'POST' });
 }
 
-export function getPolicy(): Promise<StoragePolicy> {
-  return apiRequest<StoragePolicy>('/storage/policy');
+export function listRules(): Promise<SyncRule[]> {
+  return apiRequest<SyncRule[]>('/storage/rules');
 }
 
-export function updatePolicy(policy: StoragePolicy): Promise<StoragePolicy> {
-  return apiRequest<StoragePolicy>('/storage/policy', { method: 'PUT', body: policy });
+export function previewRules(rules: SyncRule[], page: number, pageSize: number): Promise<SyncPreview> {
+  return apiRequest<SyncPreview>('/storage/rules/preview', {
+    method: 'POST',
+    query: { page, page_size: pageSize },
+    body: { rules },
+  });
+}
+
+export function putRules(rules: SyncRule[], previewToken: string): Promise<ReconcileResult> {
+  return apiRequest<ReconcileResult>('/storage/rules', { method: 'PUT', body: { rules, preview_token: previewToken } });
+}
+
+export function explainSync(materialId: string): Promise<SyncAction[]> {
+  return apiRequest<SyncAction[]>('/storage/rules/explain', { query: { material_id: materialId } });
+}
+
+export function listReplicas(filter: { status?: string; drive_id?: string; page?: number; page_size?: number }): Promise<Page<Replica>> {
+  return apiRequest<Page<Replica>>('/storage/replicas', {
+    query: { status: filter.status, drive_id: filter.drive_id, page: filter.page, page_size: filter.page_size },
+  });
+}
+
+export type ReplicaBulkAction = 'retry' | 'delete_remote' | 'forget';
+
+export function bulkReplicas(ids: string[], action: ReplicaBulkAction): Promise<ReplicaBulkResult[]> {
+  return apiRequest<ReplicaBulkResult[]>('/storage/replicas/bulk', { method: 'POST', body: { ids, action } });
 }
 
 export function reconcileStorage(): Promise<ReconcileResult> {
   return apiRequest<ReconcileResult>('/storage/reconcile', { method: 'POST' });
+}
+
+export function syncMaterial(materialId: string): Promise<ReconcileResult> {
+  return apiRequest<ReconcileResult>(`/materials/${segment(materialId)}/sync`, { method: 'POST' });
 }
 
 export function refreshReplicaShare(replicaId: string): Promise<Replica> {

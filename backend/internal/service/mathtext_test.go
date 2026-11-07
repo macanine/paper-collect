@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -118,31 +117,5 @@ func TestQuestionDedupeKeepsDifferentFormulaOperators(t *testing.T) {
 	}
 	if questionDedupeText("求 x²+1 的值") != questionDedupeText(`求 x^{2}+1 的值`) {
 		t.Fatal("equivalent superscript notation should deduplicate")
-	}
-}
-
-func TestRepairJSONMathCommandsPreservesFormulaEscapes(t *testing.T) {
-	source := `原文包含 \frac{x}{2}、\theta 和 \neq。`
-	raw := `{"text":"求 \frac{x}{2}+\theta，且 x\neq 0\n下一行"}`
-	repaired := repairJSONMathCommands(raw, source)
-	var output struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal([]byte(repaired), &output); err != nil {
-		t.Fatal(err)
-	}
-	if output.Text != "求 \\frac{x}{2}+\\theta，且 x\\neq 0\n下一行" {
-		t.Fatalf("formula or newline was changed: %q", output.Text)
-	}
-	proper := `{"text":"\\frac{x}{2}"}`
-	if got := repairJSONMathCommands(proper, source); got != proper {
-		t.Fatalf("valid JSON was changed: %s", got)
-	}
-	if !hasInvalidFormulaControls("错误的\frac", "") || !hasInvalidFormulaControls("错误的\theta", "") {
-		t.Fatal("damaged JSON control escapes were not detected")
-	}
-	ordinary := "第一行\nequation follows\n第二行\ttext"
-	if hasInvalidFormulaControls(ordinary, "") || hasInvalidFormulaControls("第一行\neq", "第一行\neq") {
-		t.Fatal("ordinary text or an original control sequence was rejected")
 	}
 }

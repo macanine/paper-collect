@@ -1,0 +1,156 @@
+import { useMemo } from 'react';
+import { Alert, Button, Card, Descriptions, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { useQuery } from '@tanstack/react-query';
+import { Link, useParams } from 'react-router';
+import { listJobs } from '../jobs/api';
+import type { Job, NodePoint } from '../../shared/api/types';
+import { formatBytes, formatDateTime, formatRate } from '../../shared/lib/format';
+import { JOB_KIND_LABELS } from '../../shared/lib/labels';
+import { BackLink } from '../../shared/ui/BackLink';
+import { PageHeader } from '../../shared/ui/PageHeader';
+import { ErrorState, LoadingState, NotFoundPage } from '../../shared/ui/States';
+import { NodeStatusTag } from '../../shared/ui/StatusTags';
+import { getNodeMetrics } from './api';
+import { MetricChart, type MetricSeries } from './MetricChart';
+import { useNodes, useNodeUpdate } from './NodesPage';
+import { NODE_POLL_MS, formatAgo, isLive, orderedKinds } from './nodeUtils';
+
+const PRIMARY = 'var(--ant-primary)';
+const SECOND = 'var(--chart-series-2)';
+
+const CPU: MetricSeries[] = [{ label: '整机', color: PRIMARY, value: (p: NodePoint) => p.cpu_percent }];
+const MEMORY: MetricSeries[] = [{ label: '已用', color: PRIMARY, value: (p: NodePoint) => p.mem_used }];
+const NETWORK: MetricSeries[] = [
+  { label: '接收', color: PRIMARY, value: (p: NodePoint) => p.net_rx_bps },
+  { label: '发送', color: SECOND, value: (p: NodePoint) => p.net_tx_bps },
+];
+
+export function NodeDetailPage() {
+  const { nodeId = '' } = useParams();
+  const nodes = useNodes();
+  const update = useNodeUpdate();
+  const metrics = useQuery({
+    queryKey: ['nodes', nodeId, 'metrics'],
+    queryFn: ({ signal }) => getNodeMetrics(nodeId, signal),
+    refetchInterval: NODE_POLL_MS,
+  });
+  const running = useQuery({
+    queryKey: ['nodes', nodeId, 'running-jobs'],
+    queryFn: ({ signal }) => listJobs({ node_id: nodeId, status: 'running', page: 1, page_size: 50 }, signal),
+    refetchInterval: NODE_POLL_MS,
+  });
+  const points = useMemo(() => metrics.data ?? [], [metrics.data]);
+
+  if (nodes.isPending) return <LoadingState />;
+  if (nodes.isError) return <ErrorState error={nodes.error} onRetry={() => void nodes.refetch()} title="节点加载失败" />;
+  const node = nodes.data.find((item) => item.id === nodeId);
+  if (!node) return <NotFoundPage />;
+
+  const memTotal = points.reduce((peak, point) => Math.max(peak, point.mem_total), node.mem_total);
+  return (
+    <div className="page-stack">
+      <BackLink to="/admin/nodes">返回节点列表</BackLink>
+      <PageHeader
+        title={
+          <Typography.Text
+            editable={{
+              tooltip: '重命名',
+              onChange: (name) => {
+                if (name.trim() && name !== node.name) update.mutate({ id: node.id, body: { name: name.trim() } });
+              },
+            }}
+          >
+            {node.name}
+          </Typography.Text>
+        }
+        extra={
+          <Space wrap>
+            <NodeStatusTag status={node.status} />
+            <Button disabled={!node.enabled} onClick={() => update.mutate({ id: node.id, body: { draining: !node.draining } })}>
+              {node.draining ? '恢复' : '排空'}
+            </Button>
+            {node.is_master ? null : node.enabled ? (
+              <Popconfirm
+                title="停用该节点？"
+                description="令牌立即失效，正在执行的任务会停止，并在租约到期后交给其他节点。"
+                okText="停用"
+                okButtonProps={{ danger: true }}
+                cancelText="取消"
+                onConfirm={() => update.mutate({ id: node.id, body: { enabled: false } })}
+              >
+                <Button danger>停用</Button>
+              </Popconfirm>
+            ) : (
+              <Button onClick={() => update.mutate({ id: node.id, body: { enabled: true } })}>启用</Button>
+            )}
+          </Space>
+        }
+      />
+
+      {node.is_master && node.draining ? (
+        <Alert type="info" showIcon message="主端排空中" description="主端不再执行可下放的任务，但仍会处理归档、配套和本地目录网盘的复制，这些任务只能在主端运行。" />
+      ) : null}
+
+      <Card title="资源趋势（最近 1 小时）">
+        <div className="node-chart-grid">
+          <MetricChart title="CPU" points={points} series={CPU} format={(v) => `${Math.round(v)}%`} max={100} />
+          <MetricChart title="内存" points={points} series={MEMORY} format={formatBytes} max={memTotal || undefined} />
+          <MetricChart title="网络" points={points} series={NETWORK} format={formatRate} />
+        </div>
+        <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
+          在容器中运行时，CPU 和内存是宿主机的数值，网络是容器网络命名空间的流量。
+        </Typography.Paragraph>
+      </Card>
+
+      <Card title="节点信息">
+        <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
+          <Descriptions.Item label="最近心跳">{formatAgo(node.last_seen_at, Date.now())}</Descriptions.Item>
+          <Descriptions.Item label="启动时间">{formatDateTime(node.started_at)}</Descriptions.Item>
+          <Descriptions.Item label="来源地址">{node.last_ip || '—'}</Descriptions.Item>
+          <Descriptions.Item label="版本">{node.version || '—'}</Descriptions.Item>
+          <Descriptions.Item label="协议">{node.protocol || '—'}</Descriptions.Item>
+          <Descriptions.Item label="CPU 核数">{node.cpu_cores || '—'}</Descriptions.Item>
+          <Descriptions.Item label="进程">
+            {isLive(node) ? `CPU ${Math.round(node.proc_cpu_percent)}%，内存 ${formatBytes(node.proc_rss)}` : '—'}
+          </Descriptions.Item>
+          {node.is_master ? null : (
+            <Descriptions.Item label="原件缓存">
+              {formatBytes(node.cache_used)} / {node.cache_max > 0 ? formatBytes(node.cache_max) : '不限'}
+            </Descriptions.Item>
+          )}
+          <Descriptions.Item label="近 1 小时">成功 {node.succeeded_1h}，失败 {node.failed_1h}</Descriptions.Item>
+          <Descriptions.Item label="任务槽位" span={3}>
+            {node.kinds.length === 0 ? '未执行可下放的任务' : (
+              <Space size={4} wrap>
+                {orderedKinds(node.kinds).map((kind) => (
+                  <Tag key={kind}>
+                    {JOB_KIND_LABELS[kind]} {node.running_kinds[kind] ?? 0}/{node.slots[kind] ?? 0}
+                  </Tag>
+                ))}
+              </Space>
+            )}
+          </Descriptions.Item>
+        </Descriptions>
+      </Card>
+
+      <Card title="正在执行" styles={{ body: { padding: 0 } }}>
+        {running.isError ? <ErrorState error={running.error} onRetry={() => void running.refetch()} title="任务加载失败" /> : (
+          <Table<Job>
+            rowKey="id"
+            size="middle"
+            loading={running.isPending}
+            dataSource={running.data?.items ?? []}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+            locale={{ emptyText: '当前没有执行中的任务' }}
+            columns={[
+              { title: '类型', key: 'kind', render: (_, job) => <Link to={`/jobs/${job.id}`}>{JOB_KIND_LABELS[job.kind]}</Link> },
+              { title: '进度', key: 'progress', render: (_, job) => job.progress_message || '—' },
+              { title: '开始时间', key: 'started', render: (_, job) => formatDateTime(job.started_at) },
+            ]}
+          />
+        )}
+      </Card>
+    </div>
+  );
+}

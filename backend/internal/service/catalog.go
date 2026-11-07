@@ -153,15 +153,13 @@ func (s *Service) refreshPackNamesTx(tx *gorm.DB, packID string) ([]string, erro
 			name = fmt.Sprintf("%s (%d)", name, n)
 		}
 		fileName := sanitizeFileName(name) + strings.ToLower(path.Ext(m.OriginalName))
+		renamed = append(renamed, m.ID)
 		if name == m.Title && fileName == m.FileName {
 			continue
 		}
 		if err := tx.Model(&model.Material{}).Where("id = ?", m.ID).
 			Updates(map[string]any{"title": name, "file_name": fileName}).Error; err != nil {
 			return nil, wrap("rename material", err)
-		}
-		if fileName != m.FileName {
-			renamed = append(renamed, m.ID)
 		}
 	}
 	return renamed, nil
@@ -170,8 +168,12 @@ func (s *Service) refreshPackNamesTx(tx *gorm.DB, packID string) ([]string, erro
 // renameMaterialFiles syncs local replica names after a committed rename.
 func (s *Service) renameMaterialFiles(ctx context.Context, ids []string) {
 	for _, id := range ids {
-		s.renameLocalReplicaFiles(ctx, id)
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { _, err := s.planMaterialTx(tx, id, false); return err })
+		if err != nil {
+			s.logf("replan renamed material: %s", redact(err.Error()))
+		}
 	}
+	s.notify()
 }
 
 var emptyBrackets = regexp.MustCompile(`\(\s*\)|（\s*）|【\s*】|\[\s*\]`)

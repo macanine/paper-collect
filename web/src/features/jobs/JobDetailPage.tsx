@@ -111,6 +111,11 @@ export function JobDetailPage() {
           column={{ xs: 1, sm: 1, md: 2 }}
           items={[
             {
+              key: 'node',
+              label: '执行节点',
+              children: job.node_id ? <Link to={`/jobs?node_id=${job.node_id}`}>{job.node_name || '节点'}</Link> : '—',
+            },
+            {
               key: 'id',
               label: '任务 ID',
               span: { xs: 1, md: 2 },

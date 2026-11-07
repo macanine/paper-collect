@@ -181,8 +181,23 @@ func (a *webdavAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 		return Stored{}, err
 	}
 	target := a.remoteURL(segments)
+	exists, err := a.exists(ctx, target)
+	if err != nil {
+		return Stored{}, err
+	}
+	if exists {
+		// Never overwrite: adopt the object only when it verifies as ours.
+		verification, err := a.verifyRemote(ctx, target, obj.Size, expectedSHA)
+		if err != nil {
+			if ce := AsCloudError(err); ce.Class == ClassSizeMismatch || ce.Class == ClassHashMismatch {
+				return Stored{}, newCloudError(ClassConflict, "webdav_path_taken", false)
+			}
+			return Stored{}, err
+		}
+		return Stored{RemoteID: obj.Key, Size: obj.Size, Verification: verification}, nil
+	}
 	resp, err := a.do(ctx, http.MethodPut, target, &progressReader{r: src, total: obj.Size, report: obj.Progress}, obj.Size, map[string]string{
-		"Content-Type": "application/octet-stream",
+		"Content-Type": "application/octet-stream", "If-None-Match": "*",
 	}, a.uploadTimeout, "webdav_put")
 	if err != nil {
 		return Stored{}, err
@@ -249,6 +264,75 @@ func (a *webdavAdapter) verifyRemote(ctx context.Context, target *url.URL, size 
 	return "sha256", nil
 }
 
+// exists reports whether a resource is present at target.
+func (a *webdavAdapter) exists(ctx context.Context, target *url.URL) (bool, error) {
+	resp, err := a.do(ctx, http.MethodHead, target, nil, -1, nil, a.requestTimeout, "webdav_exists")
+	if err != nil {
+		return false, err
+	}
+	status := resp.StatusCode
+	discardAndClose(resp)
+	switch {
+	case status == http.StatusNotFound:
+		return false, nil
+	case status >= 200 && status < 300:
+		return true, nil
+	case status == http.StatusMethodNotAllowed || status == http.StatusNotImplemented:
+		// Without HEAD, rely on If-None-Match to refuse an overwrite.
+		return false, nil
+	default:
+		return false, statusError("webdav_exists", status)
+	}
+}
+
+// Move uses WebDAV MOVE with Overwrite: F, so an occupied target is refused.
+func (a *webdavAdapter) Move(ctx context.Context, remoteID, key string) (Stored, error) {
+	from, cerr := validateObjectKey(remoteID)
+	if cerr != nil {
+		return Stored{}, cerr
+	}
+	to, cerr := validateObjectKey(key)
+	if cerr != nil {
+		return Stored{}, cerr
+	}
+	if remoteID == key {
+		return Stored{RemoteID: key, Verification: "uploaded"}, nil
+	}
+	if err := a.ensureCollections(ctx, to); err != nil {
+		return Stored{}, err
+	}
+	resp, err := a.do(ctx, "MOVE", a.remoteURL(from), nil, -1, map[string]string{
+		"Destination": a.remoteURL(to).String(), "Overwrite": "F",
+	}, a.requestTimeout, "webdav_move")
+	if err != nil {
+		return Stored{}, err
+	}
+	status := resp.StatusCode
+	discardAndClose(resp)
+	if status < 200 || status >= 300 {
+		return Stored{}, statusError("webdav_move", status)
+	}
+	return Stored{RemoteID: key, Verification: "uploaded"}, nil
+}
+
+// Delete removes one object; a missing object counts as deleted.
+func (a *webdavAdapter) Delete(ctx context.Context, remoteID string) error {
+	segments, cerr := validateObjectKey(remoteID)
+	if cerr != nil {
+		return cerr
+	}
+	resp, err := a.do(ctx, http.MethodDelete, a.remoteURL(segments), nil, -1, nil, a.requestTimeout, "webdav_delete")
+	if err != nil {
+		return err
+	}
+	status := resp.StatusCode
+	discardAndClose(resp)
+	if status == http.StatusNotFound || (status >= 200 && status < 300) {
+		return nil
+	}
+	return statusError("webdav_delete", status)
+}
+
 func (a *webdavAdapter) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 	segments, cerr := validateObjectKey(key)
 	if cerr != nil {
@@ -303,5 +387,5 @@ func (a *webdavAdapter) Health(ctx context.Context) error {
 }
 
 func (a *webdavAdapter) Capabilities() Capabilities {
-	return Capabilities{Upload: true, Download: true, Share: a.publicBase != nil}
+	return Capabilities{Upload: true, Download: true, Share: a.publicBase != nil, Folders: true, Move: true, Delete: true}
 }

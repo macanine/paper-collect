@@ -9,10 +9,10 @@ import (
 
 // LibraryStats summarises the library for the dashboard.
 type LibraryStats struct {
-	Packs, Files                       int64
-	Processing, Review, Ready, Failed  int64
-	MissingAnswers, Trashed            int64
-	PendingStorage, Archived, Degraded int64
+	Packs, Files                                                               int64
+	Processing, Review, Ready, Failed                                          int64
+	MissingAnswers, Trashed                                                    int64
+	Archived, Missing, WaitingCatalog, Syncing, Synced, Attention, NotRequired int64
 }
 
 type JobStats struct {
@@ -72,12 +72,31 @@ func (s *Service) GetLibraryStats(ctx context.Context) (LibraryStats, error) {
 	}
 	for _, row := range rows {
 		switch row.Status {
-		case model.StatusPendingStorage:
-			out.PendingStorage = row.N
 		case model.StatusArchived:
 			out.Archived = row.N
-		case model.StatusDegraded:
-			out.Degraded = row.N
+		case model.StatusMissing:
+			out.Missing = row.N
+		}
+	}
+	var syncRows []struct {
+		SyncStatus string
+		N          int64
+	}
+	if err := db.Model(&model.Material{}).Select("sync_status, COUNT(*) AS n").Group("sync_status").Scan(&syncRows).Error; err != nil {
+		return out, err
+	}
+	for _, r := range syncRows {
+		switch r.SyncStatus {
+		case model.SyncWaitingCatalog:
+			out.WaitingCatalog = r.N
+		case model.SyncNotRequired:
+			out.NotRequired = r.N
+		case model.SyncSyncing:
+			out.Syncing = r.N
+		case model.SyncSynced:
+			out.Synced = r.N
+		case model.SyncAttention:
+			out.Attention = r.N
 		}
 	}
 	return out, nil

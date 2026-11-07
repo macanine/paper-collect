@@ -1054,7 +1054,7 @@ func (a *lanzouAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 		}
 		expectedSHA = normalized
 	}
-	name := sanitizeRemoteName(obj.Name, path.Base(obj.Key))
+	name := sanitizeRemoteName(path.Base(obj.Key), "")
 	fileID, err := a.uploadFile(ctx, obj.Path, name, obj.Size, obj.Progress)
 	if err != nil {
 		return Stored{}, err

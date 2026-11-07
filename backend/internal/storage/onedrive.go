@@ -335,7 +335,7 @@ func (a *oneDriveAdapter) simpleUpload(ctx context.Context, drive, parent, name 
 	if err != nil {
 		return Stored{}, err
 	}
-	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name) + ":/content?@microsoft.graph.conflictBehavior=replace"
+	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name) + ":/content?@microsoft.graph.conflictBehavior=fail"
 	lastStatus := 0
 	for attempt := 0; attempt < 3; attempt++ {
 		requestCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
@@ -370,8 +370,8 @@ func (a *oneDriveAdapter) simpleUpload(ctx context.Context, drive, parent, name 
 		resp.Body.Close()
 		cancel()
 		if status == http.StatusConflict {
-			if cleanupErr := a.removeZeroByteUploadStub(ctx, drive, parent, name); cleanupErr != nil {
-				return Stored{}, cleanupErr
+			if stored, adopted, err := a.resolveExisting(ctx, drive, parent, name, obj.Size); err != nil || adopted {
+				return stored, err
 			}
 		} else if status != http.StatusTooManyRequests && status < 500 {
 			return Stored{}, statusError("onedrive_upload", status)
@@ -389,8 +389,8 @@ func (a *oneDriveAdapter) simpleUpload(ctx context.Context, drive, parent, name 
 }
 
 func (a *oneDriveAdapter) resumableUpload(ctx context.Context, drive, parent, name string, f *os.File, obj Object) (Stored, error) {
-	payloadJSON, _ := json.Marshal(map[string]any{"item": map[string]string{"@microsoft.graph.conflictBehavior": "replace", "name": name}})
-	sessionURL, err := a.createUploadSession(ctx, drive, parent, name, payloadJSON)
+	payloadJSON, _ := json.Marshal(map[string]any{"item": map[string]string{"@microsoft.graph.conflictBehavior": "fail", "name": name}})
+	sessionURL, err := a.createUploadSession(ctx, drive, parent, name, obj.Size, payloadJSON)
 	if err != nil {
 		return Stored{}, err
 	}
@@ -452,7 +452,7 @@ func (a *oneDriveAdapter) resumableUpload(ctx context.Context, drive, parent, na
 	return storedOneDriveItem(drive, item, obj.Size), nil
 }
 
-func (a *oneDriveAdapter) createUploadSession(ctx context.Context, drive, parent, name string, payload []byte) (string, error) {
+func (a *oneDriveAdapter) createUploadSession(ctx context.Context, drive, parent, name string, size int64, payload []byte) (string, error) {
 	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name) + ":/createUploadSession"
 	lastStatus := 0
 	for attempt := 0; attempt < 3; attempt++ {
@@ -475,8 +475,11 @@ func (a *oneDriveAdapter) createUploadSession(ctx context.Context, drive, parent
 		lastStatus = status
 		resp.Body.Close()
 		if status == http.StatusConflict {
-			if cleanupErr := a.removeZeroByteUploadStub(ctx, drive, parent, name); cleanupErr != nil {
-				return "", cleanupErr
+			if _, adopted, err := a.resolveExisting(ctx, drive, parent, name, size); err != nil {
+				return "", err
+			} else if adopted {
+				// The same-size file appeared meanwhile; let the next Put adopt it.
+				return "", newCloudError(ClassUnavailable, "onedrive_upload_session_conflict", true)
 			}
 		} else if status != http.StatusTooManyRequests && status < 500 {
 			return "", statusError("onedrive_upload_session", status)
@@ -505,24 +508,38 @@ func waitOneDriveRetry(ctx context.Context, attempt int) error {
 	}
 }
 
-func (a *oneDriveAdapter) removeZeroByteUploadStub(ctx context.Context, drive, parent, name string) error {
+// resolveExisting inspects whatever already sits at parent/name. Nothing there
+// lets the upload proceed; a zero-byte stub left by an interrupted upload is
+// removed; a same-size file is adopted; anything else is a conflict, because
+// uploads never replace existing files.
+func (a *oneDriveAdapter) resolveExisting(ctx context.Context, drive, parent, name string, size int64) (Stored, bool, error) {
 	target := graphItemPath(drive, parent) + ":/" + url.PathEscape(name)
 	resp, err := a.graph(ctx, http.MethodGet, target, nil, "onedrive_upload_stub")
 	if err != nil {
-		return err
+		return Stored{}, false, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		resp.Body.Close()
-		return nil
+		return Stored{}, false, nil
 	}
 	item, err := graphReadItem(resp, "onedrive_upload_stub")
 	if err != nil {
-		return err
+		return Stored{}, false, err
+	}
+	if len(item.Folder) > 0 && string(item.Folder) != "null" {
+		return Stored{}, false, newCloudError(ClassConflict, "onedrive_path_taken", false)
+	}
+	if item.Size != nil && *item.Size == size && size > 0 {
+		return storedOneDriveItem(drive, item, size), true, nil
 	}
 	if item.Size == nil || *item.Size != 0 {
-		return nil
+		return Stored{}, false, newCloudError(ClassConflict, "onedrive_path_taken", false)
 	}
-	resp, err = a.graph(ctx, http.MethodDelete, graphItemPath(drive, item.ID), nil, "onedrive_upload_stub_delete")
+	return Stored{}, false, a.deleteItem(ctx, drive, item.ID, "onedrive_upload_stub_delete")
+}
+
+func (a *oneDriveAdapter) deleteItem(ctx context.Context, drive, item, op string) error {
+	resp, err := a.graph(ctx, http.MethodDelete, graphItemPath(drive, item), nil, op)
 	if err != nil {
 		return err
 	}
@@ -531,9 +548,57 @@ func (a *oneDriveAdapter) removeZeroByteUploadStub(ctx context.Context, drive, p
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return statusError("onedrive_upload_stub_delete", resp.StatusCode)
+		return statusError(op, resp.StatusCode)
 	}
 	return nil
+}
+
+// Move re-parents and renames the item; Graph keeps its ID, and an occupied
+// target name fails instead of being replaced.
+func (a *oneDriveAdapter) Move(ctx context.Context, remote, key string) (Stored, error) {
+	driveID, itemID, err := decodeOneDriveID(remote)
+	if err != nil {
+		return Stored{}, err
+	}
+	segments, cerr := validateObjectKey(key)
+	if cerr != nil {
+		return Stored{}, cerr
+	}
+	drive, root, err := a.root(ctx)
+	if err != nil {
+		return Stored{}, err
+	}
+	if drive != driveID {
+		return Stored{}, newCloudError(ClassUnsupported, "onedrive_move_cross_drive", false)
+	}
+	parts := append(append([]string{}, a.prefix...), segments[:len(segments)-1]...)
+	parent, err := a.folder(ctx, drive, root, parts)
+	if err != nil {
+		return Stored{}, err
+	}
+	payload, _ := json.Marshal(map[string]any{"parentReference": map[string]string{"id": parent}, "name": oneDriveName(segments[len(segments)-1])})
+	resp, err := a.graph(ctx, http.MethodPatch, graphItemPath(drive, itemID)+"?@microsoft.graph.conflictBehavior=fail", bytes.NewReader(payload), "onedrive_move")
+	if err != nil {
+		return Stored{}, err
+	}
+	item, err := graphReadItem(resp, "onedrive_move")
+	if err != nil {
+		return Stored{}, err
+	}
+	size := int64(0)
+	if item.Size != nil {
+		size = *item.Size
+	}
+	return storedOneDriveItem(drive, item, size), nil
+}
+
+// Delete removes one item; a missing item counts as deleted.
+func (a *oneDriveAdapter) Delete(ctx context.Context, remote string) error {
+	drive, item, err := decodeOneDriveID(remote)
+	if err != nil {
+		return err
+	}
+	return a.deleteItem(ctx, drive, item, "onedrive_delete")
 }
 
 func storedOneDriveItem(drive string, item graphItem, size int64) Stored {
@@ -598,5 +663,5 @@ func (a *oneDriveAdapter) Share(ctx context.Context, remote string) (Share, erro
 }
 func (a *oneDriveAdapter) Health(ctx context.Context) error { _, _, err := a.root(ctx); return err }
 func (a *oneDriveAdapter) Capabilities() Capabilities {
-	return Capabilities{Upload: true, Download: true, Share: a.scope != "disabled"}
+	return Capabilities{Upload: true, Download: true, Share: a.scope != "disabled", Folders: true, Move: true, Delete: true}
 }

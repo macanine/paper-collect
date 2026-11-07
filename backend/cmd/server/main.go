@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/server"
 	"github.com/nic/paper-collect/backend/internal/service"
 	"github.com/nic/paper-collect/backend/internal/storage"
+	"github.com/nic/paper-collect/backend/internal/worker"
 )
 
 func main() {
@@ -32,6 +34,9 @@ func run() error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return err
+	}
+	if cfg.Role == config.RoleWorker {
+		return runWorker(cfg)
 	}
 
 	conn, err := db.Open(cfg.DatabaseDriver, cfg.DatabaseDSN)
@@ -68,7 +73,7 @@ func run() error {
 		Logf:         log.Printf,
 		PullCacheTTL: cfg.PullCacheTTL,
 		Worker: service.WorkerSettings{
-			InstanceID:           cfg.Worker.InstanceID,
+			Kinds:                cfg.Worker.Kinds,
 			IngestConcurrency:    cfg.Worker.IngestConcurrency,
 			ReplicateConcurrency: cfg.Worker.ReplicateConcurrency,
 			AnalyzeConcurrency:   cfg.Worker.AnalyzeConcurrency,
@@ -77,7 +82,6 @@ func run() error {
 			HeartbeatInterval:    cfg.Worker.HeartbeatInterval,
 			PollInterval:         cfg.Worker.PollInterval,
 		},
-		ResetAllRunningOnStart: cfg.DatabaseDriver == "sqlite",
 	})
 	if err != nil {
 		return err
@@ -91,6 +95,9 @@ func run() error {
 			return err
 		}
 		return fmt.Errorf("初始化管理员失败: %w", err)
+	}
+	if _, err := svc.RegisterMaster(ctx, cfg.NodeName, version()); err != nil {
+		return fmt.Errorf("登记主端节点失败: %w", err)
 	}
 	if err := svc.RecoverInterrupted(ctx); err != nil {
 		return fmt.Errorf("恢复中断任务失败: %w", err)
@@ -112,6 +119,7 @@ func run() error {
 		log.Printf("已为 %d 份未索引资料补建任务", queued)
 	}
 	svc.StartWorker(ctx)
+	svc.StartMasterHeartbeat(ctx)
 
 	srv, err := server.New(server.Options{Service: svc, WebDist: cfg.WebDist})
 	if err != nil {
@@ -138,4 +146,35 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// runWorker runs a database-free node that executes jobs leased by the master.
+func runWorker(cfg config.Config) error {
+	w, err := worker.New(worker.Config{
+		MasterURL: cfg.Node.MasterURL, Token: cfg.Node.Token, Version: version(),
+		CacheDir: cfg.Node.CacheDir, CacheMax: cfg.Node.CacheMax, Slots: cfg.Node.Slots, RapidOCRURL: cfg.Node.RapidOCRURL,
+		Factory: storage.New, Logf: log.Printf,
+	})
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	log.Printf("paper-collect 从端已连接 %s（任务槽位 %v）", cfg.Node.MasterURL, cfg.Node.Slots)
+	w.Run(ctx)
+	return nil
+}
+
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && len(setting.Value) >= 12 {
+				return setting.Value[:12]
+			}
+		}
+		if info.Main.Version != "" {
+			return info.Main.Version
+		}
+	}
+	return "dev"
 }

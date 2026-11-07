@@ -24,6 +24,7 @@ const (
 	ClassHashMismatch ErrorClass = "hash_mismatch"  // SHA-256 与声明不符
 	ClassLinkExpired  ErrorClass = "link_expired"   // 分享或直链失效，或需要提取码
 	ClassUnsupported  ErrorClass = "unsupported"    // 适配器或远端不支持该操作
+	ClassConflict     ErrorClass = "conflict"       // 目标路径已有内容不同的对象，不会覆盖
 	ClassUnknown      ErrorClass = "unknown"        // 其余未能归类的失败
 )
 
@@ -101,6 +102,8 @@ func statusError(op string, status int) *CloudError {
 		return newCloudError(ClassTimeout, detail, true)
 	case status == http.StatusTooManyRequests || status >= 500:
 		return newCloudError(ClassUnavailable, detail, true)
+	case status == http.StatusConflict || status == http.StatusPreconditionFailed:
+		return newCloudError(ClassConflict, detail, false)
 	case status == http.StatusRequestEntityTooLarge:
 		return newCloudError(ClassUnsupported, detail, false)
 	case status == http.StatusInsufficientStorage:

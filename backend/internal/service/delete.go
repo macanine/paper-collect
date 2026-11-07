@@ -219,16 +219,32 @@ func (s *Service) purgeMaterials(ctx context.Context, ids []string) error {
 			if err := tx.Where("blob_id = ?", blobID).Find(&replicas).Error; err != nil {
 				return err
 			}
+			// Cloud copies are never deleted implicitly: they stay as orphaned
+			// replicas (and keep their blob row, so re-uploading the same file
+			// adopts them again) until a person deletes them from the drive.
+			// Local drive files and never-uploaded rows are removed outright.
 			replicaIDs := make([]string, 0, len(replicas))
+			dropIDs := []string{}
+			kept := 0
 			for _, replica := range replicas {
 				replicaIDs = append(replicaIDs, replica.ID)
-				var provider model.StorageProvider
-				err := tx.Where("id = ?", replica.ProviderID).First(&provider).Error
+				var provider model.Drive
+				err := tx.Where("id = ?", replica.DriveID).First(&provider).Error
 				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 					return err
 				}
 				if err == nil && provider.Kind == model.KindLocal {
-					staleReplicas = append(staleReplicas, localFile{providerID: provider.ID, remoteKey: replica.RemoteKey})
+					staleReplicas = append(staleReplicas, localFile{providerID: provider.ID, remoteKey: replica.RemotePath})
+				}
+				if err != nil || provider.Kind == model.KindLocal || replica.RemoteID == "" {
+					dropIDs = append(dropIDs, replica.ID)
+					continue
+				}
+				kept++
+				if err := tx.Model(&model.Replica{}).Where("id = ?", replica.ID).Updates(map[string]any{
+					"status": model.ReplicaOrphaned, "rule_id": "", "updated_at": s.now(),
+				}).Error; err != nil {
+					return err
 				}
 			}
 			if len(replicaIDs) > 0 {
@@ -243,8 +259,13 @@ func (s *Service) purgeMaterials(ctx context.Context, ids []string) error {
 					return err
 				}
 			}
-			if err := tx.Where("blob_id = ?", blobID).Delete(&model.Replica{}).Error; err != nil {
-				return err
+			if len(dropIDs) > 0 {
+				if err := tx.Where("id IN ?", dropIDs).Delete(&model.Replica{}).Error; err != nil {
+					return err
+				}
+			}
+			if kept > 0 {
+				continue
 			}
 			if err := tx.Where("id = ?", blobID).Delete(&model.Blob{}).Error; err != nil {
 				return err
@@ -260,7 +281,7 @@ func (s *Service) purgeMaterials(ctx context.Context, ids []string) error {
 		_ = os.RemoveAll(filepath.Join(s.blobs.DataDir(), "analysis", id))
 	}
 	for _, replica := range staleReplicas {
-		root := filepath.Join(s.blobs.DataDir(), "providers", replica.providerID)
+		root := filepath.Join(s.blobs.DataDir(), "drives", replica.providerID)
 		target := filepath.Join(root, filepath.FromSlash(replica.remoteKey))
 		if strings.HasPrefix(filepath.Clean(target), filepath.Clean(root)+string(filepath.Separator)) {
 			_ = os.Remove(target)

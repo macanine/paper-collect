@@ -55,8 +55,13 @@ export type Stage = (typeof STAGES)[number];
 export const REVIEW_REASONS = ['low_confidence', 'pack_suggestion', 'duplicate_suspect', 'analysis_failed', 'manual'] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
-export const MATERIAL_STATUSES = ['pending_storage', 'archived', 'degraded'] as const;
+/** 归档状态：原件是否安全存放在本机 CAS。 */
+export const MATERIAL_STATUSES = ['archived', 'missing'] as const;
 export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
+
+/** 同步状态：云端副本进度，独立于归档状态。 */
+export const SYNC_STATUSES = ['waiting_catalog', 'not_required', 'syncing', 'synced', 'attention'] as const;
+export type SyncStatus = (typeof SYNC_STATUSES)[number];
 
 export const USER_ROLES = ['admin', 'editor', 'viewer'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -64,13 +69,7 @@ export type UserRole = (typeof USER_ROLES)[number];
 export const PROVIDER_KINDS = ['local', 'webdav', 'lanzou', '123pan', 'onedrive', 's3'] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
-const PROVIDER_ROLES = ['primary', 'backup'] as const;
-export type ProviderRole = (typeof PROVIDER_ROLES)[number];
-
-export const STORAGE_MODES = ['mirror_all', 'primary_backup', 'balanced'] as const;
-export type StorageMode = (typeof STORAGE_MODES)[number];
-
-const REPLICA_STATUSES = ['pending', 'uploading', 'ready', 'failed'] as const;
+const REPLICA_STATUSES = ['pending', 'uploading', 'moving', 'ready', 'failed', 'skipped', 'orphaned'] as const;
 export type ReplicaStatus = (typeof REPLICA_STATUSES)[number];
 
 const VERIFICATIONS = ['uploaded', 'size', 'sha256'] as const;
@@ -111,6 +110,7 @@ export const SCOPES = [
   'ai:write',
   'search:read',
   'search:write',
+  'nodes:manage',
 ] as const;
 export type Scope = (typeof SCOPES)[number];
 
@@ -130,9 +130,13 @@ export interface LibraryStats {
   failed: number;
   missing_answers: number;
   trashed: number;
-  pending_storage: number;
+  waiting_catalog: number;
+  syncing: number;
+  synced: number;
+  attention: number;
+  not_required: number;
   archived: number;
-  degraded: number;
+  missing: number;
 }
 
 export interface JobStats {
@@ -171,6 +175,7 @@ export interface PackMember {
   answer_start_page: number;
   stage: Stage;
   status: MaterialStatus;
+  sync_status: SyncStatus;
   media_type: string;
   size_bytes: number;
   position: number;
@@ -249,6 +254,8 @@ export interface Material {
   review_reasons: ReviewReason[];
   suggested_pack: PackBrief | null;
   status: MaterialStatus;
+  sync_status: SyncStatus;
+  sync_planned_at: string | null;
   media_type: string;
   size_bytes: number;
   sha256: string;
@@ -268,7 +275,13 @@ export interface MaterialSource {
 export interface Replica {
   id: string;
   blob_id: string;
-  provider_id: string;
+  drive_id: string;
+  rule_id: string;
+  desired_path: string;
+  remote_path: string;
+  skip_reason: string;
+  share: boolean;
+  required: boolean;
   status: ReplicaStatus;
   size_bytes: number;
   verification: Verification;
@@ -366,6 +379,8 @@ export interface Job {
   upload_id: string;
   replica_id: string;
   material_id: string;
+  node_id: string;
+  node_name: string;
   attempts: number;
   error: string;
   progress_message: string;
@@ -386,35 +401,102 @@ export interface Job {
   updated_at: string;
 }
 
-export interface StorageProvider {
+export interface DriveCapabilities {
+  upload: boolean;
+  download: boolean;
+  share: boolean;
+  folders: boolean;
+  move: boolean;
+  delete: boolean;
+}
+
+export type OnPathChange = 'move' | 'keep';
+
+export interface Drive {
   id: string;
   name: string;
   kind: ProviderKind;
-  role: ProviderRole;
   enabled: boolean;
-  priority: number;
-  weight: number;
+  root_path: string;
+  max_file_bytes: number;
+  allowed_exts: string[];
+  read_order: number;
+  on_path_change: OnPathChange;
   config: Record<string, string>;
   secret_configured: boolean;
+  capabilities: DriveCapabilities;
+  /** 按副本状态统计的数量，size_bytes 为 ready + orphaned 副本字节数。 */
+  stats: Record<string, number>;
   created_at: string;
   updated_at: string;
 }
 
-interface ProviderCapabilities {
-  upload: boolean;
-  download: boolean;
-  share: boolean;
-}
-
-export interface ProviderTestResult {
+export interface DriveTestResult {
   healthy: boolean;
   message: string;
-  capabilities: ProviderCapabilities;
+  capabilities: DriveCapabilities;
 }
 
-export interface StoragePolicy {
-  mode: StorageMode;
-  minimum_replicas: number;
+export interface RuleConditions {
+  subjects?: SubjectCode[];
+  doc_types?: DocType[];
+  grades?: Grade[];
+  cohorts?: number[];
+  regions?: string[];
+  tags?: string[];
+  parts?: Part[];
+  media_types?: string[];
+  min_size?: number;
+  max_size?: number;
+}
+
+export interface SyncTarget {
+  drive_id: string;
+  path_template: string;
+  share: boolean;
+  required: boolean;
+}
+
+export interface SyncRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  conditions: RuleConditions;
+  targets: SyncTarget[];
+}
+
+export type SyncActionKind = 'upload' | 'move' | 'share' | 'skip' | 'orphan' | 'cancel' | 'drift' | 'unchanged' | 'not_required';
+
+export interface SyncAction {
+  material_id: string;
+  file_name: string;
+  rule_id: string;
+  rule_name: string;
+  drive_id: string;
+  replica_id: string;
+  action: SyncActionKind;
+  desired_path: string;
+  remote_path: string;
+  reason: string;
+  status: ReplicaStatus | '';
+  error: string;
+  share_status: ShareStatus | '';
+  share: boolean;
+  required: boolean;
+}
+
+export interface SyncPreview {
+  preview_token: string;
+  counts: Record<string, number>;
+  items: SyncAction[];
+  total: number;
+}
+
+export interface ReplicaBulkResult {
+  id: string;
+  success: boolean;
+  error?: string;
 }
 
 export interface ReconcileResult {
@@ -597,4 +679,53 @@ export interface MaterialIndexState {
   llm_failed_batches: number;
   error: string;
   indexed_at: string | null;
+}
+
+export type NodeStatus = 'online' | 'stale' | 'offline' | 'draining' | 'disabled';
+export type NodeKind = 'replicate' | 'analyze' | 'index';
+
+/** 执行任务的节点。主端自身也是一个节点；令牌只在创建响应中出现。 */
+export interface ClusterNode {
+  id: string;
+  name: string;
+  is_master: boolean;
+  enabled: boolean;
+  draining: boolean;
+  status: NodeStatus;
+  kinds: NodeKind[];
+  slots: Partial<Record<NodeKind, number>>;
+  running: number;
+  running_kinds: Partial<Record<JobKind, number>>;
+  succeeded_1h: number;
+  failed_1h: number;
+  version: string;
+  protocol: number;
+  last_ip: string;
+  last_seen_at: string | null;
+  started_at: string | null;
+  cpu_percent: number;
+  cpu_cores: number;
+  proc_cpu_percent: number;
+  mem_used: number;
+  mem_total: number;
+  proc_rss: number;
+  net_rx_bps: number;
+  net_tx_bps: number;
+  cache_used: number;
+  cache_max: number;
+  created_at: string;
+}
+
+export interface CreatedNode extends ClusterNode {
+  token: string;
+}
+
+export interface NodePoint {
+  time: string;
+  cpu_percent: number;
+  mem_used: number;
+  mem_total: number;
+  net_rx_bps: number;
+  net_tx_bps: number;
+  running: number;
 }

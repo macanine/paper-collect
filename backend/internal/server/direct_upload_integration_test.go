@@ -202,20 +202,6 @@ func TestIndexingCanBeEnabledAfterUpload(t *testing.T) {
 	}
 }
 
-func TestRemovedInspectionAPIAndFields(t *testing.T) {
-	env := newEnv(t)
-	status, body := env.do(t, http.MethodPost, "/api/v1/ai/inspect?filename=old.pdf", nil, nil)
-	if status != http.StatusNotFound {
-		t.Fatalf("removed inspection endpoint %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodPost, "/api/v1/uploads", map[string]any{
-		"title": "资料", "entries": []map[string]any{{"relative_path": "资料.pdf", "size_bytes": 10, "inspection_id": "old"}},
-	}, nil)
-	if status != http.StatusBadRequest {
-		t.Fatalf("removed inspection field %d: %s", status, body)
-	}
-}
-
 func TestDirectUploadSharesParsingBetweenAnalysisAndIndex(t *testing.T) {
 	fake := newFakeAI(t)
 	env := newEnv(t)

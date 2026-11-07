@@ -147,6 +147,9 @@ func TestSearchQuestionsPaginatesStableMatchedPassages(t *testing.T) {
 }
 
 func TestFormulaSearchKeepsMatchesAheadOfTextOnlyCandidates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
 	svc, db := newWorkerTestService(t, t.TempDir(), "math-candidate-limit")
 	material := model.Material{ID: newID(), PackID: testPackID(t, db), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()}
 	if err := db.Create(&material).Error; err != nil {

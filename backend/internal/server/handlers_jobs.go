@@ -20,6 +20,7 @@ func (s *Server) handleListJobs(c *gin.Context) {
 		MaterialID: strings.TrimSpace(c.Query("material_id")),
 		UploadID:   strings.TrimSpace(c.Query("upload_id")),
 		ReplicaID:  strings.TrimSpace(c.Query("replica_id")),
+		NodeID:     strings.TrimSpace(c.Query("node_id")),
 	}
 	page, err := s.svc.ListJobs(c.Request.Context(), filter, pg)
 	if err != nil {

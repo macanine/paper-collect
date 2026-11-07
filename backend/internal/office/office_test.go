@@ -34,6 +34,9 @@ func converter(t *testing.T) *Converter {
 }
 
 func TestPDFRendersAndReusesSameDocument(t *testing.T) {
+	if testing.Short() {
+		t.Skip("slow")
+	}
 	if _, err := exec.LookPath("soffice"); err != nil {
 		t.Skip("LibreOffice Writer is not installed")
 	}

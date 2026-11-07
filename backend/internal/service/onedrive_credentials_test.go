@@ -17,7 +17,7 @@ func TestOneDriveRotatedTokenPreservesConcurrentCredentialChanges(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := model.StorageProvider{ID: id, Name: "OneDrive", Kind: model.KindOneDrive, Role: model.RoleBackup, Enabled: true, ConfigJSON: `{"client_id":"app"}`, SecretCipher: initial, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	p := model.Drive{ID: id, Name: "OneDrive", Kind: model.KindOneDrive, Enabled: true, ConfigJSON: `{"client_id":"app"}`, SecretCipher: initial, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if err := conn.Create(&p).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestOneDriveRotatedTokenPreservesConcurrentCredentialChanges(t *testing.T) 
 	if err := cfg.SaveRefreshToken(context.Background(), "old", "new"); err != nil {
 		t.Fatal(err)
 	}
-	var current model.StorageProvider
+	var current model.Drive
 	if err := conn.First(&current, "id = ?", id).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestOneDriveRotatedTokenPreservesConcurrentCredentialChanges(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.Model(&model.StorageProvider{}).Where("id = ?", id).Update("secret_cipher", changed).Error; err != nil {
+	if err := conn.Model(&model.Drive{}).Where("id = ?", id).Update("secret_cipher", changed).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.SaveRefreshToken(context.Background(), "new", "stale"); err != nil {
@@ -66,20 +66,20 @@ func TestOneDriveAuthorizationModeChangeRequiresNewToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider := model.StorageProvider{ID: id, Name: "OneDrive", Kind: model.KindOneDrive, Role: model.RoleBackup, Enabled: true, Priority: 1, Weight: 1, ConfigJSON: `{"client_id":"app"}`, SecretCipher: cipher}
+	provider := model.Drive{ID: id, Name: "OneDrive", Kind: model.KindOneDrive, Enabled: true, ConfigJSON: `{"client_id":"app"}`, SecretCipher: cipher}
 	if err := conn.Create(&provider).Error; err != nil {
 		t.Fatal(err)
 	}
 	cfg := map[string]string{"auth_mode": "openlist"}
-	if _, err := svc.UpdateProvider(context.Background(), auth.Principal{UserID: "admin", Role: model.RoleAdmin}, id, ProviderPatch{Config: &cfg}); err == nil {
+	if _, err := svc.UpdateDrive(context.Background(), auth.Principal{UserID: "admin", Role: model.RoleAdmin}, id, DrivePatch{Config: &cfg}); err == nil {
 		t.Fatal("switching mode without a new token must be rejected")
 	}
 	old := map[string]string{"refresh_token": "old"}
-	if _, err := svc.UpdateProvider(context.Background(), auth.Principal{UserID: "admin", Role: model.RoleAdmin}, id, ProviderPatch{Config: &cfg, Secret: &old}); err == nil {
+	if _, err := svc.UpdateDrive(context.Background(), auth.Principal{UserID: "admin", Role: model.RoleAdmin}, id, DrivePatch{Config: &cfg, Secret: &old}); err == nil {
 		t.Fatal("switching mode with the old token must be rejected")
 	}
 	secret := map[string]string{"refresh_token": "new"}
-	if _, err := svc.UpdateProvider(context.Background(), auth.Principal{UserID: "admin", Role: model.RoleAdmin}, id, ProviderPatch{Config: &cfg, Secret: &secret}); err != nil {
+	if _, err := svc.UpdateDrive(context.Background(), auth.Principal{UserID: "admin", Role: model.RoleAdmin}, id, DrivePatch{Config: &cfg, Secret: &secret}); err != nil {
 		t.Fatalf("switch with a new refresh token: %v", err)
 	}
 }

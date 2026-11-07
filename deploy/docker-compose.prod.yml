@@ -17,6 +17,8 @@ x-app: &app
     ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请在 .env 设置 ADMIN_PASSWORD}"
     JWT_SECRET: "${JWT_SECRET:?请在 .env 设置 JWT_SECRET}"
     MASTER_KEY: "${MASTER_KEY:?请在 .env 设置 MASTER_KEY}"
+    NODE_NAME: "${NODE_NAME:-主端}"
+    WORKER_KINDS: "${WORKER_KINDS:-}"
     WORKER_LEASE_DURATION: "${WORKER_LEASE_DURATION:-2m}"
     WORKER_HEARTBEAT_INTERVAL: "${WORKER_HEARTBEAT_INTERVAL:-20s}"
     WORKER_POLL_INTERVAL: "${WORKER_POLL_INTERVAL:-2s}"
@@ -93,35 +95,20 @@ services:
     entrypoint: ["/app/paper-collect-migrate"]
     command: ["--from-sqlite", "${MIGRATE_FROM_SQLITE:-}"]
 
-  app-1:
+  # 主端。从端见 deploy/docker-compose.worker.yml，可以部署在任意能访问主端的机器上。
+  app:
     <<: *app
     depends_on:
       migrate:
         condition: service_completed_successfully
       rapidocr:
         condition: service_healthy
-    environment:
-      <<: *app-environment
-      WORKER_INSTANCE_ID: app-1
-
-  app-2:
-    <<: *app
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      rapidocr:
-        condition: service_healthy
-    environment:
-      <<: *app-environment
-      WORKER_INSTANCE_ID: app-2
 
   gateway:
     image: nginx:1.27-alpine
     restart: unless-stopped
     depends_on:
-      app-1:
-        condition: service_healthy
-      app-2:
+      app:
         condition: service_healthy
     ports:
       - "${APP_PORT:-2033}:8080"

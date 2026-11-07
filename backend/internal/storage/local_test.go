@@ -53,7 +53,7 @@ func TestLocalPutWritesVerifiedObject(t *testing.T) {
 	key := "ab/" + sha256Hex(data) + "/paper.pdf"
 
 	stored, err := adapter.Put(context.Background(), Object{
-		Key: key, Name: "paper.pdf", Path: src, SHA256: sha256Hex(data), Size: int64(len(data)),
+		Key: key, Path: src, SHA256: sha256Hex(data), Size: int64(len(data)),
 	})
 	if err != nil {
 		t.Fatalf("Put: %v", err)
@@ -229,4 +229,66 @@ func TestFactoryUnknownKindIsUnsupported(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnsupported", err)
 	}
 	requireClass(t, err, ClassUnsupported)
+}
+
+func TestLocalPutNeverOverwritesDifferentContent(t *testing.T) {
+	adapter, root := newTestLocal(t)
+	data := []byte("paper bytes")
+	src := writeSource(t, t.TempDir(), "paper.pdf", data)
+	if err := os.MkdirAll(filepath.Join(root, "a"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a", "same.pdf"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a", "other.pdf"), []byte("other bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := adapter.Put(context.Background(), Object{Key: "a/same.pdf", Path: src, Size: int64(len(data))})
+	if err != nil || stored.RemoteID != "a/same.pdf" {
+		t.Fatalf("adopt = %+v, %v", stored, err)
+	}
+	_, err = adapter.Put(context.Background(), Object{Key: "a/other.pdf", Path: src, Size: int64(len(data))})
+	requireClass(t, err, ClassConflict)
+	got, _ := os.ReadFile(filepath.Join(root, "a", "other.pdf"))
+	if string(got) != "other bytes" {
+		t.Fatal("existing file was overwritten")
+	}
+	entries, _ := os.ReadDir(filepath.Join(root, "a"))
+	if len(entries) != 2 {
+		t.Fatalf("temporary files left behind: %v", entries)
+	}
+}
+
+func TestLocalMoveAndDeletePruneEmptyDirectories(t *testing.T) {
+	adapter, root := newTestLocal(t)
+	data := []byte("paper bytes")
+	src := writeSource(t, t.TempDir(), "paper.pdf", data)
+	if _, err := adapter.Put(context.Background(), Object{Key: "old/dir/a.pdf", Path: src, Size: int64(len(data))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Put(context.Background(), Object{Key: "taken.pdf", Path: writeSource(t, t.TempDir(), "b", []byte("b")), Size: 1}); err != nil {
+		t.Fatal(err)
+	}
+	mover := adapter.(Mover)
+	stored, err := mover.Move(context.Background(), "old/dir/a.pdf", "数学/2025届/a.pdf")
+	if err != nil || stored.RemoteID != "数学/2025届/a.pdf" {
+		t.Fatalf("move = %+v, %v", stored, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "old")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty source directories should be pruned: %v", err)
+	}
+	_, err = mover.Move(context.Background(), "数学/2025届/a.pdf", "taken.pdf")
+	requireClass(t, err, ClassConflict)
+
+	deleter := adapter.(Deleter)
+	if err := deleter.Delete(context.Background(), "数学/2025届/a.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleter.Delete(context.Background(), "数学/2025届/a.pdf"); err != nil {
+		t.Fatalf("deleting a missing object: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "数学")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty directories should be pruned: %v", err)
+	}
 }

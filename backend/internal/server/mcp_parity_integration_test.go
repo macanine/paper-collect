@@ -206,7 +206,7 @@ func TestDashboardStatsRESTAndMCPParity(t *testing.T) {
 		path, tool string
 		fields     []string
 	}{
-		{"/api/v1/materials/stats", "materials_stats", []string{"packs", "files", "review", "ready", "missing_answers", "pending_storage", "archived", "degraded"}},
+		{"/api/v1/materials/stats", "materials_stats", []string{"packs", "files", "review", "ready", "missing_answers", "archived", "missing", "waiting_catalog", "not_required", "syncing", "synced", "attention"}},
 		{"/api/v1/jobs/stats", "jobs_stats", []string{"total", "pending", "running", "succeeded", "failed"}},
 	} {
 		status, raw := env.do(t, http.MethodGet, test.path, nil, headers)
@@ -272,8 +272,8 @@ func TestMCPUponZIPUploadArchivesOnlyMembers(t *testing.T) {
 func TestMCPCreateOneDriveUsingOpenList(t *testing.T) {
 	env := newEnv(t)
 	key := createAgentKey(t, env, []string{"storage:write"})
-	result := callTool(t, env, key, "storage_providers_create", map[string]any{
-		"name": "OneDrive", "kind": "onedrive", "role": "backup", "enabled": true,
+	result := callTool(t, env, key, "storage_drives_create", map[string]any{
+		"name": "OneDrive", "kind": "onedrive", "enabled": true,
 		"config": map[string]any{"auth_mode": "openlist"},
 		"secret": map[string]any{"refresh_token": "test-private-token"},
 	})

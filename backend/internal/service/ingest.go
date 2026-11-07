@@ -236,14 +236,6 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, fil
 		g.files = append(g.files, f)
 	}
 
-	pol, err := s.loadPolicy(tx)
-	if err != nil {
-		return err
-	}
-	providers, err := loadProviders(tx)
-	if err != nil {
-		return err
-	}
 	stage := model.StageProcessing
 	reasons := []string{}
 	if !settings.AnalysisEnabled {
@@ -274,7 +266,7 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, fil
 			m := &model.Material{
 				ID: f.ID, PackID: pack.ID, Position: i, Part: suggestPart(path.Base(f.Path), f.MediaType),
 				OriginalName: path.Base(f.Path), Stage: stage, ReviewReasonsJSON: model.EncodeStrings(reasons),
-				Status: model.StatusPendingStorage, BlobID: b.ID, MediaType: f.MediaType, SizeBytes: f.Size, SHA256: f.SHA,
+				Status: model.StatusArchived, SyncStatus: model.SyncWaitingCatalog, BlobID: b.ID, MediaType: f.MediaType, SizeBytes: f.Size, SHA256: f.SHA,
 				CreatedAt: now, UpdatedAt: now,
 			}
 			// A lone file named like an answer key is most likely a full set
@@ -285,9 +277,6 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, fil
 			if err := tx.Create(&model.MaterialSource{ID: newID(), MaterialID: m.ID, UploadID: up.ID, UserID: up.UserID,
 				Path: f.Path, CreatedAt: now}).Error; err != nil {
 				return fmt.Errorf("record source: %w", err)
-			}
-			if _, err := s.planBlobWork(tx, b, pol, providers); err != nil {
-				return err
 			}
 			created = append(created, m)
 		}
@@ -301,6 +290,13 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, fil
 		}
 	}
 
+	if !settings.AnalysisEnabled {
+		for _, m := range created {
+			if _, err := s.planMaterialTx(tx, m.ID, true); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.autoEnqueueAnalysesTx(tx, created, settings, now); err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -125,6 +126,15 @@ func (a *s3Adapter) Put(ctx context.Context, obj Object) (Stored, error) {
 	if info.Size() != obj.Size {
 		return Stored{}, newCloudError(ClassSizeMismatch, "s3_source_size_mismatch", false)
 	}
+	// Never overwrite: an existing object of the same size is adopted.
+	if head, err := a.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(key)}); err == nil {
+		if head.ContentLength == nil || *head.ContentLength != obj.Size {
+			return Stored{}, newCloudError(ClassConflict, "s3_path_taken", false)
+		}
+		return Stored{RemoteID: obj.Key, Size: obj.Size, Verification: "size"}, nil
+	} else if cerr := AsCloudError(s3Error(ctx, err, "s3_exists")); cerr.Class != ClassFileMissing {
+		return Stored{}, cerr
+	}
 	_, err = a.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(key), Body: f, ContentLength: aws.Int64(obj.Size), ContentType: aws.String("application/octet-stream")}, func(o *transfermanager.Options) {
 		o.ObjectProgressListeners.Register(s3ProgressListener{report: obj.Progress})
 	})
@@ -139,6 +149,64 @@ func (a *s3Adapter) Put(ctx context.Context, obj Object) (Stored, error) {
 		return Stored{}, newCloudError(ClassSizeMismatch, "s3_size_mismatch", false)
 	}
 	return Stored{RemoteID: obj.Key, Size: obj.Size, Verification: "size"}, nil
+}
+
+// Move copies the object to the new key and deletes the old one. It is not
+// atomic: a retry after a failed delete finds the copy and finishes the move.
+func (a *s3Adapter) Move(ctx context.Context, remote, newKey string) (Stored, error) {
+	from, err := a.key(remote)
+	if err != nil {
+		return Stored{}, err
+	}
+	to, err := a.key(newKey)
+	if err != nil {
+		return Stored{}, err
+	}
+	if from == to {
+		return Stored{RemoteID: newKey, Verification: "size"}, nil
+	}
+	src, err := a.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(from)})
+	if err != nil {
+		return Stored{}, s3Error(ctx, err, "s3_move_source")
+	}
+	if src.ContentLength == nil {
+		return Stored{}, newCloudError(ClassUnavailable, "s3_move_source_size_missing", true)
+	}
+	size := *src.ContentLength
+	if dest, err := a.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(to)}); err == nil {
+		if dest.ContentLength == nil || *dest.ContentLength != size {
+			return Stored{}, newCloudError(ClassConflict, "s3_path_taken", false)
+		}
+	} else if cerr := AsCloudError(s3Error(ctx, err, "s3_move_target")); cerr.Class != ClassFileMissing {
+		return Stored{}, cerr
+	} else if _, err := a.client.CopyObject(ctx, &s3.CopyObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(to),
+		CopySource: aws.String(url.PathEscape(a.bucket) + "/" + escapeS3Key(from))}); err != nil {
+		return Stored{}, s3Error(ctx, err, "s3_move_copy")
+	}
+	if _, err := a.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(from)}); err != nil {
+		return Stored{}, s3Error(ctx, err, "s3_move_delete")
+	}
+	return Stored{RemoteID: newKey, Size: size, Verification: "size"}, nil
+}
+
+// Delete removes one object; S3 treats a missing key as deleted.
+func (a *s3Adapter) Delete(ctx context.Context, remote string) error {
+	key, err := a.key(remote)
+	if err != nil {
+		return err
+	}
+	if _, err := a.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(a.bucket), Key: aws.String(key)}); err != nil {
+		return s3Error(ctx, err, "s3_delete")
+	}
+	return nil
+}
+
+func escapeS3Key(key string) string {
+	parts := strings.Split(key, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
 }
 
 func (a *s3Adapter) Open(ctx context.Context, remote string) (io.ReadCloser, error) {
@@ -173,7 +241,7 @@ func (a *s3Adapter) Health(ctx context.Context) error {
 	return nil
 }
 func (a *s3Adapter) Capabilities() Capabilities {
-	return Capabilities{Upload: true, Download: true, Share: true}
+	return Capabilities{Upload: true, Download: true, Share: true, Folders: true, Move: true, Delete: true}
 }
 
 func s3Error(ctx context.Context, err error, op string) error {

@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,7 +124,7 @@ func TestOneDriveSmallFileUsesSimpleUpload(t *testing.T) {
 			return fakeResponse(r, 200, `{"id":"root","folder":{},"parentReference":{"driveId":"drive"}}`), nil
 		case r.URL.Host == "graph.microsoft.com" && r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, ":/content"):
 			uploads++
-			if r.URL.Query().Get("@microsoft.graph.conflictBehavior") != "replace" ||
+			if r.URL.Query().Get("@microsoft.graph.conflictBehavior") != "fail" ||
 				r.Header.Get("Authorization") != "Bearer access-value" ||
 				r.Header.Get("Content-Type") != "application/octet-stream" ||
 				r.ContentLength != int64(len(content)) {
@@ -405,5 +406,79 @@ func TestOneDriveOpenListExpiredTokenIsNotRetriedOrExposed(t *testing.T) {
 	err = a.Health(context.Background())
 	if err == nil || AsCloudError(err).Class != ClassAuth || IsRetryable(err) || strings.Contains(err.Error(), "private-test-token") {
 		t.Fatalf("expired token should be a redacted authentication error: %v", err)
+	}
+}
+
+func TestOneDriveUploadConflictAdoptsSameSizeAndRefusesOthers(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "source.pdf")
+	if err := os.WriteFile(file, []byte("abc"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{"id":"same-id","size":3}`
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.URL.Host == "login.microsoftonline.com":
+			return fakeResponse(r, 200, `{"access_token":"access-value","expires_in":3600}`), nil
+		case r.URL.Path == "/v1.0/me/drive/root":
+			return fakeResponse(r, 200, `{"id":"root","folder":{},"parentReference":{"driveId":"drive"}}`), nil
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, ":/content"):
+			return fakeResponse(r, http.StatusConflict, `{"error":{"code":"nameAlreadyExists"}}`), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.0/drives/drive/items/root:/paper.pdf":
+			return fakeResponse(r, 200, existing), nil
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		return fakeResponse(r, 404, `{}`), nil
+	})}
+	a, err := NewOneDrive(Config{Settings: map[string]string{"client_id": "app"}, Secrets: map[string]string{"refresh_token": "refresh"}}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := a.Put(context.Background(), Object{Key: "paper.pdf", Path: file, Size: 3})
+	if _, item, _ := decodeOneDriveID(stored.RemoteID); err != nil || item != "same-id" {
+		t.Fatalf("adopt = %+v, %v", stored, err)
+	}
+	existing = `{"id":"other-id","size":9}`
+	_, err = a.Put(context.Background(), Object{Key: "paper.pdf", Path: file, Size: 3})
+	if AsCloudError(err).Class != ClassConflict {
+		t.Fatalf("different existing item: %v", err)
+	}
+}
+
+func TestOneDriveMoveKeepsItemAndDeleteIgnoresMissing(t *testing.T) {
+	var patched map[string]any
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.URL.Host == "login.microsoftonline.com":
+			return fakeResponse(r, 200, `{"access_token":"access-value","expires_in":3600}`), nil
+		case r.URL.Path == "/v1.0/me/drive/root":
+			return fakeResponse(r, 200, `{"id":"root","folder":{},"parentReference":{"driveId":"drive"}}`), nil
+		case r.Method == http.MethodGet && r.URL.Path == "/v1.0/drives/drive/items/root:/数学":
+			return fakeResponse(r, 200, `{"id":"math","folder":{}}`), nil
+		case r.Method == http.MethodPatch && r.URL.Path == "/v1.0/drives/drive/items/item-1":
+			if r.URL.Query().Get("@microsoft.graph.conflictBehavior") != "fail" {
+				t.Error("move may replace an existing item")
+			}
+			_ = json.NewDecoder(r.Body).Decode(&patched)
+			return fakeResponse(r, 200, `{"id":"item-1","size":3}`), nil
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1.0/drives/drive/items/item-1":
+			return fakeResponse(r, http.StatusNotFound, `{}`), nil
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+		return fakeResponse(r, 404, `{}`), nil
+	})}
+	a, err := NewOneDrive(Config{Settings: map[string]string{"client_id": "app"}, Secrets: map[string]string{"refresh_token": "refresh"}}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := storedOneDriveItem("drive", graphItem{ID: "item-1"}, 3).RemoteID
+	stored, err := a.(Mover).Move(context.Background(), remote, "数学/新名.pdf")
+	if err != nil || stored.RemoteID != remote {
+		t.Fatalf("move = %+v, %v", stored, err)
+	}
+	if patched["name"] != "新名.pdf" || patched["parentReference"].(map[string]any)["id"] != "math" {
+		t.Fatalf("move body = %v", patched)
+	}
+	if err := a.(Deleter).Delete(context.Background(), remote); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/nic/paper-collect/backend/internal/blob"
 	"github.com/nic/paper-collect/backend/internal/docx"
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 )
 
@@ -87,6 +88,9 @@ func docxMaterial(t *testing.T, svc *Service) model.Material {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.db.Create(&model.Blob{ID: material.BlobID, SHA256: material.SHA256, SizeBytes: material.SizeBytes}).Error; err != nil {
+		t.Fatal(err)
+	}
 	return material
 }
 
@@ -102,7 +106,7 @@ func TestDOCXIsParsedNativelyAndImagesAreOCRd(t *testing.T) {
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}
-	result, parsedProvider, err := svc.parseWithOCR(t.Context(), model.AISettings{OCRProviderID: provider.ID}, material)
+	result, err := parseForTest(t, svc, provider.ID, material)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +120,6 @@ func TestDOCXIsParsedNativelyAndImagesAreOCRd(t *testing.T) {
 	}
 	if strings.Index(result.Pages[0].Text, "图片文字 123") > strings.Index(result.Pages[0].Text, "x+y=2") {
 		t.Fatalf("image text lost its position: %q", result.Pages[0].Text)
-	}
-	if parsedProvider.ID != provider.ID {
-		t.Fatalf("provider = %+v", parsedProvider)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -154,7 +155,7 @@ func TestDOCXKeepsTextWhenImageOCRFails(t *testing.T) {
 	if err := db.Create(&material).Error; err != nil {
 		t.Fatal(err)
 	}
-	result, _, err := svc.parseWithOCR(t.Context(), model.AISettings{OCRProviderID: provider.ID}, material)
+	result, err := parseForTest(t, svc, provider.ID, material)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,10 +170,8 @@ func TestRemoteDOCXSpillsToTemporaryFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	readerAt, size, cleanup, err := svc.documentReaderAt(Download{
-		Reader: io.NopCloser(bytes.NewReader(data)),
-		Size:   int64(len(data)),
-	})
+	// A stream without ReaderAt (a cloud replica or the master) is spilled to disk.
+	readerAt, size, cleanup, err := jobexec.DocumentReaderAt(filepath.Join(svc.blobs.DataDir(), "tmp"), io.NopCloser(bytes.NewReader(data)), int64(len(data)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,4 +183,22 @@ func TestRemoteDOCXSpillsToTemporaryFile(t *testing.T) {
 	if len(document.Pages) != 2 {
 		t.Fatalf("pages = %d", len(document.Pages))
 	}
+}
+
+// parseForTest runs only the parsing half of an analysis through the executor
+// with a model reply that is never reached when parsing fails.
+func parseForTest(t *testing.T, svc *Service, providerID string, material model.Material) (jobexec.ParsedText, error) {
+	t.Helper()
+	ocr, key, err := svc.ocrConfig(t.Context(), model.AISettings{OCRProviderID: providerID}, material.MediaType)
+	if err != nil {
+		return jobexec.ParsedText{}, err
+	}
+	out, err := jobexec.Run(t.Context(), svc.masterEnv(), jobexec.Input{Kind: jobexec.KindIndex, Index: &jobexec.IndexInput{
+		Blob: jobexec.Blob{SHA256: material.SHA256, Size: material.SizeBytes, FileName: material.FileName, MediaType: material.MediaType},
+		OCR:  ocr, ParseKey: key, Model: jobexec.ModelConfig{BaseURL: "http://127.0.0.1:1/v1", Model: "unused"},
+	}})
+	if out.Index == nil || out.Index.Parsed == nil {
+		return jobexec.ParsedText{}, err
+	}
+	return *out.Index.Parsed, nil
 }

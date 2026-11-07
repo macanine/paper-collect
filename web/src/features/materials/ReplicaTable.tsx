@@ -4,28 +4,46 @@ import { Link } from 'react-router';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { ReplicaStatusTag, ShareStatusTag, VerificationTag } from '../../shared/ui/StatusTags';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
-import type { Replica, StorageProvider } from '../../shared/api/types';
+import type { Drive, Replica } from '../../shared/api/types';
 
 interface ReplicaTableProps {
   replicas: Replica[];
-  providers: Map<string, StorageProvider> | null;
+  drives: Map<string, Drive> | null;
   canRefreshShare: boolean;
   refreshingId: string | null;
   onRefreshShare: (replica: Replica) => void;
 }
 
-export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingId, onRefreshShare }: ReplicaTableProps) {
+export function ReplicaTable({ replicas, drives, canRefreshShare, refreshingId, onRefreshShare }: ReplicaTableProps) {
   const columns: ColumnsType<Replica> = [
     {
-      title: '端点',
-      key: 'provider',
-      width: 180,
+      title: '网盘',
+      key: 'drive',
+      width: 170,
       render: (_: unknown, record) => {
-        const provider = providers?.get(record.provider_id);
-        if (!provider) {
-          return <span className="text-slate-500">存储端点</span>;
+        const drive = drives?.get(record.drive_id);
+        if (!drive) {
+          return <span className="text-slate-500">网盘</span>;
         }
-        return <Link to={`/storage?provider=${provider.id}`}>{provider.name}</Link>;
+        return <Link to="/storage">{drive.name}</Link>;
+      },
+    },
+    {
+      title: '路径',
+      key: 'path',
+      width: 360,
+      render: (_: unknown, record) => {
+        const drifted = Boolean(record.remote_path) && record.remote_path !== record.desired_path;
+        if (!drifted) {
+          const value = record.remote_path || record.desired_path;
+          return value ? <span className="break-all text-xs">{value}</span> : '—';
+        }
+        return (
+          <div className="flex flex-col text-xs">
+            {record.desired_path ? <span className="break-all">期望：{record.desired_path}</span> : null}
+            <span className="break-all text-orange-600">当前：{record.remote_path}</span>
+          </div>
+        );
       },
     },
     {
@@ -36,6 +54,8 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       render: (_: unknown, record) => (
         <div className="flex flex-col items-start gap-1">
           <ReplicaStatusTag status={record.status} />
+          {record.required ? <Tag color="blue">必需</Tag> : null}
+          {record.skip_reason ? <span className="text-xs text-slate-500">{record.skip_reason}</span> : null}
           {record.error ? (
             <Tooltip title={record.error}>
               <span className="block max-w-36 truncate text-xs text-red-600">{record.error}</span>
@@ -66,7 +86,7 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       render: (_: unknown, record) => {
         const expired = Boolean(record.share_expires_at && new Date(record.share_expires_at).getTime() <= Date.now());
         return <div className="flex flex-col gap-1">
-          {expired ? <Tag color="warning">链接已过期</Tag> : <ShareStatusTag status={record.share_status} />}
+          {expired ? <Tag color="warning">链接已过期</Tag> : record.share || record.share_status ? <ShareStatusTag status={record.share_status || 'pending'} /> : <span className="text-slate-400">不分享</span>}
           {record.share_url && !expired ? (
             <div className="flex min-w-0 items-center gap-2">
               <a href={record.share_url} target="_blank" rel="noreferrer noopener" className="min-w-0 truncate text-xs">
@@ -105,7 +125,6 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
             title: '操作',
             key: 'actions',
             width: 110,
-            fixed: 'right' as const,
             render: (_: unknown, record: Replica) => (
               <Button
                 size="small"
@@ -128,7 +147,7 @@ export function ReplicaTable({ replicas, providers, canRefreshShare, refreshingI
       columns={columns}
       dataSource={replicas}
       pagination={false}
-      scroll={{ x: 1200 }}
+      scroll={{ x: 1300 }}
       locale={{ emptyText: '暂无副本' }}
     />
   );

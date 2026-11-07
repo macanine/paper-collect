@@ -1,33 +1,33 @@
 # 高中资料归档系统技术架构
 
-版本 1.6.0 · 2026-11-03。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)，文档索引见 [README.md](README.md)。
+版本 1.7.0 · 2026-11-05。本文描述当前 `backend/` 与 `web/` 代码的真实分层、数据流、状态机、运行方式和边界。接口字段以 [API.md](API.md) 为准，表结构与备份以 [DATA.md](DATA.md) 为准，启动步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)，文档索引见 [README.md](README.md)。
 
-本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。自建 RapidOCR 已在远端 Compose 用真实扫描 PDF 验证。
+本文不把协议测试、模拟上游或本地 SQLite 测试写成真实云盘、MinerU、PaddleOCR、模型网关或 PostgreSQL 的联调结论。自建 RapidOCR 曾于 2026-10-28 在远端 Compose 用真实扫描 PDF 验证（套卷重构前）。
 
 ## 1. 系统定位
 
 面向高中资料的上传、归档、多点存储、AI 辅助编目和纯文本搜题系统：
 
 - **归档**：PDF、DOC、DOCX、PPTX、文件夹和 ZIP；资料是一份逻辑文件，原件按 SHA-256 去重。
-- **存储**：本地、WebDAV、蓝奏云、123 云盘、OneDrive 和 S3 适配器；一个 Blob 可在多个端点各保存一份副本。
+- **网盘同步**：原件只以本机 CAS 为准；本地目录、WebDAV、蓝奏云、OneDrive 和 S3 网盘按有序同步规则接收副本，路径由模板生成为可浏览的目录树，先预览再保存（123 云盘仅探测连接）。
 - **编目**：套卷聚合同一来源的文件，编目字段（学科、年级、届别、地区、机构、标签）在套卷上；文件只记录部件（试题、答案、教师版、答题卡、听力、正文）。专题把套卷按复习主题重新组合；删除的套卷进回收站保留 30 天。
 - **AI**：可切换的自建 RapidOCR、MinerU/PaddleOCR 解析文档，OpenAI 兼容模型生成编目建议；通过白名单校验后自动应用并更新文件名，人工可覆盖。
 - **搜题**：索引任务把试卷切成题目并建立可移植倒排表，按题干文本检索并返回页码。
 - **Agent**：用 API 密钥直接访问 REST 和 `/mcp` 中按 scope 授权的工具。
 
-非目标：在线编辑文档、执行宏、病毒扫描、跨请求分片续传、云盘物理删除、通用全文检索、跨资料同题聚合。
+非目标：在线编辑文档、执行宏、病毒扫描、跨请求分片续传、自动删除网盘文件、通用全文检索、跨资料同题聚合。
 
 ## 2. 技术栈
 
 | 层 | 选型 |
 | --- | --- |
-| 后端 | Go（`go.mod` 声明 1.26；本项目在 Go 1.27.2 上验证）、Gin 1.10、GORM 1.31 |
+| 后端 | Go（`go.mod` 声明 1.26；最近一次在 Go 1.27.3 上验证）、Gin 1.10、GORM 1.31 |
 | 数据库 | 默认 SQLite（`glebarez/sqlite` 纯 Go 驱动）；可切换 PostgreSQL（`gorm.io/driver/postgres`） |
 | 后端基础库 | `golang-jwt/jwt/v5`、`golang.org/x/crypto`（argon2id）、`golang.org/x/text`（ZIP 文件名解码） |
 | 前端 | React 19、Ant Design 6、React Router 8、TanStack Query 5、Vite 8 |
 | 前端语言/样式/测试 | TypeScript 7 strict、UnoCSS 66（Tailwind v4 兼容 preset）、Vitest 5 |
-| 运行形态 | 每实例一个 Go 进程：HTTP/MCP + 后台 worker；PostgreSQL 支持多实例；前端构建为 `web/dist` 静态文件，由同一进程从磁盘托管 |
-| 外部依赖 | OpenAI 兼容端点、MinerU v4/PaddleOCR 异步解析 API、各存储端点；RapidOCR 为 Compose 内自建依赖 |
+| 运行形态 | 主端一个 Go 进程：HTTP/MCP + 后台 worker；从端是同一二进制的 `ROLE=worker` 模式，不提供 HTTP 服务；前端构建为 `web/dist` 静态文件，由同一进程从磁盘托管 |
+| 外部依赖 | OpenAI 兼容端点、MinerU v4/PaddleOCR 异步解析 API、各网盘；RapidOCR 为 Compose 内自建依赖 |
 
 前端只使用 HTTP API，不直接访问数据库、本地文件或存储凭据。
 
@@ -56,7 +56,7 @@
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-没有消息队列、Redis 或独立 worker 服务。任务状态、重试、租约和启动恢复全部在数据库中完成。PostgreSQL 支持多实例领取；SQLite 仍是单实例。Compose 额外运行一个 RapidOCR 内网服务，它只负责文件 OCR，不参与业务任务租约。
+没有消息队列或 Redis。任务状态、重试、租约和启动恢复全部在主端数据库中完成，从端通过 HTTP 领取任务（见第 18 节）。Compose 额外运行一个 RapidOCR 内网服务，它只负责文件 OCR，不参与业务任务租约。
 
 ## 4. 代码分层
 
@@ -68,7 +68,7 @@
 | `internal/config` | 环境变量校验；错误只指出变量名，不回显值 | 缺 `JWT_SECRET`/`MASTER_KEY` 时启动失败 |
 | `internal/db` | 打开 SQLite/PostgreSQL、设置 pragma/连接池、`AutoMigrate` | 无独立版本化迁移；迁移失败启动失败 |
 | `internal/model` | GORM 表定义、枚举、JSON 文本编解码、固定学科字典 | 列表字段用 JSON 文本，保证 SQLite/PostgreSQL 通用 |
-| `internal/service` | 业务用例、事务、任务状态机、存储规划、AI 和检索 | 事务内使用传入的 `tx`；网络调用不放在数据库事务里 |
+| `internal/service` | 业务用例、事务、任务状态机、同步规则与副本规划、AI 和检索 | 事务内使用传入的 `tx`；网络调用不放在数据库事务里 |
 | `internal/server` | Gin 路由、JSON envelope、鉴权/scope、DTO、MCP | 薄适配层；字段以 API.md 为准 |
 | `internal/storage` | 存储适配器和稳定错误分类 | 不依赖 GORM/HTTP 路由；远端对象只通过 `Adapter` 端口访问 |
 | `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU/PaddleOCR/RapidOCR 解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
@@ -107,7 +107,7 @@ web/src/
 - 套卷、文件、任务列表及仪表盘最近记录使用整行点击导航；移动端卡片空白区域同样可点击。导航忽略行内链接、按钮、表单控件和下拉触发器，标题链接仍保留原生语义与可访问性。
 - 套卷详情返回 `members`、`collections` 和最多 5 个关联任务，可进入文件详情、专题详情或完整任务筛选；专题列表支持 `pack_id` 反查，资料库支持 `material_id` 反查所属套卷。
 - 待整理收件箱是 `stage=review` 的文件列表，支持确认（可同时接受配套建议）和移入套卷；回收站按套卷恢复或彻底删除，保留期 30 天。
-- 任务列表支持 `upload_id`、`material_id`、`replica_id` 精确筛选；文件详情的副本可回到所属存储端点，任务详情保留上传、文件和副本入口。
+- 任务列表支持 `upload_id`、`material_id`、`replica_id` 精确筛选；文件详情的副本可回到所属网盘，任务详情保留上传、文件和副本入口。
 - 浏览器网络遥测只保存在内存，最多保留最近 100 次采样；展示 P95/平均/中位延迟、成功率、传输字节、在途数量、请求耗时、响应大小和 request ID。采样不含请求正文、响应正文、凭据或查询参数；清空会重置历史聚合，但保留仍在途的请求。
 - 后端对 `/api/*` 与 `/mcp` 输出一行结构化请求日志：method、path、status、duration_ms、response_bytes、request_id。日志不记录查询参数、请求正文、凭据或响应内容。
 
@@ -157,14 +157,14 @@ web/src/
 | User / APIKey / Session / Audit | `users`、`api_keys`、`sessions`、`audits` | 用户和密钥每次请求重新校验；Session 只存 refresh 哈希；审计只存元数据 |
 | Blob | `blobs` | `sha256` 唯一；内容寻址；一份内容对应一个 Blob |
 | Pack / PackSubject | `packs`、`pack_subjects` | 套卷是浏览单位；编目字段在套卷；`(pack_id, code)` 学科连接；软删除进回收站 |
-| Material | `materials` | 一个文件 = 一份 SHA-256（唯一）；`pack_id` 归属唯一套卷；`part`/`stage`/`status` 索引；`status` 由副本事实决定 |
+| Material | `materials` | 一个文件 = 一份 SHA-256（唯一）；`pack_id` 归属唯一套卷；`part`/`stage`/`status`/`sync_status` 索引；`status` 只反映本机原件，`sync_status` 由副本事实决定 |
 | MaterialSource | `material_sources` | 每次到达一行；重复内容只追加来源（`duplicate=true`），不新建文件 |
 | Collection / CollectionItem | `collections`、`collection_items` | 专题只收套卷；`(collection_id, pack_id)` 唯一；`position` 显式排序；无父子层级 |
 | Upload / UploadEntry | `uploads`、`upload_entries` | 清单先声明；条目 `received` 需字节数、SHA、真实格式和 CAS 全部通过 |
-| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index/group；租约领取，PostgreSQL 多实例、SQLite 单实例 |
-| StorageProvider | `storage_providers` | kind 不可改；secret 只写不读；local 根目录由服务端固定 |
-| Replica | `replicas` | `(blob_id, provider_id)` 唯一；目标在规划时冻结；上传与分享状态分离 |
-| StoragePolicy | `storage_policies` | 单例 `id=1`；模式与 `minimum_replicas(1..20)` |
+| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index/group；租约领取，`lease_owner` 为节点 ID |
+| Drive | `storage_drives` | kind 不可改；secret 只写不读；local 根目录由服务端固定；只描述连接，不含策略 |
+| Rule / RuleTarget | `sync_rules`、`sync_rule_targets` | 有序、命中第一条；唯一兜底规则 `is_default`；`(rule_id, drive_id)` 唯一 |
+| Replica | `replicas` | `(blob_id, drive_id)` 唯一；`desired_path` 与 `remote_path` 分开；上传与分享状态分离；规则外副本保留 |
 | AIProvider / OCRProvider / AISettings | `ai_providers`、`ocr_providers`、`ai_settings` | API Key/OCR 令牌加密；端点没有物理删除，只能停用；设置保存当前 OCR provider |
 | MaterialAnalysis | `material_analyses` | 每资料一行；`applied_at` 记录自动/手动应用时间；图片不落盘 |
 | SearchSettings | `search_settings` | 单例；默认启用、500 页、10 页/批、12000 字/批 |
@@ -174,10 +174,9 @@ web/src/
 
 ### 6.1 文件、Blob 与副本
 
-- 已归档文件的权威内容在 `DATA_DIR/blobs/<sha[2]>/<sha>`；普通上传和 ZIP 成员先写入 CAS，ZIP 原件暂存，随后在一个数据库事务中发布套卷、文件、来源记录、副本计划和任务。
+- 已归档文件的权威内容在 `DATA_DIR/blobs/<sha[2]>/<sha>`；普通上传和 ZIP 成员先写入 CAS，ZIP 原件暂存，随后在一个数据库事务中发布套卷、文件、来源记录和任务（未开启自动识别时同时生成同步计划）。
 - 一份 SHA-256 只对应一个 Material 和一个 Blob；重复上传只追加 `MaterialSource`，因此副本、解析和题目索引天然共享。
-- Material 的 `file_name` 由「套卷标题 + part 标签」派生，是下载名和本地副本名；套卷人工改名或改 part 会同步全部成员文件名并重命名本地端点副本。云盘适配器没有改名能力，远端对象保留上传时的名字。
-- 新副本使用工作时的 `file_name`；远端对象 key 仍是内容寻址前缀 + 安全化文件名。
+- Material 的 `file_name` 由「套卷标题 + part 标签」派生，是下载名和路径模板中的 `{文件名}`；套卷人工改名、改编目或改 part 后同步成员文件名并重新规划副本，`on_path_change=move` 的网盘随之移动，`keep` 的网盘标记路径偏离。
 
 ### 6.2 套卷、文件与专题
 
@@ -197,13 +196,13 @@ UploadEntry: pending ──PUT 校验通过──> received
 Job:      pending ──claim──> running ──成功──> succeeded
                                └────失败──> failed ──retry──> pending（同 id）
 
-Replica:  pending ──claim──> uploading ──上传成功──> ready
-                               └────失败──> failed ──retry──> pending
           分享单独记录：pending | ready | unsupported | failed
 
-Material: pending_storage ──ready 副本数 >= minimum_replicas──> archived
-                    └── 0 ready、0 pending/uploading、至少 1 failed ──> degraded
-                    其他不足情况保持 pending_storage
+Replica:  pending ──claim──> uploading（未写入）| moving（已写入、路径变化）──> ready | failed
+          另有 skipped（停用/超限/扩展名）、orphaned（规则外，保留远端）
+
+Material.status:      archived（CAS 存在）| missing（只能从网盘读取）
+Material.sync_status: waiting_catalog ──规划──> not_required | syncing | synced | attention
 
 Analysis: pending ──> running ──> succeeded | failed
 Index:    pending ──> running ──> succeeded | failed
@@ -224,10 +223,11 @@ Eligible: part in (questions, full); other parts are not_applicable
       → 普通文件进入 CAS；ZIP 写入独立临时区
   → POST /uploads/{id}/finalize（幂等，创建 ingest Job）
   → worker：展开 ZIP 成员到 CAS → 按目录 + 文件名主干分组
-  → 单个数据库事务：Pack/Material/MaterialSource/PackSubject/Replica plan/
-                     analyze/index 自动任务/Upload 状态与 results/Job 状态/审计
+  → 单个数据库事务：Pack/Material/MaterialSource/PackSubject/
+                     同步计划（未开启自动识别时）/analyze/index 自动任务/
+                     Upload 状态与 results/Job 状态/审计
       同 SHA 已存在时只追加 MaterialSource（duplicate=true），不新建文件
-  → 成功后清理临时 ZIP，复制任务异步上传各端点
+  → 成功后清理临时 ZIP，复制任务按同步规则异步上传各网盘
 ```
 
 ### 7.1 清单与单文件接收
@@ -262,48 +262,72 @@ Eligible: part in (questions, full); other parts are not_applicable
 - ZIP 成员记录 `source_path = ZIP 相对路径 + "/" + 成员路径`；不存在 ZIP 容器资料。
 - 套卷标题优先用类型 + 学科 + 届别等编目字段生成；字段不足时退回清单 `title`、考试名或到达文件名。学科、年级、届别、地区、机构、标签来自清单 hints，服务端不从文件名推断学科。
 - `part` 有 8 类：questions（试题）、answers（答案）、full（题目+答案同文件）、teacher（教师版）、answer_sheet（答题卡）、listening（听力）、main（单文档正文）、other（无法判断）。归档时按文件名关键词给出初始 part，AI 自动应用与人工修改走同一校验；文件名按「套卷标题 + part 标签」生成。
-- 同一事务中还写入：每个 Blob 的 Replica 目标、每个 pending Replica 的 replicate Job、自动 analyze/index 任务（若启用）、Upload 的 `results`/`new_count`/`duplicate_count`、ingest Job 成功状态和系统审计。单文件试卷由独立的 `group` 任务在 AI 识别后尝试并入已有套卷，归档事务本身不创建该任务。
+- 同一事务中还写入：未开启自动识别时的同步计划（副本与 replicate Job；开启时文件保持 `waiting_catalog`，识别成功后再规划）、自动 analyze/index 任务（若启用）、Upload 的 `results`/`new_count`/`duplicate_count`、ingest Job 成功状态和系统审计。单文件试卷由独立的 `group` 任务在 AI 识别后尝试并入已有套卷，归档事务本身不创建该任务。
 
-## 8. 多点存储与复制
+## 8. 网盘同步
 
-### 8.1 策略
+原件只以本机 CAS 为准；网盘副本由「网盘 + 有序同步规则」决定，与原件安全状态分开报告。
 
-| 模式 | 写入目标 | 读取顺序 |
+### 8.1 网盘与规则
+
+- **网盘**（`storage_drives`）只描述连接：kind、凭据、`root_path`、`max_file_bytes`、`allowed_exts`、`read_order`、`on_path_change`。不再有主备、权重或全局副本策略，也不默认创建本地网盘。
+- **规则**（`sync_rules` + `sync_rule_targets`）自上而下匹配，命中第一条启用规则为止；条件字段之间为「且」、同字段多值为「或」。最后一条固定为启用、无条件的兜底规则，空库时创建且没有目标。
+- 每个目标给出 `drive_id`、路径模板、`share`、`required`。模板变量来自套卷编目和文件部件，每段清理非法字符并截断到 100 字符，再拼到 `root_path` 之下；蓝奏云只取文件名。同一网盘上不同文件撞到同一路径时，后来者追加 ` (sha8)`。路径占用表同时包含所有副本的期望路径和实际路径（含规则外副本）。
+
+### 8.2 计划（期望 vs 实际）
+
+`planMaterialTx` 在事务中为单个文件运行规则，得到期望目标，并与该 Blob 现有副本比较：
+
+| 动作 | 条件 | 结果 |
 | --- | --- | --- |
-| `mirror_all`（默认） | 所有启用的主端和备端，各一份 | 主端优先，再按 priority 升序 |
-| `primary_backup` | 与 mirror_all 相同的全量双写 | 主端优先，备端兜底 |
-| `balanced` | 从主端中按权重选 `minimum_replicas` 个不同端点（主端不足时取全部主端），再加所有备端 | 同上 |
+| upload | 期望有、尚未写入网盘 | 副本 pending，入队 replicate |
+| move | 已写入，期望路径 ≠ 实际路径，网盘 `on_path_change=move` | 副本 pending，入队 replicate（执行时为 moving） |
+| drift | 同上但网盘为 `keep` | 副本保持 ready，资料同步状态为 attention |
+| share | 需要分享但尚无可用分享 | 副本 pending，入队 replicate |
+| skip | 网盘停用、超过大小上限或扩展名不允许 | 副本 skipped，撤销等待中的任务，不算失败 |
+| orphan | 实际有、期望没有，且已写入网盘 | 副本 orphaned、清空 `rule_id`，不删除远端 |
+| cancel | 实际有、期望没有，且从未写入 | 删除副本行并结束等待中的任务 |
 
-- `minimum_replicas` 1..20，默认 1；本地副本也计入最低数量。
-- 规划结果冻结在 Replica 行中（含 `plan_mode`）；重试/补齐不会重新随机选择已存在的目标。
-- `mirror_all` 与 `primary_backup` 的写入目标完全相同，区别在读取偏好；备端同样保存完整副本。
-- 目标端点不足时不会伪造 archived；`ready` 副本数达到最低值才把文件标为 `archived`。
-- 停用端点不再接收新任务，但历史副本和分享信息保留；系统没有“删除唯一可用副本”的强制保护。
+- 正在 uploading/moving 的副本保留当前状态；worker 完成后若发现期望字段已变化，会在同一事务内重新规划。
+- 所有规划路径（单文件规划、预览、保存、reconcile、副本管理、worker 完成）先获取同步锁：PostgreSQL 用事务级 advisory lock，SQLite 依赖单连接立即事务。
+- **等待编目**：新文件 `sync_status=waiting_catalog`。未开启自动识别时，归档事务内立即规划；开启时，在文件被置为 ready（识别成功并自动应用、人工确认或人工编辑）时规划。`POST /materials/{id}/sync` 可强制规划。已规划文件在改名、改编目或改部件后自动重新规划。
+- **预览与保存**：`POST /storage/rules/preview` 用同一套计算逻辑对全部已编目文件生成动作统计和明细，不写库，并签发用 `MASTER_KEY` 加密的 `preview_token`（绑定用户、草稿摘要、当前规则/目标/网盘摘要，15 分钟过期）。`PUT /storage/rules` 校验令牌后在一个事务中替换规则并重新规划全部已编目文件；任一绑定项变化返回 409。
+- `POST /storage/reconcile` 按当前规则重新规划全部已编目文件，修改网盘设置后用它让已有文件生效。
 
-### 8.2 复制与分享
+### 8.3 状态
 
-- 每个 `(blob_id, provider_id)` 至多一个 Replica；`queueReplicaJob` 保证同一 Replica 至多一个 pending/running Job。
-- worker 打开本地 CAS 原件，调用 `Adapter.Put`；成功后才标记 ready 并记录 `verification`。
-- `verification` 只声明真正做过的检查：`uploaded`（仅收到成功响应）、`size`（字节数比对）、`sha256`（完整重算）。
-- 上传成功后再尝试 `Share`；分享失败不回滚副本，`share_status=failed` 且副本仍 ready；不支持分享记为 `unsupported`。
+- `Material.status`：`archived`（本机 CAS 存在）或 `missing`（只能从网盘读取），每次刷新时检查 CAS。
+- `Material.sync_status`：忽略 skipped/orphaned 副本；没有其他副本为 `not_required`；必需目标全部 ready 为 `synced`；仍有未完成目标为 `syncing`（没有必需目标时，任一副本 pending/uploading/moving 也算）；必需目标失败、必需目标分享失败或已写入副本路径偏离为 `attention`；尚未规划为 `waiting_catalog`。
+- `Replica.status`：pending → uploading/moving → ready/failed，另有 skipped、orphaned。
+
+### 8.4 复制、移动与分享
+
+- 每个 `(blob_id, drive_id)` 至多一个副本；`queueReplicaJob` 保证同一副本至多一个 pending/running 任务，且只为 pending 副本入队。
+- worker 在锁定租约的事务中把副本置为 uploading（未写入）或 moving（已写入）；随后在事务外调用 `Adapter.Put` 或 `Mover.Move`，成功后记录 `remote_id`、`remote_path`、大小和 `verification`。网盘已停用、副本已 skipped/orphaned/ready 时直接结束任务。
+- **适配器不覆盖**：`Put` 遇到同路径已有对象时，只在大小一致（能校验时 SHA 也一致）的情况下接管，否则返回 `conflict`；`Move` 同样不覆盖目标。因此「远端已写入但数据库未记录」的情况在重试时会被接管。
+- `verification` 只声明真正做过的检查：`uploaded`（仅收到成功响应）、`size`、`sha256`。
+- 目标要求分享时在上传/移动后调用 `Share`；分享失败不回滚副本，`share_status=failed` 且副本仍 ready；不支持分享记为 `unsupported`。不要求分享时清空分享字段。
 - 分享 URL、提取码、过期时间只出现在有 `materials:read` 的文件详情响应；不写日志/审计。
-- 下载先看本地 CAS；缺失时按“主端优先、priority 升序、Provider ID/创建时间稳定排序”尝试 ready 副本，全部失败返回 503。
-- 按需拉取接口强制从 ready 云端副本读取，不复用 CAS；流式写入 `tmp/material-pulls` 并校验大小与 SHA-256，原子提交后按 `PULL_CACHE_TTL` 提供鉴权下载，不写入永久 CAS。
-- `POST /storage/reconcile` 只按当前策略补建缺少的副本/任务，不删除额外副本；历史副本不自动迁移。
-- 远端上传成功但数据库更新失败时可能残留远端对象；本地、WebDAV、S3 使用固定对象 key，OneDrive 使用固定路径并请求替换同名文件；其他适配器不保证远端幂等。
+- 下载先看本地 CAS；缺失时按网盘 `read_order`、Drive ID、创建时间稳定排序，尝试所有已写入网盘（`remote_id` 非空）的副本，含规则外副本和已停用网盘；全部失败返回 503。
+- 按需拉取接口同样按此顺序只从网盘读取，不复用 CAS；流式写入 `tmp/material-pulls` 并校验大小与 SHA-256，原子提交后按 `PULL_CACHE_TTL` 提供鉴权下载，不写入永久 CAS。
 
-### 8.3 适配器能力
+### 8.5 规则外副本与删除
 
-| kind | 上传 | 下载 | 分享 | 说明 |
-| --- | --- | --- | --- | --- |
-| `local` | 可用 | 可用 | 不支持 | 根目录固定为 `DATA_DIR/providers/<providerID>`；提供 SHA 时 verification=sha256 |
-| `webdav` | 可用 | 可用 | 条件可用 | PUT/MKCOL/HEAD/GET/PROPFIND；配置 `public_base_url` 才返回公开目录拼接链接，不代表匿名可访问；提供 SHA 时上传后完整下载重算 |
-| `lanzou` | 可用（非官方协议） | 可用 | 可用 | Cookie 会话；单文件 100 MiB；默认 verification=uploaded，`verify_remote_hash=true` 才做远端校验；未对真实服务联调 |
-| `123pan` | 不可用 | 不可用 | 不可用 | 只实现 access_token 与 Health；Put/Open/Share 返回 unsupported（如 `123pan_upload_unverified`），Capabilities 全 false |
-| `onedrive` | 可用 | 可用 | 可配置 | Graph 委派授权；可使用自有应用或 OpenList 在线应用；小文件直传、大文件分段上传和只读分享，刷新令牌加密轮换；未对真实服务联调 |
-| `s3` | 可用 | 可用 | 可用 | AWS SDK 分段并行上传，HEAD 比对大小，签名链接按配置过期；兼容服务需实际验证 |
+- 规则变化或资料彻底删除后，已写入网盘的副本转为 orphaned，系统从不自动删除远端文件。彻底删除时保留该 Blob 行，以便再次上传相同内容时重新接管；`local` 网盘文件和从未写入的副本行直接删除。
+- `POST /storage/replicas/bulk`：`retry` 重新规划；`delete_remote` 仅对 orphaned 副本调用 `Deleter.Delete`，执行期间创建一条 running 的 replicate 任务作为租约占位并心跳，完成后若副本仍是 orphaned 则删除记录，若期间又被规则需要则清空远端字段、重新排队上传；`forget` 只删除 orphaned 副本记录。有 pending/running 任务的副本返回 409。
 
-适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported 等）；存储错误写入 Job/Replica 前会脱敏。OneDrive 对冲突、限流和 5xx 做有限重试，并在上传会话冲突时清理中断留下的 0 字节占位文件；蓝奏有内部重试，S3 使用 SDK 自带的请求重试；服务层没有自动重试循环。
+### 8.6 适配器能力
+
+| kind | 上传 | 下载 | 分享 | 子目录/移动/删除 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `local` | 可用 | 可用 | 不支持 | 支持 | 根目录固定为 `DATA_DIR/drives/<driveID>`；硬链接提交不覆盖；移动/删除后清理空目录；提供 SHA 时 verification=sha256 |
+| `webdav` | 可用 | 可用 | 条件可用 | 支持（MKCOL/MOVE/DELETE） | 配置 `public_base_url` 才返回公开目录拼接链接，不代表匿名可访问；提供 SHA 时上传后完整下载重算 |
+| `lanzou` | 可用（非官方协议） | 可用 | 可用 | 不支持 | Cookie 会话；`root_path` 为文件夹 ID；单文件 100 MiB；默认 verification=uploaded；未对真实服务联调 |
+| `123pan` | 不可用 | 不可用 | 不可用 | — | 只实现 access_token 与 Health；规则不能把它作为目标 |
+| `onedrive` | 可用 | 可用 | 可配置 | 支持 | Graph 委派授权；自有应用或 OpenList 在线应用；`conflictBehavior=fail`，小文件直传、大文件分段上传，PATCH 移动；刷新令牌加密轮换；未对真实服务联调 |
+| `s3` | 可用 | 可用 | 可用 | 支持（移动为复制后删除，非原子） | AWS SDK 分段并行上传，HEAD 比对大小，签名链接按配置过期；兼容服务需实际验证 |
+
+适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported/conflict 等）；存储错误写入 Job/Replica 前会脱敏。OneDrive 对冲突、限流和 5xx 做有限重试，并在上传会话冲突时清理中断留下的 0 字节占位文件；蓝奏有内部重试，S3 使用 SDK 自带的请求重试；服务层没有自动重试循环。
 
 ## 9. AI 识别
 
@@ -333,8 +357,8 @@ worker RunAnalyze
   → 按 max_pages/max_images 限制图片；图片只在内存中传给视觉模型
   → 按 priority 尝试启用的模型端点；有视觉模型时发 image_url，否则纯文本
   → 严格解析 JSON、校验字段枚举/长度/置信度，写 suggestions_json
-  → 同一数据库事务自动应用白名单字段、同步 file_name、写 applied_at 和审计
-  → 事务提交后同步本地副本文件名；人工可 PATCH 或 POST analysis/apply 纠偏
+  → 同一数据库事务自动应用白名单字段、同步 file_name、写 applied_at 和审计；文件置为 ready 时生成同步计划
+  → 事务提交后按新文件名重新规划副本路径；人工可 PATCH 或 POST analysis/apply 纠偏
 ```
 
 - 自动分析只对非 ZIP 容器入队；ZIP 展开成员各自入队，避免对容器重复付费。
@@ -383,7 +407,7 @@ RunIndex
 ### 10.2 搜索
 
 - 普通文本归一化仍为全角转半角、去空白/标点/符号、转小写；公式另行保留运算符和变量大小写，将上标、常见符号、简单分式及对应 LaTeX 写法统一。最多优先取 16 个公式词项，总计最多 24 个词项。
-- SQL 先按词项召回；公式查询要求候选题目包含所有选中的公式词项，再限制最多 2000 个候选，避免纯文字相似题目挤占公式结果。只返回 `materials.status in (archived, degraded)` 的资料。
+- SQL 先按词项召回；公式查询要求候选题目包含所有选中的公式词项，再限制最多 2000 个候选，避免纯文字相似题目挤占公式结果。只返回 `materials.status in (archived, missing)` 且未删除的资料。
 - 过滤条件：学科（`pack_subjects`）、年级、届别；可选。
 - 普通文本按词项覆盖率、词频、短语和长度打分；公式查询先校验所有公式片段，混合文字要求选中词项至少 35% 匹配，再按覆盖率、词频及公式命中打分。不同运算符不会因为去标点而合并，但不进行通用代数等价运算。
 - 搜索结果返回 `snippet`（约 180 字）和纯文本字符区间 `highlights`，不返回 HTML；普通文本优先截取归一化后最长的连续匹配文段，公式查询围绕命中公式截取。截断处附省略号，区间相对于包含省略号的摘要；前端自行渲染 `<mark>` 并支持分页。单题详情没有查询词，高亮为空。
@@ -411,13 +435,13 @@ RunIndex
 | `/inbox` | 待整理收件箱（确认、接受配套建议） | materials:write |
 | `/library` | 资料库（套卷列表与筛选） | materials:read |
 | `/packs/:packId` | 套卷详情（文件、齐全度、专题、下载） | materials:read |
-| `/materials/:materialId` | 文件详情（AI 识别、题目索引、副本） | materials:read |
+| `/materials/:materialId` | 文件详情（AI 识别、题目索引、归档与同步状态、副本） | materials:read |
 | `/search` | 搜题 | materials:read |
 | `/collections`、`/collections/:collectionId` | 专题列表/详情 | collections:read |
 | `/uploads`、`/uploads/:uploadId` | 上传记录/传输与归档进度 | uploads:write |
 | `/trash` | 回收站（恢复、彻底删除） | materials:write |
 | `/jobs`、`/jobs/:jobId` | 任务列表/详情与重试 | jobs:read |
-| `/storage` | 端点、策略、补齐副本、分享刷新 | storage:read |
+| `/storage` | 网盘、同步规则（编辑、预览并保存）、副本（筛选、批量重试/删除远端/移除记录）、补齐副本 | storage:read |
 | `/admin/ai-models`、`/admin/ai-settings` | AI 模型/解析设置 | ai:read |
 | `/admin/api-keys`、`/admin/users`、`/admin/audit` | 密钥、用户、审计 | keys:manage / users:manage / audit:read |
 
@@ -460,7 +484,7 @@ config.Load（校验环境变量）
  → cryptobox.New(MASTER_KEY)
  → auth.NewSigner(JWT_SECRET) + auth.NewLimiter
  → service.New
- → Bootstrap（空库时管理员、storage_policies、ai_settings、search_settings、默认本地端点）
+ → Bootstrap（空库时管理员、兜底同步规则、ai_settings、search_settings）
  → RecoverInterrupted（running → pending）
  → EnqueueMissingIndexes（索引启用时）
  → StartWorker（单 goroutine）
@@ -468,7 +492,7 @@ config.Load（校验环境变量）
 ```
 
 - `Bootstrap` 只在条件满足时创建默认行，可重复调用；已有用户时不会重置管理员密码。
-- 默认本地端点仅在没有任何存储端点时创建，根目录 `DATA_DIR/providers/<providerID>`。
+- 不再默认创建本地网盘；兜底规则只在不存在任何 `is_default` 规则时创建，没有目标。`local` 网盘根目录固定为 `DATA_DIR/drives/<driveID>`。
 - 优雅退出信号为 SIGINT/SIGTERM；HTTP Shutdown 超时 10 秒。进程停止时正在运行的 Job 由下次启动的 `RecoverInterrupted` 处理。
 - 服务不自动加载 `.env`；`DATA_DIR`、`WEB_DIST` 都以进程工作目录求绝对路径。
 
@@ -482,7 +506,7 @@ DATA_DIR/
   tmp/upload-archives/     已接收、等待处理的 ZIP；成功后清理
   tmp/material-pulls/      云端副本按需拉取缓存，按 SHA 命名并受 TTL 限制
   analysis/<materialID>/document.md   识别 Markdown（绝对路径写入数据库）
-  providers/<providerID>/...          本地存储端点的副本
+  drives/<driveID>/...                `local` 网盘的副本（按路径模板分层）
 ```
 
 数据库还保存凭据密文、refresh/密钥哈希、任务、副本和分析/索引状态。数据库与文件系统/云端不是同一事务；备份和恢复见 [DATA.md](DATA.md)。
@@ -492,7 +516,7 @@ DATA_DIR/
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
 | `ADDR` | `:8080` | 监听地址 |
-| `DATA_DIR` | `./data` | 数据库默认位置、CAS、临时文件、本地端点 |
+| `DATA_DIR` | `./data` | 数据库默认位置、CAS、临时文件、`local` 网盘 |
 | `DATABASE_DRIVER` | `sqlite` | `sqlite` 或 `postgres` |
 | `DATABASE_DSN` | `DATA_DIR/paper.db` | PostgreSQL 时必填 |
 | `WEB_DIST` | `../web/dist` | SPA 静态目录；不存在时仅 API |
@@ -509,60 +533,85 @@ DATA_DIR/
 - **授权**：HTTP scope 与 MCP 工具二次检查；Agent scope 取角色与密钥交集，委派的密钥或用户权限不得超过调用者；MCP 仅 Agent。
 - **秘密**：存储/AI/OCR 凭据加密；API Key/refresh 只存哈希；日志和审计不写秘密、Cookie、分享链接或完整 URL；`redact` 处理存储与上游错误。
 - **请求**：严格 JSON、1 MiB 限制、未知字段/非法 null 拒绝；MCP 无通用 URL/本地文件读取工具。
-- **文件**：相对路径校验；ZIP 在服务端检查后解压成员；拒绝遍历/符号链接/加密/炸弹/格式伪装；本地端点根目录由服务端固定，适配器再次校验路径不逃逸。
+- **文件**：相对路径校验；ZIP 在服务端检查后解压成员；拒绝遍历/符号链接/加密/炸弹/格式伪装；`local` 网盘根目录由服务端固定，路径模板逐段清理并拒绝 `.`/`..`，适配器再次校验路径不逃逸；上传和移动不覆盖已有对象。
 - **AI 输入**：文档内容按不可信数据处理；提示要求忽略其中指令；模型输出经白名单校验后自动写入编目字段，人工可覆盖。
 - **浏览器**：同源部署，未实现 CORS；access token 只在内存，refresh 存 localStorage；浏览器不保存 Agent 密钥。
 - **限流**：登录按用户名/IP 内存节流；API Key 与上传没有全局限流，依赖部署层或反向代理。
 
 ## 15. 一致性、失败与运维事实
 
-- **事务**：套卷与文件发布、专题收录替换、回收站/恢复、副本计划/状态刷新、分析/索引最终写入、策略/密钥更新均在数据库事务中；网络上传、OCR、模型调用不在事务内。
-- **非事务副作用**：CAS、临时文件、远端对象和数据库更新不能原子提交。失败可能留下孤儿 CAS、远端对象或已上传但未记库的副本；当前没有自动 GC/远端删除。
-- **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；Replica 规划复用已有行；Analysis/Index 重跑覆盖自身结果；group 任务不会重复追加同一资料。
+- **事务**：套卷与文件发布、专题收录替换、回收站/恢复、同步规则替换与副本计划/状态刷新、分析/索引最终写入、密钥更新均在数据库事务中；网络上传、OCR、模型调用不在事务内。
+- **非事务副作用**：CAS、临时文件、远端对象和数据库更新不能原子提交。失败可能留下孤儿 CAS 或已上传但未记库的远端对象（重试时按「同内容接管」处理）；当前没有自动 GC，远端文件只在人工 `delete_remote` 时删除。
+- **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；副本规划按 `(blob_id, drive_id)` 复用已有行，可重复执行；Analysis/Index 重跑覆盖自身结果；group 任务不会重复追加同一资料。
 - **恢复与领取**：SQLite 启动时将遗留 `running` 改回 `pending`；PostgreSQL 仅回收过期租约。worker 按类型领取 pending Job，`attempts` 递增。
 - **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index/group 由 `job_locks` 串行化，不同资料可并行。
-- **取消**：ingest/replicate/analyze/group 在进程 context 取消时回到 pending；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
-- **部署边界**：SQLite 单连接、单 writer、WAL，只支持单实例。PostgreSQL 支持多实例；内置 Compose 运行两个应用实例，并共享 `DATA_DIR`（CAS 与本地存储）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。RapidOCR 容器与 PostgreSQL 一样只在 Compose 内网监听，不直接暴露公网；其默认 CPU 上限为 1 核，推理线程数为 1，避免 OCR 长时间挤占应用和数据库资源。
+- **取消**：ingest/replicate/analyze/group 在进程 context 取消时回到 pending（uploading 副本回到 pending）；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
+- **部署边界**：主端只有一个实例，SQLite 单连接、单 writer、WAL，PostgreSQL 为可选数据库；从端没有数据库和共享磁盘（见第 18 节）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。RapidOCR 容器与 PostgreSQL 一样只在 Compose 内网监听，不直接暴露公网；其默认 CPU 上限为 1 核，推理线程数为 1，避免 OCR 长时间挤占应用和数据库资源。
 - **增长**：`material_texts`、`question_terms`、`material_analyses`、`audits`、`jobs` 和孤儿 CAS 会持续增长；没有保留期/清理任务。`AutoMigrate` 不会删除旧表/旧列。
 - **迁移**：没有版本化 migration；升级前先备份，启动时由 `AutoMigrate` 增量建表/加列。已删除功能留下的表和列不会自动清理。
 
-## 16. 验证状态（2026-10-28）
+## 16. 验证状态
 
-本次实际执行并通过：
+最近更新：2026-11-05，基于提交 `51208ab` 之上未提交的网盘同步重构（网盘、同步规则、副本管理）。以下结论针对该工作区代码。
+
+### 本地实际执行并通过
+
+环境：macOS arm64、Go 1.27.3、Node 24.22.1。
 
 ```bash
-(cd backend && go test -count=1 ./...)
-(cd backend && go vet ./...)
-(cd backend && go test -race -count=1 ./internal/service)
-(cd backend && go build ./cmd/server)
-(cd web && npm run typecheck)
-(cd web && npm test)
-(cd web && npm run build)
-docker compose build
-docker compose up -d
+make check                      # go test -short、go vet、前端测试与构建
+make test-all                   # 全量：go test、go vet、前端测试与构建（build 含 tsc 类型检查）
+(cd backend && go test -race -count=1 ./internal/service ./internal/server)
+(cd backend && go build ./cmd/server ./cmd/migrate)
+# 前端：12 个测试文件、39 个用例；构建通过，主 chunk 超过 500 kB，有体积警告
 ```
+
+另在临时 `DATA_DIR` 中启动真实服务（SQLite、`local` 网盘），用 HTTP 脚本走完：空库只有兜底规则 → 上传 → 添加网盘 → 未预览保存被拒 → 预览并保存 → 上传落盘且 SHA-256 一致 → explain → 套卷改名后远端移动 → 统计与 `sync_status` 筛选 → 移除目标后转为规则外且文件保留 → `delete_remote`/`forget` → 下载原件 → MCP 列出并调用存储工具。随后在浏览器中检查桌面（1253px）与移动端（390px）的网盘、同步规则（编辑 → 预览 → 应用）、副本和文件详情页面。
+
+### GitHub Actions（提交 `51208ab`，网盘同步重构之前）
+
+- `CI` 通过：后端测试、`vet` 与构建，前端测试、类型检查与构建，本地和生产 Compose 的 `config --quiet` 校验。
+- `Docker Build and Deploy` 的 `Publish images` 通过，应用和 RapidOCR 镜像已推送 GHCR。由 push 触发，`Deploy production` 跳过，因此本提交未部署到云端。
+
+### 自动化测试覆盖范围
+
+- **后端单元/协议测试**：归档编码、存储适配器（local/WebDAV/蓝奏/OneDrive/S3；local/WebDAV/OneDrive/S3 的不覆盖接管、移动与删除），同步规则（条件匹配、路径模板渲染与校验、规则列表结构校验），AI、MinerU、PaddleOCR、RapidOCR 协议，DOCX 原生解析与图片 OCR，数学公式规范化与检索，搜索文本与高亮，迁移幂等。
+- **后端集成测试**（临时 SQLite + httptest 模拟上游）：
+  - 上传：单文件直传生成单个套卷且不建合集；文件夹与嵌套 ZIP 展开为套卷；ZIP 中的不支持成员单独上报；恶意 ZIP 与路径被拒且不发布；并发 ZIP 上传不覆盖已胜出的内容。
+  - 去重与副本：内容去重与秒传；通过「添加本地网盘 → 预览规则 → 保存规则」生成副本并上传；云端副本拉取缓存及损坏副本拒绝。
+  - 网盘同步（`service/sync_rules_test.go`，真实 `local` 网盘）：命中第一条规则且停用规则被跳过；预览不写库，令牌绑定草稿、用户、网盘与过期时间；同路径追加 sha8 后缀且重新规划不漂移；超限/扩展名跳过不算失败；改名后 move 网盘远端移动、keep 网盘记为路径偏离；规则变化转规则外且保留文件，`delete_remote`/`forget`/非规则外拒绝；从未上传的副本撤销；等待编目直到置为 ready 或强制同步；同路径不同内容不覆盖、需处理后重试恢复；停用网盘跳过但仍可读取；彻底删除时云端副本转规则外并保留 Blob。对规划代码做的 7 处故意破坏（去掉首条命中、去掉路径后缀、令牌不校验草稿、keep 当作 move、忽略大小上限、规则外直接删除、忽略等待编目）均被这些测试捕获。
+  - 套卷整理：自动配套；拆分、合并（保留专题归属）与批量编辑套卷；专题收录；回收站恢复与彻底删除。
+  - AI 与搜题：AI 识别端到端与白名单字段；分析与索引共享解析；搜题索引与公式检索。
+  - 权限与 MCP：Agent Bearer、作用域与撤销；MCP 工具目录与路由、权限、文档一致；未鉴权返回 401。
+  - 节点：租约竞争、过期租约回收与资料锁；从端崩溃、排空、停用和主端重启由真实进程场景覆盖。
+- **前端**：上传清单与文件匹配、二进制上传、API 客户端与遥测、网盘表单字段、API 密钥表单、AI 权限与格式化、搜题页与高亮、路径工具。
+
+### 本次未重新验证（沿用重构前结论，需在套卷模型上复测）
+
+- 2026-10-28：`docker compose build` / `up -d`；`postgres:16-alpine` 一次性迁移、两个应用实例、Nginx 单端口网关均健康，登录与资料列表实测成功。本机当前没有 Docker，CI 只校验 Compose 配置，不启动容器。
+- 2026-10-28：RapidOCR 在远端 Compose 对真实 6 页扫描 PDF 完成 OCR 与分析全链路。
 
 模型网关若与项目同机，可在部署时叠加 `deploy/docker-compose.new-api.yml`，让应用经不暴露端口的内部 socat 桥接访问网关，避开公网入口对长请求的中断；默认 Compose 不依赖该外部网络。
 
-覆盖范围：
+### 主从节点（2026-11-07，本机）
 
-- 后端单元/协议测试：归档编码、存储适配器（local/WebDAV/蓝奏/123/OneDrive/S3）、AI/MinerU/PaddleOCR/RapidOCR 协议、搜索文本/高亮、迁移幂等。
-- 后端集成测试（临时 SQLite + httptest 模拟上游）：上传 ZIP→服务端展开→套卷/文件/来源记录→本地副本；恶意 ZIP 与路径拒绝；直传单文件/文件夹/ZIP；内容去重与秒传；分析/索引共享解析；自动配套；专题收录；回收站恢复与彻底删除；Agent 单一 Bearer/MCP/撤销；未鉴权 401。
-- 前端：typecheck、上传和存储配置等测试、生产构建。
-- PostgreSQL 部署：`postgres:16-alpine` 一次性迁移、两个应用实例、Nginx 单端口网关均健康；旧 SQLite 的账号、资料、Blob、任务与设置已复制，登录、`/auth/me` 和资料列表实测成功。租约竞争自动化测试仍以临时 SQLite 执行，未在生产库注入合成任务。
+用真实二进制分别启动主端和从端进程，网盘、OCR 和模型网关为本机回环上的模拟服务。SQLite 与 PostgreSQL 17 各通过 29 项检查：云盘任务在从端执行、`local` 网盘任务在主端执行、节点监控、从端 `SIGKILL` 后任务由其他节点完成、`SIGTERM` 后立即回队列、排空不空转且恢复及时、停用立即拒绝并中止上传、主端重启后任务继续、AI 识别与索引在从端执行、日志中没有密钥。
 
-未验证（不得写成已通过）：
+未验证：真实云盘、MinerU、模型网关，跨机器的网络环境，Compose 启动（本机没有 Docker）。
 
-- 真实蓝奏云、123 云盘、WebDAV、OneDrive、S3 的联网上传/下载/分享；
-- 真实 MinerU/PaddleOCR 账号、真实 OpenAI 兼容网关的质量、限流和费用；RapidOCR 已用真实扫描 PDF 验证，DOCX 原生解析已用样例覆盖，但尚未覆盖真实 Word 版式、PPT 和大规模并发；
-- 浏览器逐页人工操作、真实 Agent 客户端、真实大文件/长文档；
+### 未验证（不得写成已通过）
+
+- 真实蓝奏云、123 云盘、WebDAV、OneDrive、S3 的联网上传、下载与分享；
+- 真实 MinerU、PaddleOCR 账号，真实 OpenAI 兼容网关的质量、限流和费用；真实 Word 版式、PPT 和大规模并发；
+- 生产部署（Compose、TLS 反向代理、跨机器的从端）；
+- 存储页与文件详情以外页面的浏览器逐页人工操作、真实 Agent 客户端、真实大文件与长文档；
 - 任务运行指标、租约告警与按上游配额动态限流。
 
 ## 17. 已知边界与后续方向
 
-1. **多实例运维**：为各实例设置唯一 `WORKER_INSTANCE_ID`，共享 `DATA_DIR`，监控过期租约和任务失败率。
-2. **真实存储**：WebDAV/蓝奏/OneDrive/S3 需要真实端点联调；123 云盘在官方接口可核对前保持 unsupported，不应作为可上传端点启用。
-3. **远端删除/改名**：适配器没有删除接口；改名只同步本地副本。需要远端生命周期管理时另设能力与审计。
+1. **节点运维**：监控过期租约和任务失败率，主从版本一起升级。
+2. **真实网盘**：WebDAV/蓝奏/OneDrive/S3 的上传、移动、删除和分享需要真实服务联调；123 云盘在官方接口可核对前保持 unsupported，规则不能把它作为目标。
+3. **网盘同步**：套卷级例外与全局附加目标尚未实现；蓝奏云不支持移动和删除；`forget` 只移除记录，远端文件需自行清理。
 4. **AI/索引质量**：RapidOCR 已对真实 6 页扫描试卷完成识别，但 OCR 纠错、切题、页码准确率和大文件成本仍未系统验证；分析与索引可继续共享解析缓存。
 5. **数据治理**：缺少孤儿 CAS 清理、过期任务/缓存保留期和版本化迁移。
 6. **安全加固**：管理员可配置任意 http(s) 上游地址；未实现通用出站 SSRF 允许列表、全局 API 限流或主密钥轮换流程。
@@ -578,3 +627,44 @@ docker compose up -d
 - [BACKEND.md](BACKEND.md)：后端职责划分与验证入口。
 - [API.md](API.md)：逐接口合同、字段、状态、错误。
 - [DATA.md](DATA.md)：表清单、数据目录、备份/恢复、增长控制。
+
+## 18. 主从节点
+
+一个主端、任意多个从端。主端持有数据库、CAS 和凭据，负责鉴权和调度；从端只领取任务、执行、回报，互不通信，并且只需要能主动连到主端。部署步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#6-主从节点)，接口见 [API.md](API.md#节点)。
+
+### 18.1 任务三段化
+
+`replicate`、`analyze`、`index` 分成三段，单机和集群走同一条代码路径：
+
+| 阶段 | 位置 | 内容 |
+| --- | --- | --- |
+| 准备 | 主端，读库 | `PrepareJob` 生成自包含的 `jobexec.Input`，包括解密后的凭据 |
+| 执行 | 任意节点，不访问数据库 | `jobexec.Run` 通过 `Env` 取原件、写进度、回写 token |
+| 提交 | 主端，单个事务 | `CommitJob` 校验租约后写库；AI 输出照旧走白名单 |
+
+`ingest`、`group` 和 `local` 网盘的复制只在主端运行。`local` 网盘的目录在主端 `DATA_DIR` 内，如果交给从端，从端会写到自己的磁盘，主端却记录副本就绪，所以领取时用 `claimer.RemoteOnly` 按网盘类型过滤。
+
+### 18.2 租约
+
+- `lease_owner` 是节点 ID。从端每 10 秒心跳一次，主端在同一事务内为上报的任务续租，并返回已失去租约的任务。
+- 从端断线超过租约时长后，reaper 回收任务；旧执行者的提交因 `lease_owner` 不符被拒绝。
+- 同一节点可能在断线后重新领回同一任务，此时租约归属无法区分两次执行，所以由从端进程取消旧的执行。
+- 领取请求长轮询，排空中或没有可执行类型的节点也会等满超时，从端不会空转；排空和停用状态在等待期间重新读取。
+- 主端重启不会重置从端的任务，只恢复 `lease_owner` 为主端自身的任务。
+
+### 18.3 从端的原件与凭据
+
+- 原件缓存在 `CACHE_DIR/blobs/<sha>`，读取和下载后都校验 SHA-256；断线时用 Range 续传，同一原件只下载一份。淘汰按 LRU，运行中任务用到的文件不会被淘汰。
+- 主端缺少原件时从已就绪的云端副本读取并校验，再转发给从端。
+- 凭据只在任务输入里，从端不落盘，不写日志和进度。节点令牌只保存哈希。
+- 结果内联在 `complete` 请求里（gzip，上限 32 MiB）；主端拒绝的结果会报告为任务失败，避免反复重排。
+
+### 18.4 监控
+
+每个节点每 10 秒采样 CPU、内存和网络。`nodes` 表只保存最新快照，历史在主端内存里，每节点 360 个点，重启后清空。状态由心跳时间推导：30 秒内在线，到租约时长为失联，超过为离线。
+
+### 18.5 尚未实现
+
+- 从端直接从云端副本取原件以减少主端出口流量（目前由主端转发）；
+- `ingest` 下放、按节点标签分配任务；
+- 管理员取消运行中的任务（系统目前没有任务取消功能，心跳里只有 `lost_job_ids`）。

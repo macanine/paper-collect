@@ -3,20 +3,20 @@ import { App, Button, Card, Descriptions, Popconfirm, Select, Space, Table, Tag,
 import { DeleteOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
-import type { Part, Replica, StorageProvider } from '../../shared/api/types';
+import type { Part, Replica, Drive } from '../../shared/api/types';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { saveBlob } from '../../shared/lib/download';
-import { MATERIAL_STATUS_LABELS, REVIEW_REASON_LABELS } from '../../shared/lib/labels';
+import { MATERIAL_STATUS_LABELS, REVIEW_REASON_LABELS, SYNC_STATUS_LABELS } from '../../shared/lib/labels';
 import { PART_OPTIONS } from '../../shared/lib/options';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { BackLink } from '../../shared/ui/BackLink';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
-import { MaterialStatusTag, PartTag, StageTag } from '../../shared/ui/StatusTags';
+import { MaterialStatusTag, PartTag, StageTag, SyncStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { AnalysisPanel } from '../ai/AnalysisPanel';
 import { IndexPanel } from '../search/IndexPanel';
-import { useProviders, useRefreshShare } from '../storage/queries';
+import { useDrives, useRefreshShare, useSyncMaterial } from '../storage/queries';
 import { MovePackModal } from '../packs/MovePackModal';
 import { PackMeta } from '../packs/PackBadges';
 import { downloadMaterial, previewMaterial, trashMaterial } from './api';
@@ -50,18 +50,19 @@ export function MaterialDetailPage() {
   const queryClient = useQueryClient();
   const query = useMaterial(materialId);
   const update = useUpdateMaterial(materialId);
-  const canReadProviders = can('storage:read');
-  const providersQuery = useProviders(canReadProviders);
+  const canReadStorage = can('storage:read');
+  const drivesQuery = useDrives(canReadStorage);
   const refreshShare = useRefreshShare();
+  const syncMaterialMutation = useSyncMaterial();
   const [downloading, setDownloading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [moving, setMoving] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
 
-  const providerMap = useMemo<Map<string, StorageProvider> | null>(() => {
-    if (!canReadProviders || !providersQuery.data) return null;
-    return new Map(providersQuery.data.map((provider) => [provider.id, provider]));
-  }, [canReadProviders, providersQuery.data]);
+  const driveMap = useMemo<Map<string, Drive> | null>(() => {
+    if (!canReadStorage || !drivesQuery.data) return null;
+    return new Map(drivesQuery.data.map((drive) => [drive.id, drive]));
+  }, [canReadStorage, drivesQuery.data]);
 
   if (query.isPending) return <LoadingState />;
   if (query.isError) {
@@ -117,13 +118,22 @@ export function MaterialDetailPage() {
     try {
       const updated = await refreshShare.mutateAsync(replica.id);
       if (updated.share_status === 'ready') message.success('分享链接已刷新');
-      else if (updated.share_status === 'unsupported') message.info('该端点不支持分享');
+      else if (updated.share_status === 'unsupported') message.info('该网盘不支持分享');
       else if (updated.share_status === 'failed') message.warning(updated.error ? `分享失败：${updated.error}` : '分享失败，副本仍然可用');
       else message.info('分享状态已更新');
     } catch (error) {
       showError(error);
     } finally {
       setRefreshingId(null);
+    }
+  };
+
+  const handleSyncNow = async () => {
+    try {
+      const result = await syncMaterialMutation.mutateAsync(material.id);
+      message.success(result.queued > 0 ? `已生成 ${result.queued} 个同步任务` : '已按当前编目重新规划');
+    } catch (error) {
+      showError(error);
     }
   };
 
@@ -205,7 +215,23 @@ export function MaterialDetailPage() {
                 </Space>
               ),
             },
-            { key: 'storage', label: '存储', children: <span title={MATERIAL_STATUS_LABELS[material.status]}><MaterialStatusTag status={material.status} /></span> },
+            { key: 'storage', label: '归档', children: <span title={MATERIAL_STATUS_LABELS[material.status]}><MaterialStatusTag status={material.status} /></span> },
+            {
+              key: 'sync',
+              label: '同步',
+              children: (
+                <Space size={8}>
+                  <span title={SYNC_STATUS_LABELS[material.sync_status]}>
+                    <SyncStatusTag status={material.sync_status} />
+                  </span>
+                  {can('storage:write') && material.sync_status === 'waiting_catalog' ? (
+                    <Button size="small" loading={syncMaterialMutation.isPending} onClick={() => void handleSyncNow()}>
+                      按当前编目同步
+                    </Button>
+                  ) : null}
+                </Space>
+              ),
+            },
             { key: 'created', label: '入库时间', children: formatDateTime(material.created_at) },
           ]}
         />
@@ -218,11 +244,12 @@ export function MaterialDetailPage() {
           pagination={false}
           dataSource={material.sources}
           columns={[
-            { title: '上传路径', dataIndex: 'path', key: 'path', render: (path: string) => <span className="break-all">{path}</span> },
+            { title: '上传路径', dataIndex: 'path', key: 'path', width: 280, render: (path: string) => <span className="break-all">{path}</span> },
             { title: '', key: 'dup', width: 110, render: (_: unknown, src) => (src.duplicate ? <Tag>重复上传</Tag> : <Tag color="blue">首次上传</Tag>) },
             { title: '时间', dataIndex: 'created_at', key: 'created', width: 170, render: (v: string) => formatDateTime(v) },
             { title: '', key: 'upload', width: 90, render: (_: unknown, src) => (src.upload_id && can('uploads:write') ? <Link to={`/uploads/${src.upload_id}`}>上传记录</Link> : null) },
           ]}
+          scroll={{ x: 650 }}
         />
       </Card>
 
@@ -232,7 +259,7 @@ export function MaterialDetailPage() {
       <Card title="副本与分享">
         <ReplicaTable
           replicas={material.replicas}
-          providers={providerMap}
+          drives={driveMap}
           canRefreshShare={can('storage:write')}
           refreshingId={refreshingId}
           onRefreshShare={(replica) => void handleRefreshShare(replica)}

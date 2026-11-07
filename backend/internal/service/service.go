@@ -11,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,9 +41,6 @@ type Options struct {
 	Logf func(format string, args ...any)
 	// Worker controls task claiming, leases, and per-kind concurrency.
 	Worker WorkerSettings
-	// ResetAllRunningOnStart is enabled for SQLite, where only one service may
-	// use the database. PostgreSQL recovers only expired leases.
-	ResetAllRunningOnStart bool
 	// PullCacheTTL controls how long a cloud replica pulled on demand remains
 	// available for download. Zero uses the default.
 	PullCacheTTL time.Duration
@@ -50,7 +48,12 @@ type Options struct {
 
 // WorkerSettings controls the embedded job runners.
 type WorkerSettings struct {
-	InstanceID           string
+	// InstanceID and NodeName identify the master's node row; RegisterMaster sets them.
+	InstanceID string
+	NodeName   string
+	// Kinds lists the remote-capable kinds the master runs itself. Ingest and
+	// group always run on the master. Nil means all of them.
+	Kinds                []string
 	IngestConcurrency    int
 	ReplicateConcurrency int
 	AnalyzeConcurrency   int
@@ -69,22 +72,23 @@ type previewConverter interface {
 
 // Service is the application façade. It is safe for concurrent use.
 type Service struct {
-	db                  *gorm.DB
-	blobs               *blob.Store
-	office              previewConverter
-	box                 *cryptobox.Box
-	signer              *auth.Signer
-	limiter             *auth.Limiter
-	factory             func(storage.Config) (storage.Adapter, error)
-	now                 func() time.Time
-	limits              archive.Limits
-	logf                func(format string, args ...any)
-	wake                chan struct{}
-	wakeMu              sync.Mutex
-	worker              WorkerSettings
-	resetRunningOnStart bool
-	pullCacheTTL        time.Duration
-	pullCacheDir        string
+	db           *gorm.DB
+	blobs        *blob.Store
+	office       previewConverter
+	box          *cryptobox.Box
+	signer       *auth.Signer
+	limiter      *auth.Limiter
+	factory      func(storage.Config) (storage.Adapter, error)
+	now          func() time.Time
+	limits       archive.Limits
+	logf         func(format string, args ...any)
+	wake         chan struct{}
+	wakeMu       sync.Mutex
+	worker       WorkerSettings
+	pullCacheTTL time.Duration
+	pullCacheDir string
+	metrics      nodeMetrics
+	running      atomic.Int64
 }
 
 // ErrBootstrapNeeded means the database has no user and no admin credentials were supplied.
@@ -123,6 +127,12 @@ func New(opts Options) (*Service, error) {
 	if strings.TrimSpace(worker.InstanceID) == "" {
 		worker.InstanceID = uuid.NewString()
 	}
+	if strings.TrimSpace(worker.NodeName) == "" {
+		worker.NodeName = "主端"
+	}
+	if worker.Kinds == nil {
+		worker.Kinds = []string{"replicate", "analyze", "index"}
+	}
 	if worker.IngestConcurrency < 1 {
 		worker.IngestConcurrency = 1
 	}
@@ -156,21 +166,20 @@ func New(opts Options) (*Service, error) {
 		return nil, fmt.Errorf("service: 初始化临时拉取目录: %w", err)
 	}
 	return &Service{
-		db:                  opts.DB,
-		blobs:               opts.Blobs,
-		office:              office.New(opts.Blobs.DataDir()),
-		box:                 opts.Box,
-		signer:              opts.Signer,
-		limiter:             opts.Limiter,
-		factory:             opts.Factory,
-		now:                 func() time.Time { return now().UTC() },
-		limits:              limits,
-		logf:                logf,
-		wake:                make(chan struct{}),
-		worker:              worker,
-		resetRunningOnStart: opts.ResetAllRunningOnStart,
-		pullCacheTTL:        pullCacheTTL,
-		pullCacheDir:        pullCacheDir,
+		db:           opts.DB,
+		blobs:        opts.Blobs,
+		office:       office.New(opts.Blobs.DataDir()),
+		box:          opts.Box,
+		signer:       opts.Signer,
+		limiter:      opts.Limiter,
+		factory:      opts.Factory,
+		now:          func() time.Time { return now().UTC() },
+		limits:       limits,
+		logf:         logf,
+		wake:         make(chan struct{}),
+		worker:       worker,
+		pullCacheTTL: pullCacheTTL,
+		pullCacheDir: pullCacheDir,
 	}, nil
 }
 

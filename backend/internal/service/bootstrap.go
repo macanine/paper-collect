@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,8 +14,8 @@ import (
 )
 
 // Bootstrap prepares an empty database: it creates the first administrator from
-// the given credentials (only when no user exists), the singleton storage policy,
-// and a default local provider. It is idempotent.
+// the given credentials (only when no user exists), the fallback sync rule, and
+// the AI and search settings. It is idempotent.
 func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Serialize first-start initialization across app instances. On
@@ -56,14 +55,16 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 			}
 		}
 
-		var policies int64
-		if err := tx.Model(&model.Policy{}).Where("id = ?", 1).Count(&policies).Error; err != nil {
-			return wrap("count policy", err)
+		// The fallback rule may be re-created under another ID when the rules are
+		// replaced, so seed it only while no fallback rule exists at all.
+		var fallbacks int64
+		if err := tx.Model(&model.Rule{}).Where("is_default = ?", true).Count(&fallbacks).Error; err != nil {
+			return wrap("count fallback rule", err)
 		}
-		if policies == 0 {
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).
-				Create(&model.Policy{ID: 1, Mode: model.ModeMirrorAll, MinimumReplicas: 1, UpdatedAt: s.now()}).Error; err != nil {
-				return wrap("create policy", err)
+		if fallbacks == 0 {
+			rule := model.Rule{ID: "default", Name: "其他所有文件", Enabled: true, IsDefault: true, Position: 0, ConditionsJSON: "{}", CreatedAt: s.now(), UpdatedAt: s.now()}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rule).Error; err != nil {
+				return wrap("create fallback rule", err)
 			}
 		}
 
@@ -99,41 +100,16 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 			}
 		}
 
-		var providers int64
-		if err := tx.Model(&model.StorageProvider{}).Count(&providers).Error; err != nil {
-			return wrap("count providers", err)
-		}
-		if providers == 0 {
-			now := s.now()
-			local := model.StorageProvider{
-				ID:         newID(),
-				Name:       "本地存储",
-				Kind:       model.KindLocal,
-				Role:       model.RolePrimary,
-				Enabled:    true,
-				Priority:   0,
-				Weight:     1,
-				ConfigJSON: "{}",
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-			if err := tx.Create(&local).Error; err != nil {
-				return wrap("create default provider", err)
-			}
-			if err := os.MkdirAll(s.localRoot(local.ID), 0o700); err != nil {
-				return wrap("create local root", err)
-			}
-		}
 		return nil
 	})
 }
 
-// RecoverInterrupted recovers work after a restart. SQLite has a single writer,
-// so all running jobs are local and can be reset. PostgreSQL only resets rows
-// whose lease has expired, preserving work owned by healthy peer instances.
+// RecoverInterrupted recovers work after a master restart. Jobs leased to the
+// master's own node died with the previous process; jobs leased to worker
+// nodes keep running and are only reclaimed once their lease expires.
 func (s *Service) RecoverInterrupted(ctx context.Context) error {
-	if s.resetRunningOnStart {
-		return s.recoverJobs(s.db.WithContext(ctx), s.now())
+	if err := s.recoverJobs(s.db.WithContext(ctx), s.now()); err != nil {
+		return err
 	}
 	_, err := s.RecoverExpiredLeases(ctx)
 	return err
@@ -182,7 +158,7 @@ func (s *Service) RecoverExpiredLeases(ctx context.Context) (int, error) {
 func (s *Service) recoverJobs(db *gorm.DB, now time.Time) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var ids []string
-		if err := tx.Model(&model.Job{}).Where("status = ?", model.JobRunning).
+		if err := tx.Model(&model.Job{}).Where("status = ? AND lease_owner = ?", model.JobRunning, s.worker.InstanceID).
 			Pluck("id", &ids).Error; err != nil {
 			return wrap("find recoverable jobs", err)
 		}
@@ -231,9 +207,9 @@ func (s *Service) resetProjectionTx(tx *gorm.DB, jobIDs []string, now time.Time)
 	return nil
 }
 
-// localRoot is the fixed directory of a local provider. The API never accepts a path.
-func (s *Service) localRoot(providerID string) string {
-	return filepath.Join(s.blobs.DataDir(), "providers", providerID)
+// localRoot is the fixed directory of a local drive. The API never accepts a path.
+func (s *Service) localRoot(driveID string) string {
+	return filepath.Join(s.blobs.DataDir(), "drives", driveID)
 }
 
 // isUniqueViolation recognises duplicate-key errors across SQLite and PostgreSQL.

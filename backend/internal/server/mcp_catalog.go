@@ -110,7 +110,20 @@ var mcpOperations = func() []mcpOperation {
 	ids := mustFields(bodyA("ids"), "ids")
 	ai := joined(bodyS("name base_url api_key default_model vision_model"), bodyA("models"), bodyB("enabled"), bodyI("priority"))
 	ocr := joined(bodyS("name base_url token model"), bodyB("enabled"), bodyI("priority"))
-	provider := joined(bodyS("name role"), bodyB("enabled"), bodyI("priority weight"), bodyO("config secret"))
+	drive := joined(bodyS("name root_path on_path_change"), bodyB("enabled"), bodyI("max_file_bytes read_order"), bodyA("allowed_exts"), bodyO("config secret"))
+	strs := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	integer := map[string]any{"type": "integer"}
+	boolean := map[string]any{"type": "boolean"}
+	rules := map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"id", "name", "enabled", "is_default", "conditions", "targets"}, "properties": map[string]any{
+		"id": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}, "enabled": boolean, "is_default": boolean,
+		"conditions": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+			"subjects": strs, "doc_types": strs, "grades": strs, "regions": strs, "tags": strs, "parts": strs, "media_types": strs,
+			"cohorts": map[string]any{"type": "array", "items": integer}, "min_size": integer, "max_size": integer,
+		}},
+		"targets": map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"drive_id", "path_template"}, "properties": map[string]any{
+			"drive_id": map[string]any{"type": "string"}, "path_template": map[string]any{"type": "string"}, "share": boolean, "required": boolean,
+		}}},
+	}}}
 	str := map[string]any{"type": "string"}
 	entries := map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"relative_path", "size_bytes"}, "properties": map[string]any{"relative_path": str, "size_bytes": map[string]any{"type": "integer"}, "sha256": str}}}
 	return []mcpOperation{
@@ -150,7 +163,7 @@ var mcpOperations = func() []mcpOperation {
 		op("packs_restore", "从回收站恢复套卷。", "POST", "/packs/restore", model.ScopeMaterialsWrite, ids),
 		destructive(op("packs_purge", "彻底删除回收站中的套卷及其本地原件。", "POST", "/packs/purge", model.ScopeMaterialsWrite, ids)),
 		special(op("packs_download", "取得整套 ZIP 的流式下载路径，使用当前密钥直接请求。", "GET", "/packs/:id/download", model.ScopeMaterialsRead, id), "pack_download"),
-		op("materials_search", "查询文件：按关键词、整理状态、部件、存储状态、待整理原因、套卷或内容指纹筛选；stage=review 即待整理收件箱。", "GET", "/materials", model.ScopeMaterialsRead, queryS("q stage part status reason pack_id sha256"), page),
+		op("materials_search", "查询文件：按关键词、整理状态、部件、归档状态、同步状态、待整理原因、套卷或内容指纹筛选；stage=review 即待整理收件箱。", "GET", "/materials", model.ScopeMaterialsRead, queryS("q stage part status sync_status reason pack_id sha256"), page),
 		op("materials_stats", "统计套卷、文件整理状态、缺答案与存储健康。", "GET", "/materials/stats", model.ScopeMaterialsRead),
 		op("materials_accept", "确认待整理文件；accept_suggestion=true 时同时并入建议的套卷。", "POST", "/materials/accept", model.ScopeMaterialsWrite, ids, bodyB("accept_suggestion")),
 		op("materials_get", "读取文件详情、来源记录和存储副本。", "GET", "/materials/:id", model.ScopeMaterialsRead, id),
@@ -179,18 +192,27 @@ var mcpOperations = func() []mcpOperation {
 		special(op("uploads_file_put", "上传不超过 512 KiB 的 Base64 文件；较大文件使用流式上传。", "PUT", "/uploads/:id/files/:entry_id", model.ScopeUploadsWrite, pathFields("id entry_id"), mustFields(bodyS("data_base64"), "data_base64")), "upload"),
 		special(op("uploads_transfer_info", "取得上传条目的流式上传路径。", "PUT", "/uploads/:id/files/:entry_id", model.ScopeUploadsWrite, pathFields("id entry_id")), "upload_info"),
 		op("uploads_finalize", "完成上传并创建归档任务。", "POST", "/uploads/:id/finalize", model.ScopeUploadsWrite, id),
-		op("jobs_list", "按状态、类型或关联资料、上传、副本筛选任务。", "GET", "/jobs", model.ScopeJobsRead, queryS("status kind material_id upload_id replica_id"), page),
+		op("jobs_list", "按状态、类型、执行节点或关联资料、上传、副本筛选任务。", "GET", "/jobs", model.ScopeJobsRead, queryS("status kind material_id upload_id replica_id node_id"), page),
 		op("jobs_stats", "统计任务总数及状态。", "GET", "/jobs/stats", model.ScopeJobsRead),
 		op("jobs_get", "读取任务进度与日志。", "GET", "/jobs/:id", model.ScopeJobsRead, id),
 		op("jobs_retry", "重试任务。", "POST", "/jobs/:id/retry", model.ScopeJobsWrite, id),
-		op("storage_providers_list", "读取存储端点。", "GET", "/storage/providers", model.ScopeStorageRead),
-		op("storage_providers_create", "创建存储端点。", "POST", "/storage/providers", model.ScopeStorageWrite, provider, bodyS("kind")),
-		op("storage_providers_update", "更新存储端点。", "PATCH", "/storage/providers/:id", model.ScopeStorageWrite, id, provider),
-		op("storage_providers_test", "测试存储端点。", "POST", "/storage/providers/:id/test", model.ScopeStorageWrite, id),
-		op("storage_policy_get", "读取存储策略。", "GET", "/storage/policy", model.ScopeStorageRead),
-		op("storage_policy_update", "更新存储策略。", "PUT", "/storage/policy", model.ScopeStorageWrite, bodyS("mode"), bodyI("minimum_replicas")),
-		op("storage_reconcile", "检查副本并创建修复任务。", "POST", "/storage/reconcile", model.ScopeStorageWrite),
+		op("storage_drives_list", "读取网盘及其能力、副本统计。", "GET", "/storage/drives", model.ScopeStorageRead),
+		op("storage_drives_create", "添加网盘；网盘只描述连接方式，上传什么由同步规则决定。", "POST", "/storage/drives", model.ScopeStorageWrite, mustFields(joined(drive, bodyS("kind")), "name kind")),
+		op("storage_drives_update", "更新网盘设置；config 与 secret 提供时整体替换。", "PATCH", "/storage/drives/:id", model.ScopeStorageWrite, id, drive),
+		op("storage_drives_test", "测试网盘连接。", "POST", "/storage/drives/:id/test", model.ScopeStorageWrite, id),
+		op("storage_rules_list", "读取有序同步规则，最后一条为兜底规则。", "GET", "/storage/rules", model.ScopeStorageRead),
+		op("storage_rules_preview", "预览草稿规则会产生的上传、移动、规则外和跳过动作，返回保存所需的 preview_token。", "POST", "/storage/rules/preview", model.ScopeStorageWrite, mustFields(customField("rules", "array", rules), "rules"), page),
+		destructive(op("storage_rules_replace", "整体替换同步规则；必须带预览返回的 preview_token。", "PUT", "/storage/rules", model.ScopeStorageWrite, mustFields(joined(customField("rules", "array", rules), bodyS("preview_token")), "rules preview_token"))),
+		op("storage_rules_explain", "解释某个文件命中哪条规则，以及各网盘的期望路径、实际路径和状态。", "GET", "/storage/rules/explain", model.ScopeStorageRead, mustFields(queryS("material_id"), "material_id")),
+		op("storage_replicas_list", "按状态（含 drift 路径偏离）或网盘筛选副本。", "GET", "/storage/replicas", model.ScopeStorageRead, queryS("status drive_id"), page),
+		destructive(op("storage_replicas_bulk", "批量处理副本：retry 重新计划；delete_remote 删除规则外副本的远端文件；forget 只移除规则外副本记录。", "POST", "/storage/replicas/bulk", model.ScopeStorageWrite, mustFields(joined(bodyA("ids"), bodyS("action")), "ids action"))),
+		op("materials_sync", "按当前编目立即为文件生成同步计划。", "POST", "/materials/:id/sync", model.ScopeStorageWrite, id),
+		op("storage_reconcile", "按当前规则重新计划所有已编目文件。", "POST", "/storage/reconcile", model.ScopeStorageWrite),
 		op("storage_replica_share", "创建或刷新副本分享。", "POST", "/storage/replicas/:id/share", model.ScopeStorageWrite, id),
+		op("nodes_list", "读取主端和从端节点的状态、心跳、CPU、内存、网络与任务数。", "GET", "/nodes", model.ScopeNodesManage),
+		op("nodes_create", "登记一个从端节点，返回只显示一次的节点令牌。", "POST", "/nodes", model.ScopeNodesManage, mustFields(bodyS("name"), "name")),
+		op("nodes_update", "重命名、停用或排空节点；排空后不再领取新任务。", "PATCH", "/nodes/:id", model.ScopeNodesManage, id, bodyS("name"), bodyB("enabled draining")),
+		op("nodes_metrics", "读取节点最近 1 小时的资源指标。", "GET", "/nodes/:id/metrics", model.ScopeNodesManage, id),
 	}
 }()
 
