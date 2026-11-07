@@ -17,9 +17,9 @@
 
 `Subject.code`：chinese 语文、math 数学、english 英语、physics 物理、chemistry 化学、biology 生物、politics 政治、history 历史、geography 地理、information_technology 信息技术、general_technology 通用技术、comprehensive 综合。`GET /subjects` 返回 `Subject[]{code,name}`。
 
-`Pack`（套卷）：`id,title(1..255),title_locked:boolean,catalog_locked:boolean,doc_type:DocType,subject_codes:string[](0..12),grade:""|grade7|grade8|grade9|grade10|grade11|grade12,term:""|first|second,cohort:integer(0 或 1900..2200),region(<=64),organization(<=128),exam_date(YYYY-MM 或空),exam_name(<=255),chapter(<=255),tags:string[](<=30，每项1..64),description(<=4000),stage:Stage,is_exam:boolean,has_questions:boolean,has_answers:boolean,has_answer_sheet:boolean,members:PackMember[],collections?:Collection[],deleted_at:date-time|null,created_at,updated_at`。`PackMember`：`id,title,file_name,part:Part,answer_start_page:integer,stage:Stage,status:MaterialStatus,media_type,size_bytes,position:integer`。`DocType`：gaokao_real、gaokao_mock、zhongkao_real、zhongkao_mock、joint、monthly、midterm、final、opening、unit、weekly、topic、lecture、study_guide、courseware、homework、other。**Stage**：processing=识别中；review=待整理（低置信度、有配套建议、疑似重复、识别失败或未开启自动识别）；ready=已入库；failed=识别失败。套卷 stage 取成员中最靠后的阶段（ready < processing < review < failed）。`has_questions/has_answers/has_answer_sheet` 由成员 part 推导，`is_exam` 表示试卷类套卷。
+`Pack`（套卷）：`id,title(1..255),title_locked:boolean,catalog_locked:boolean,doc_type:DocType,subject_codes:string[](0..12),grade:""|grade7|grade8|grade9|grade10|grade11|grade12,term:""|first|second,cohort:integer(0 或 1900..2200),region(<=64),organization(<=128),exam_date(YYYY-MM 或空),exam_name(<=255),chapter(<=255),tags:string[](<=30，每项1..64),description(<=4000),stage:Stage,is_exam:boolean,has_questions:boolean,has_answers:boolean,has_answer_sheet:boolean,members:PackMember[],collections?:Collection[],deleted_at:date-time|null,created_at,updated_at`。`PackMember`：`id,title,file_name,part:Part,answer_start_page:integer,stage:Stage,status:MaterialStatus,sync_status:SyncStatus,media_type,size_bytes,position:integer`。`DocType`：gaokao_real、gaokao_mock、zhongkao_real、zhongkao_mock、joint、monthly、midterm、final、opening、unit、weekly、topic、lecture、study_guide、courseware、homework、other。**Stage**：processing=识别中；review=待整理（低置信度、有配套建议、疑似重复、识别失败或未开启自动识别）；ready=已入库；failed=识别失败。套卷 stage 取成员中最靠后的阶段（ready < processing < review < failed）。`has_questions/has_answers/has_answer_sheet` 由成员 part 推导，`is_exam` 表示试卷类套卷。
 
-`Material`（文件）：`id,pack_id,position:integer,part:Part,answer_start_page:integer,title(1..255),file_name,original_name,stage:Stage,review_reasons:string[],suggested_pack?:{id,title},status:MaterialStatus,media_type,size_bytes,sha256(64 位小写十六进制，全局唯一),created_at,updated_at,pack?:Pack`。**一个 SHA-256 只对应一个 Material**：同一内容再次上传只追加 `MaterialSource`，不重复解析、计费或新建套卷。**Part 有且只有 8 类**：questions=试题，只有题目；answers=答案，只有答案或解析；full=题目+答案在同一文件（后部集中答案）；teacher=教师版，每题后紧跟答案；answer_sheet=空白答题卡；listening=听力音频或原文；main=单文档资料正文（讲义、课件、指南）；other=无法判断。详情额外含 `sources:MaterialSource[]`、`replicas:Replica[]` 和 `pack:Pack`。**MaterialStatus**：pending_storage=等待存储副本；archived=副本齐全；degraded=副本不全但仍可读。`review_reasons` 取值 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual。`suggested_pack` 为待整理的配套建议。
+`Material`（文件）：`id,pack_id,position:integer,part:Part,answer_start_page:integer,title(1..255),file_name,original_name,stage:Stage,review_reasons:string[],suggested_pack?:{id,title},status:MaterialStatus,sync_status:SyncStatus,sync_planned_at:date-time|null,media_type,size_bytes,sha256(64 位小写十六进制，全局唯一),created_at,updated_at,pack?:Pack`。**一个 SHA-256 只对应一个 Material**：同一内容再次上传只追加 `MaterialSource`，不重复解析、计费或新建套卷。**Part 有且只有 8 类**：questions=试题，只有题目；answers=答案，只有答案或解析；full=题目+答案在同一文件（后部集中答案）；teacher=教师版，每题后紧跟答案；answer_sheet=空白答题卡；listening=听力音频或原文；main=单文档资料正文（讲义、课件、指南）；other=无法判断。详情额外含 `sources:MaterialSource[]`、`replicas:Replica[]` 和 `pack:Pack`。**MaterialStatus** 只回答原件是否安全：archived=原件在本机 CAS；missing=本机原件缺失，只能从网盘副本读取。**SyncStatus** 单独回答网盘同步进度：waiting_catalog=等待编目确定（规则依赖编目，尚未生成计划）；not_required=命中的规则不上传任何网盘；syncing=有副本在等待、上传或移动；synced=全部必需目标已就绪；attention=必需目标失败、必需目标的分享失败，或副本路径已偏离（网盘设置为保持原位）。`sync_planned_at` 为最近一次生成同步计划的时间。`review_reasons` 取值 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual。`suggested_pack` 为待整理的配套建议。
 
 `MaterialSource`：`id,material_id,upload_id,user_id,path,duplicate:boolean,created_at`；记录每一次到达。`duplicate=true` 表示这次上传的内容此前已经归档。
 
@@ -27,11 +27,17 @@
 
 `Upload`：`id,title,hints:{subject_codes,grade,doc_type,cohort,region,organization,tags},status:pending|processing|completed|failed,job_id,new_count:integer,duplicate_count:integer,skipped:string[],created_at,entries:UploadEntry[],results:UploadResult[]`。`UploadEntry`：`id,relative_path,size_bytes,sha256:string(可空),status:pending|received|existing`。status=received 表示字节数、内容签名和 SHA 已验证；existing 表示声明 SHA 已归档，可秒传、无需上传字节。`UploadResult`：`material_id,pack_id,title,path,duplicate:boolean,stage,part`，finalize 后按条目给出归档结果；`duplicate=true` 表示内容已存在。`skipped` 记录未支持而未归档的路径。folder 使用 `webkitRelativePath`，不上传操作系统路径。
 
-`Job`：`id,kind:ingest|replicate|analyze|index|group,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message,elapsed_ms?:integer,duration_ms?:integer,metrics?:object}],started_at:date-time|null,finished_at:date-time|null,duration_ms:integer,created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。`duration_ms` 是最近一次执行从领取到终态的耗时；运行中可按 `started_at` 计算当前耗时。日志的 `elapsed_ms` 是相对本次执行开始的偏移，`duration_ms` 表示当前记录覆盖步骤的耗时，`metrics` 只保存应用可控的非敏感事实（端点名、字节数、吞吐、页数、模型名、校验级别、分享状态等）。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录或新指标。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。PostgreSQL 支持带租约和心跳的多实例领取；SQLite 仅支持单实例。
+`Job`：`id,kind:ingest|replicate|analyze|index|group,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message,elapsed_ms?:integer,duration_ms?:integer,metrics?:object}],started_at:date-time|null,finished_at:date-time|null,duration_ms:integer,created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。`duration_ms` 是最近一次执行从领取到终态的耗时；运行中可按 `started_at` 计算当前耗时。日志的 `elapsed_ms` 是相对本次执行开始的偏移，`duration_ms` 表示当前记录覆盖步骤的耗时，`metrics` 只保存应用可控的非敏感事实（端点名、字节数、吞吐、页数、模型名、校验级别、分享状态等）。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录或新指标。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。主端和从端节点通过带租约和心跳的方式领取任务。任务响应还包含 `node_id`、`node_name`，表示最近一次执行的节点。
 
-`StorageProvider`：`id,name(1..128),kind:local|webdav|lanzou|123pan|onedrive|s3,role:primary|backup,enabled:boolean,priority:integer(0..1000),weight:integer(1..1000),config:object<string,string>,secret_configured:boolean,created_at,updated_at`。任何 GET 不返回 secret。`Replica`：`id,blob_id,provider_id,status:pending|uploading|ready|failed,size_bytes,verification:uploaded|size|sha256,error,share_status:pending|ready|unsupported|failed,share_url:string,share_password:string,share_expires_at:date-time|null,created_at,updated_at`。远端对象 ID 不开放给普通资料接口。
+`Drive`（网盘）：`id,name(1..128),kind:local|webdav|lanzou|123pan|onedrive|s3,enabled:boolean,root_path:string,max_file_bytes:integer(>=0，0=不限),allowed_exts:string[],read_order:integer(0..1000),on_path_change:move|keep,config:object<string,string>,secret_configured:boolean,capabilities:{upload,download,share,folders,move,delete:boolean},stats:object<string,integer>,created_at,updated_at`。网盘只描述连接方式，上传哪些文件、放在什么路径由同步规则决定。`root_path` 是本系统在该网盘中使用的根目录（安全相对路径；蓝奏云为文件夹 ID）。`read_order` 越小，本机原件缺失时越先读取。`on_path_change=move` 时期望路径变化会在远端移动/改名，`keep` 时保持原位并标记路径偏离；蓝奏云与 123 云盘只能用 `keep`，省略时按类型取默认值。蓝奏云 `max_file_bytes` 为 0 时按 100 MiB 处理。`stats` 按副本状态计数，`size_bytes` 为 ready 与 orphaned 副本的字节数；`capabilities` 和 `stats` 不发起网络请求。任何 GET 不返回 secret。
 
-`StoragePolicy`：`mode:mirror_all|primary_backup|balanced,minimum_replicas:integer(1..20)`。默认 mirror_all/1。mirror_all 与 primary_backup 都写所有启用主备；balanced 在主端按权重选 minimum_replicas 个不同端点（主端不足时取全部主端），再加全部备端。读取按主端优先、priority 升序；失败切换。目标不足不能标 archived；一个 Blob/Provider 仅一个副本，复制重试不会重新选择已确定目标。
+`SyncRule`：`id(1..36，列表内唯一),name(1..128),enabled:boolean,is_default:boolean,conditions:RuleConditions,targets:SyncTarget[]`。`RuleConditions`：`subjects?:Subject.code[],doc_types?:DocType[],grades?:Grade[],cohorts?:integer[],regions?:string[],tags?:string[],parts?:Part[],media_types?:string[],min_size?:integer,max_size?:integer(0=不限)`；字段之间是「且」，同一字段多个值是「或」，全部省略匹配所有文件。`SyncTarget`：`drive_id,path_template,share:boolean,required:boolean`；同一规则不能重复指定网盘，123 云盘不能作为目标。规则列表 1..100 条，按顺序匹配，**命中第一条启用的规则为止**；最后一条必须是 `is_default=true`、启用且无条件的兜底规则（targets 可为空，即不上传）。
+
+路径模板：必须为相对路径、以 `{文件名}` 结尾，变量为 `{学科}`（单学科取名称，多学科为「综合」，无学科为「未分学科」）、`{年级}`、`{学期}`、`{届别}`（如 `2026届`）、`{地区}`、`{机构}`、`{类型}`（缺省「未分类」）、`{考试年月}`、`{套卷}`（缺省「未命名资料」）、`{部件}`（缺省「其他」）、`{文件名}`、`{sha8}`；默认 `{学科}/{届别}/{类型}/{套卷}/{文件名}`。每段替换 `/ \ : * ? " < > |` 和控制字符为 `_`、空段写为「未知」、截断到 100 字符；编目值里的斜杠不会产生新目录。结果拼接到网盘 `root_path` 之下；蓝奏云只取文件名。同一网盘上两个不同文件解析到相同路径时，后来的文件名追加 ` (sha8)`。
+
+`Replica`：`id,blob_id,drive_id,rule_id,desired_path,remote_path,skip_reason,share:boolean,required:boolean,status:pending|uploading|moving|ready|failed|skipped|orphaned,size_bytes,verification:uploaded|size|sha256,error,share_status:""|pending|ready|unsupported|failed,share_url:string,share_password:string,share_expires_at:date-time|null,created_at,updated_at`。每个 Blob×Drive 至多一个副本。`desired_path` 是当前规则解析出的路径，`remote_path` 是文件实际所在路径，两者不同表示待移动或路径偏离。skipped 表示网盘停用、超过大小上限或扩展名不允许，不算失败；orphaned 表示已不被任何规则需要但远端文件仍在（规则外副本），系统不会自动删除。远端对象 ID 不开放给接口。
+
+`SyncAction`：`material_id,file_name,rule_id,rule_name,drive_id,replica_id,action:upload|move|share|skip|orphan|cancel|drift|unchanged|not_required,desired_path,remote_path,reason,status,error,share_status,share:boolean,required:boolean`；`status/error/share_status` 是执行该动作前的副本现状。cancel 表示从未写入网盘的副本将被撤销；drift 表示路径已变但网盘设置为保持原位。
 
 `APIKey`：`id,name,scopes:string[],expires_at:date-time|null,revoked:boolean,created_at`。`User`：`id,username,role:admin|editor|viewer,enabled:boolean,created_at`。`Audit`：`id,user_id,username,action,target_id,created_at`（username 按当前用户查询，系统操作或用户不存在时为空；仅存元数据，不存正文/凭据）。
 
@@ -107,15 +113,15 @@ JSON `{"material_ids":["uuid"]}`；必须恰好包含该套卷全部文件，否
 
 ### POST /packs/trash · POST /packs/restore · POST /packs/purge（materials:write）
 
-JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。trash 把套卷及其文件软删除进回收站；restore 恢复回收站中的套卷；purge 只接受已在回收站中的套卷（否则 409），彻底删除文件、副本行、题目与解析缓存，并删除无引用的本地 CAS 文件。回收站保留 30 天，到期由后台任务清理。**云盘适配器没有删除接口，远端对象不会被 purge 删除**，其副本行会被移除；需要删除远端文件时请自行处理。审计记录 pack.trash / pack.restore / pack.purge。
+JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。trash 把套卷及其文件软删除进回收站；restore 恢复回收站中的套卷；purge 只接受已在回收站中的套卷（否则 409），彻底删除文件、题目与解析缓存，并删除无引用的本地 CAS 文件。回收站保留 30 天，到期由后台任务清理。**purge 不会删除网盘上的文件**：已上传到云盘的副本转为 orphaned（规则外副本）并保留 Blob 记录，之后再次上传相同内容会重新接管；需要删除时在 `POST /storage/replicas/bulk` 中执行 `delete_remote`。`local` 网盘中的文件和从未上传的副本行会直接删除。审计记录 pack.trash / pack.restore / pack.purge。
 
 ### GET /materials（materials:read）
 
-查询：page、page_size、`q`（标题/原始文件名，<=200）、`stage`（Stage）、`part`（Part）、`status`（MaterialStatus）、`reason`（review_reasons 之一）、`pack_id`、`sha256`（64 位十六进制，精确查询相同内容）。200 Page<Material>；`stage=review` 即待整理收件箱，按 created_at 升序，其余按时间倒序。
+查询：page、page_size、`q`（标题/原始文件名，<=200）、`stage`（Stage）、`part`（Part）、`status`（MaterialStatus）、`sync_status`（SyncStatus）、`reason`（review_reasons 之一）、`pack_id`、`sha256`（64 位十六进制，精确查询相同内容）。200 Page<Material>；`stage=review` 即待整理收件箱，按 created_at 升序，其余按时间倒序。
 
 ### GET /materials/stats（materials:read）
 
-200 data=`{"packs":3,"files":8,"processing":1,"review":2,"ready":5,"failed":0,"missing_answers":1,"trashed":0,"pending_storage":0,"archived":8,"degraded":0}`。`packs` 为未删除套卷数；`files` 为未删除文件数，按 stage 拆分 processing/review/ready/failed；`missing_answers` 为缺答案的试卷类套卷数；`trashed` 为回收站套卷数；其余按副本状态统计。未出现的状态为 0。
+200 data=`{"packs":3,"files":8,"processing":1,"review":2,"ready":5,"failed":0,"missing_answers":1,"trashed":0,"archived":8,"missing":0,"waiting_catalog":1,"not_required":0,"syncing":2,"synced":5,"attention":0}`。`packs` 为未删除套卷数；`files` 为未删除文件数，按 stage 拆分 processing/review/ready/failed；`missing_answers` 为缺答案的试卷类套卷数；`trashed` 为回收站套卷数；`archived/missing` 按 MaterialStatus 统计，`waiting_catalog/not_required/syncing/synced/attention` 按 SyncStatus 统计。未出现的状态为 0。
 
 ### GET /materials/{id}（materials:read）
 
@@ -123,7 +129,7 @@ JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。tr
 
 ### PATCH /materials/{id}（materials:write）
 
-JSON 可含 `part`（Part）、`answer_start_page`（0..10000）、`pack_id`（移入已存在套卷）或 `new_pack=true`（拆成独立套卷），至少一个字段。不允许修改 title、SHA、存储状态或副本。200 Material 详情；`part` 改为非 questions/full 时会移除旧题目索引，套卷标题与成员文件名按新 part 重新生成。
+JSON 可含 `part`（Part）、`answer_start_page`（0..10000）、`pack_id`（移入已存在套卷）或 `new_pack=true`（拆成独立套卷），至少一个字段。不允许修改 title、SHA、归档/同步状态或副本。200 Material 详情；`part` 改为非 questions/full 时会移除旧题目索引，套卷标题与成员文件名按新 part 重新生成。人工修改会把文件置为 ready 并立即按当前编目生成同步计划。
 
 ### POST /materials/accept（materials:write）
 
@@ -131,15 +137,15 @@ JSON `{"ids":["uuid"],"accept_suggestion":true}`；1..500 个待整理文件。`
 
 ### GET /materials/{id}/download（materials:read）
 
-200 二进制，Content-Type 取已验证媒体类型；Content-Disposition attachment，UTF-8 文件名；X-Content-Type-Options: nosniff。同源 JWT 通过 fetch Blob 下载，不将 Token 放入 URL。先检查本地原件，再按主备优先级尝试可读云副本；没有可用副本 503。Range 请求本期不承诺。
+200 二进制，Content-Type 取已验证媒体类型；Content-Disposition attachment，UTF-8 文件名；X-Content-Type-Options: nosniff。同源 JWT 通过 fetch Blob 下载，不将 Token 放入 URL。先检查本地原件，再按网盘 `read_order` 升序尝试已写入网盘的副本（含 orphaned）；没有可用副本 503。Range 请求本期不承诺。
 
 ### POST /materials/{id}/pull-cache（materials:read）
 
-从状态为 ready 的云端副本中按主端优先、priority 升序拉取文件，流式写入 `DATA_DIR/tmp/material-pulls`，同时校验资料的声明字节数和 SHA-256。只有完整匹配才原子发布为临时文件；不会写入永久 CAS，也不会修改副本状态或资料状态。没有可用副本、所有副本读取失败或内容校验失败返回 503，失败内容不会保留为可下载文件。
+从已写入网盘的副本中按网盘 `read_order` 升序拉取文件，流式写入 `DATA_DIR/tmp/material-pulls`，同时校验资料的声明字节数和 SHA-256。只有完整匹配才原子发布为临时文件；不会写入永久 CAS，也不会修改副本状态或资料状态。没有可用副本、所有副本读取失败或内容校验失败返回 503，失败内容不会保留为可下载文件。
 
 200 data=`{"download_url":"/api/v1/materials/<id>/pull-cache","file_name":"试卷.pdf","media_type":"application/pdf","size_bytes":12345,"sha256":"<64位小写十六进制>","expires_at":"2026-10-30T12:00:00Z","expires_in":900}`。`download_url` 是服务端相对路径，必须继续携带相同 Bearer 凭据；不得把 Token 写进 URL。未过期且尺寸正确的现有临时文件会直接复用，重复 POST 不会延长 TTL。`expires_in` 为剩余秒数。
 
-TTL 由服务端环境变量 `PULL_CACHE_TTL` 控制，默认 `15m`。修改配置需重启对应进程；重启不会清除尚未到期的文件。过期判断基于临时文件的 mtime。多实例共享 `DATA_DIR` 时可复用其他实例落盘的同一 SHA 临时文件。
+TTL 由服务端环境变量 `PULL_CACHE_TTL` 控制，默认 `15m`。修改配置需重启对应进程；重启不会清除尚未到期的文件。过期判断基于临时文件的 mtime。
 
 ### GET /materials/{id}/pull-cache（materials:read）
 
@@ -215,55 +221,93 @@ JSON：
 
 仅 failed 可重试，202 Job（同 id，status=pending）。其他状态 409。秘密错误须脱敏。
 
-### GET /storage/providers · POST /storage/providers
+### GET /storage/drives · POST /storage/drives
 
-GET storage:read，返回 `StorageProvider[]`（配置数量小，不分页）。POST storage:write，201 Provider。JSON：
+GET storage:read，返回 `Drive[]`（按 read_order、创建时间排序，不分页）。POST storage:write，201 Drive。JSON：
 
 ```json
-{"name":"学校 WebDAV","kind":"webdav","role":"backup","enabled":true,"priority":20,"weight":1,"config":{"base_url":"https://dav.example/dav","path_prefix":"paper-collect"},"secret":{"username":"user","password":"secret"}}
+{"name":"学校 WebDAV","kind":"webdav","enabled":true,"root_path":"paper-collect","max_file_bytes":0,"allowed_exts":[".pdf",".docx"],"read_order":20,"on_path_change":"move","config":{"base_url":"https://dav.example/dav"},"secret":{"username":"user","password":"secret"}}
 ```
 
-config 与 secret 均 object<string,string>。字段按适配器：
+`name`、`kind` 必需；省略 enabled/read_order 时默认 true/100，`on_path_change` 省略时 lanzou/123pan 为 keep、其余为 move。`allowed_exts` 自动转小写并补齐前导点，为空表示不限。config 与 secret 均为 object<string,string>，字段按适配器：
 
 | kind | config | secret |
 | --- | --- | --- |
-| local | root 由服务端固定，API 不允许任意路径 | 空 |
-| webdav | base_url 必需（http/https，无内嵌凭据）；path_prefix 可选；public_base_url 可选（真正公开目录的根 URL） | username/password 必需 |
-| lanzou | base_url 可选默认 https://pc.woozooo.com；folder_id 默认 -1；verify_remote_hash 可选 "true"/"false"（默认 false，开启后上传会再下载重算 SHA，耗时且失败时远端可能残留文件） | cookie 必需（管理员有效登录会话） |
+| local | 无；根目录由服务端固定为 `DATA_DIR/drives/<driveID>`，API 不允许指定 | 空 |
+| webdav | base_url 必需（http/https，无内嵌凭据）；public_base_url 可选（真正公开目录的根 URL） | username/password 必需 |
+| lanzou | base_url 可选，默认 https://pc.woozooo.com；verify_remote_hash 可选 "true"/"false"（默认 false，开启后上传会再下载重算 SHA，耗时且失败时远端可能残留文件）。文件夹 ID 写在 `root_path`，默认 -1 | cookie 必需（管理员有效登录会话） |
 | 123pan | base_url 默认 https://open-api.123pan.com；parent_file_id 默认 0 | client_id/client_secret 必需（开放平台申请） |
-| onedrive | auth_mode 为 direct（服务端默认，兼容已有配置）或 openlist；direct 时 client_id 必需、tenant 默认 common；path_prefix 可选；share_scope 为 anonymous（默认）、organization 或 disabled | refresh_token 必需；direct 时 client_secret 可选；share_url 可选，共享文件夹链接作为秘密保存 |
-| s3 | bucket、region 必需；endpoint 可选；path_prefix 可选；path_style 默认为 false；share_expires_seconds 默认 3600，范围 60..604800 | access_key_id、secret_access_key 必需；session_token 可选 |
+| onedrive | auth_mode 为 direct（服务端默认）或 openlist；direct 时 client_id 必需、tenant 默认 common；share_scope 为 anonymous（默认）、organization 或 disabled | refresh_token 必需；direct 时 client_secret 可选；share_url 可选，共享文件夹链接作为秘密保存 |
+| s3 | bucket、region 必需；endpoint 可选；path_style 默认为 false；share_expires_seconds 默认 3600，范围 60..604800 | access_key_id、secret_access_key 必需；session_token 可选 |
 
-省略 role/enabled/priority/weight 时默认 primary/true/100/1；config 或 secret 中出现该 kind 不支持的键会被拒绝。创建 local 限定到服务端数据目录。API 不返回传入 secret，`secret_configured` 只表示已保存，不代表已连通。
+config 或 secret 中出现该 kind 不支持的键会被拒绝；创建前会构造一次适配器校验配置，但不联网。API 不返回传入 secret，`secret_configured` 只表示已保存，不代表已连通。审计记录 storage.drive_create。
 
 适配器能力边界（实现事实，非联调声明）：
 
-- local：上传、下载可用；不支持分享（share_status=unsupported）。未提供 SHA 时 verification 只能是 size。
-- webdav：上传、下载可用；未配置 public_base_url 时分享不支持，配置后返回公开目录拼接链接，不代表该 URL 可匿名访问。提供 SHA 时上传后会完整下载重算。
-- lanzou：使用非官方接口，按 cookie 会话工作；单文件上限 100 MiB，超限返回 unsupported；默认 verification=uploaded，开启 verify_remote_hash 才可能为 sha256；分享返回 URL 与提取码。未对真实服务联调。
-- 123pan：当前只实现 access_token 与 Health 探测；upload/download/share 返回 unsupported（错误码 123pan_upload_unverified 等），Capabilities 全为 false。**不应把 123pan 作为可上传端点启用**；复制任务会失败并记录该错误，而不是伪造成功。
-- onedrive：国际版 Microsoft Graph 支持上传、下载、生成只读分享链接；250 MiB 以内的文件直接上传，更大的文件使用分段上传，上传会话遇到同名冲突时会清理中断留下的 0 字节占位文件后重试。暂不支持中国世纪互联版和政府云。`auth_mode=direct` 使用自己的应用，通过微软端点续期；`auth_mode=openlist` 使用 OpenList 提供的应用，从 OpenList Token 页面取得刷新令牌，续期时通过固定的 `https://api.oplist.org/onedrive/renewapi` 发送令牌。OpenList 的接口将令牌置于 URL 查询参数，提供方或中间环节可能记录；本服务不记录该 URL、口令或令牌，禁止续期重定向。OpenList 授权请求 `Files.ReadWrite.All` 和 `offline_access`，自有应用可使用 `Files.ReadWrite` 和 `offline_access`。更换 `auth_mode` 需要同时提交新模式对应的 `secret.refresh_token`，`secret` 仍整体替换，其他必要凭据须一并提交。历史缺少 `auth_mode` 的端点继续使用 direct。刷新令牌轮换后加密保存；`share_url` 可指定有写权限的共享文件夹。匿名分享可能被租户禁用，organization 仅适用于组织账号；分享失败不影响副本。Health 只检查文件夹可访问，不保证写入权限。验证级别为 size。未对真实 OneDrive 与 OpenList 联调。
+| kind | 上传/下载 | 分享 | 子目录 | 移动 | 删除 |
+| --- | --- | --- | --- | --- | --- |
+| local | 可用 | 不支持 | 支持 | 支持 | 支持 |
+| webdav | 可用 | 配置 public_base_url 时 | 支持 | 支持（MOVE） | 支持 |
+| lanzou | 可用（非官方接口） | 可用 | 不支持 | 不支持 | 不支持 |
+| 123pan | 不可用 | 不可用 | — | — | — |
+| onedrive | 可用 | share_scope≠disabled 时 | 支持 | 支持 | 支持 |
+| s3 | 可用 | 签名链接 | 支持（key 前缀） | 复制后删除，非原子 | 支持 |
+
+- 所有适配器的上传都**不覆盖**已有对象：目标路径已有相同内容（大小一致，能校验 SHA 时 SHA 也一致）则直接接管，否则失败为 `conflict`。移动同样不覆盖目标。删除时对象已不存在视为成功。
+- local：提供 SHA 时 verification=sha256，否则为 size。
+- webdav：未配置 public_base_url 时不支持分享，配置后返回公开目录拼接链接，不代表该 URL 可匿名访问。提供 SHA 时上传后会完整下载重算。
+- lanzou：按 cookie 会话工作；单文件上限 100 MiB；默认 verification=uploaded，开启 verify_remote_hash 才可能为 sha256；分享返回 URL 与提取码。未对真实服务联调。
+- 123pan：只实现 access_token 与 Health 探测；upload/download/share 返回 unsupported（错误码 123pan_upload_unverified 等），Capabilities 全为 false，规则不能把它作为目标。
+- onedrive：国际版 Microsoft Graph 支持上传、下载、移动、删除和只读分享链接；250 MiB 以内的文件直接上传，更大的文件使用分段上传，冲突时只接管大小一致的同名文件，并清理中断留下的 0 字节占位文件后重试。暂不支持中国世纪互联版和政府云。`auth_mode=direct` 使用自己的应用，通过微软端点续期；`auth_mode=openlist` 使用 OpenList 提供的应用，从 OpenList Token 页面取得刷新令牌，续期时通过固定的 `https://api.oplist.org/onedrive/renewapi` 发送令牌。OpenList 的接口将令牌置于 URL 查询参数，提供方或中间环节可能记录；本服务不记录该 URL、口令或令牌，禁止续期重定向。OpenList 授权请求 `Files.ReadWrite.All` 和 `offline_access`，自有应用可使用 `Files.ReadWrite` 和 `offline_access`。更换 `auth_mode` 需要同时提交新模式对应的 `secret.refresh_token`，`secret` 仍整体替换，其他必要凭据须一并提交。缺少 `auth_mode` 的网盘按 direct 处理。刷新令牌轮换后加密保存；`share_url` 可指定有写权限的共享文件夹。匿名分享可能被租户禁用，organization 仅适用于组织账号；分享失败不影响副本。Health 只检查文件夹可访问，不保证写入权限。验证级别为 size。未对真实 OneDrive 与 OpenList 联调。
 - s3：使用 AWS SDK 支持 AWS S3 和兼容端点；大文件自动分段并行上传、失败时尝试中止分段，上传后 HEAD 检查大小；分享为签名下载链接，过期后需刷新，临时凭据可能使链接提前失效。Health 使用 HeadBucket，要求相应的桶访问权限。未对真实 S3 联调。
 
-### PATCH /storage/providers/{id}（storage:write）
+### PATCH /storage/drives/{id}（storage:write）
 
-可修改 name/role/enabled/priority/weight/config/secret；kind 不可改。config 若出现整体替换；secret 若出现整体替换，空对象清空，省略保留。200 Provider。停用不删除远端内容，无法删除唯一可用副本的保护由运维流程负责；系统不提供物理删除云盘接口。
+可修改 name/enabled/root_path/max_file_bytes/allowed_exts/read_order/on_path_change/config/secret；kind 不可改。config 若出现整体替换；secret 若出现整体替换，空对象清空，省略保留。200 Drive。修改网盘设置不会自动作用到已有文件；需要时调用 `POST /storage/reconcile`（管理台为存储页的「补齐副本」）。停用网盘后，新计划中该网盘的目标记为 skipped，已写入的副本仍可读取。审计记录 storage.drive_update。
 
-### POST /storage/providers/{id}/test（storage:write）
+### POST /storage/drives/{id}/test（storage:write）
 
-执行真实 adapter.Health，200 data=`{"healthy":true|false,"message":"脱敏说明","capabilities":{"upload":true,"download":true,"share":false}}`；连接/认证失败 healthy=false，不伪造成功。适配器实现与实际云盘连通是两个独立事实。
+执行真实 adapter.Health，200 data=`{"healthy":true|false,"message":"脱敏说明","capabilities":{"upload":true,"download":true,"share":false,"folders":true,"move":true,"delete":true}}`；连接/认证失败 healthy=false，不伪造成功。适配器实现与实际网盘连通是两个独立事实。
 
-### GET /storage/policy · PUT /storage/policy
+### GET /storage/rules（storage:read）
 
-GET storage:read，200 StoragePolicy；PUT storage:write，JSON 完整 policy，200 StoragePolicy。修改只影响新任务；历史副本通过 reconcile 补齐。
+200 `SyncRule[]`，按顺序排列，最后一条为兜底规则。空库启动时自动创建兜底规则「其他所有文件」，没有目标，即默认不上传任何网盘。
+
+### POST /storage/rules/preview（storage:write）
+
+查询 page/page_size；JSON `{"rules":SyncRule[]}`（完整的草稿列表）。不写库，对所有已编目文件计算草稿规则下的动作。200 data=`{"preview_token":"...","counts":{"upload":128,"move":30,"orphan":12,"skip":4,"unchanged":900,"waiting_catalog":3},"items":SyncAction[],"total":174}`；`counts` 按动作统计（含 unchanged 和尚在等待编目的文件数），`items`/`total` 只含需要变化的动作并分页。`preview_token` 绑定当前用户、草稿内容以及当时的规则和网盘配置，15 分钟内有效。
+
+### PUT /storage/rules（storage:write）
+
+JSON `{"rules":SyncRule[],"preview_token":"..."}`。必须提交与预览完全相同的草稿；预览之后规则或任何网盘被修改、令牌过期或不属于当前用户时返回 409，需要重新预览。在一个事务中整体替换规则，并为所有已编目文件重新生成计划。202 data=`{"queued":integer}`。审计记录 storage.rules_update。
+
+### GET /storage/rules/explain（storage:read）
+
+查询 `material_id` 必需。返回该文件按当前规则得到的 `SyncAction[]`：命中的规则、每个网盘的期望路径、实际路径、动作和副本现状；规则不上传任何网盘时返回一条 `action=not_required`。只读，不改变副本。404 文件不存在。
+
+### POST /materials/{id}/sync（storage:write）
+
+无需请求体。即使文件仍在等待编目，也立即按当前编目和规则生成计划。202 data=`{"queued":integer}`。审计记录 material.sync。
+
+### GET /storage/replicas（storage:read）
+
+查询 page/page_size、`status`（Replica.status 之一，或 `drift`=已写入但实际路径与期望路径不同的非规则外副本）、`drive_id`。200 Page<Replica>，按更新时间倒序。
+
+### POST /storage/replicas/bulk（storage:write）
+
+JSON `{"ids":["uuid"],"action":"retry|delete_remote|forget"}`；1..100 个。逐个处理，200 data=`[{"id":"...","success":true,"error":"..."}]`。有等待或运行中任务的副本返回 409，需稍后重试。
+
+- `retry`：按当前规则重新规划该副本所属文件（失败副本重新排队）。
+- `delete_remote`：只用于 orphaned 副本；调用适配器删除远端文件后删除记录，审计 storage.replica_delete。删除期间以一条运行中的 replicate 任务占位，防止并发操作；若删除期间规则重新需要该副本，则改为重新上传。网盘不支持删除时报错。
+- `forget`：只用于 orphaned 副本；只删除记录，远端文件保留，审计 storage.replica_forget。
 
 ### POST /storage/reconcile（storage:write）
 
-无需请求体。按当前策略为已有 Blob 补建缺少副本任务，不删除额外副本。202 data=`{"queued":integer}`。不会自动把失败任务当成功；失败副本可经任务重试处理。
+无需请求体。按当前规则重新规划所有已编目文件：补建上传、移动、补分享，把不再需要的副本标记为 orphaned（从未写入网盘的直接撤销），不删除远端文件。202 data=`{"queued":integer}`。审计记录 storage.reconcile。
 
 ### POST /storage/replicas/{id}/share（storage:write）
 
-刷新/补建已有 ready 副本分享；200 Replica。provider 不支持分享时 share_status=unsupported、share_url 为空；远端分享失败返回 share_status=failed、脱敏 error，副本仍 ready。URL 不等于下载校验成功，verification 单独记录。
+刷新/补建已有 ready 副本分享；200 Replica。网盘不支持分享时 share_status=unsupported、share_url 为空；远端分享失败返回 share_status=failed、脱敏 error，副本仍 ready。URL 不等于下载校验成功，verification 单独记录。
 
 ## 智能识别（LLM + OCR）
 
@@ -303,7 +347,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `GET /materials/{id}/analysis`（materials:read）：200 MaterialAnalysis；尚无分析时返回 404 `not_found`。
 - `POST /materials/{id}/analysis/apply`（materials:write）：重新应用已成功完成的建议。请求可覆盖白名单字段 `{"title":"","doc_type":"","subject_codes":[],"grade":"","term":"","cohort":0,"region":"","organization":"","exam_name":"","exam_date":"","chapter":"","tags":[],"part":"","answer_start_page":0}`，省略字段取建议值；显式提供的白名单字段也可覆盖或补充建议。应用前与套卷 PATCH、文件 PATCH 使用同一套校验；200 更新后的 **Material 详情**，不能修改 blob/状态/路径。写审计 `material.ai_apply`。
 
-分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 原件不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验建议 → **在同一事务中自动应用白名单字段、同步文件名、分析已应用标记，并在条件满足时创建 `group` 任务**。归类以正文（或页面图像）为依据，文件名和来源路径只作辅助；提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准。长文档最多发送 12000 字符，保留开头约 2/3 与末尾约 1/3，并标注中间省略，以免漏掉卷末答案区；未解析出任何正文或页面图像时任务失败，不退回文件名猜测。自动应用只接受 `parseSuggestions` 校验后的字段，标题会同步为下载名和本地副本名；模型原文、未知字段和非法值不会写入。自动应用写审计 `material.ai_auto_apply`，人工重应用写 `material.ai_apply`，两者都会在满足条件时尝试入队自动归类。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
+分析链路：归档完成后若 `analysis_enabled` 自动入队（ZIP 原件不入队，展开成员各自入队）；任务读取原件 → 当前选中的 OCRProvider 解析（RapidOCR 自建异步任务、PaddleOCR 异步任务或 MinerU v4） → 统一 Markdown/逐页文本 → 有 vision_model 时以 Markdown + 前 max_images 张图片调用视觉模型，否则纯文本调用 default_model → 严格 JSON 校验建议 → **在同一事务中自动应用白名单字段、同步文件名、分析已应用标记，并在条件满足时创建 `group` 任务**。归类以正文（或页面图像）为依据，文件名和来源路径只作辅助；提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准。长文档最多发送 12000 字符，保留开头约 2/3 与末尾约 1/3，并标注中间省略，以免漏掉卷末答案区；未解析出任何正文或页面图像时任务失败，不退回文件名猜测。自动应用只接受 `parseSuggestions` 校验后的字段，标题会同步为下载名，并重新规划网盘副本路径（`on_path_change=move` 的网盘随之移动）；模型原文、未知字段和非法值不会写入。自动应用写审计 `material.ai_auto_apply`，人工重应用写 `material.ai_apply`，两者都会在满足条件时尝试入队自动归类。模型 provider 按 priority 故障切换；失败错误必须脱敏。未配置 OCR 服务商或外部服务令牌时任务失败并给出明确原因，不伪造结果。RapidOCR/PaddleOCR 不保存页面图，因此视觉模型只会收到文本。
 
 题目索引链路：解析文本按 `batch_pages`（默认 10）与 `batch_chars`（默认 12000）分组，最多 3 个批次并发切题；模型输出上限 128000 token，并请求 `reasoning_effort=high`。单批发生空响应或非法 JSON 时按页、再按正文二分重试；上游 5xx/限流最多额外重试一次，超时、鉴权等错误直接失败，不通过递归重试放大调用量。批次结果按原顺序合并去重后在同一事务写入题目与检索词。
 
@@ -321,7 +365,7 @@ Job 的 `material_id` 关联 analyze/index/group 等任务资料；`kind` 包含
 
 升级后后台分批为已有题干补建公式词项，重复执行安全，不重新调用 OCR 或切题模型；公式搜索会先补完尚未处理的旧题，首次搜索可能等待。旧题干本身已经丢失的公式无法凭索引恢复；如需从原生 DOCX 恢复常见公式结构，请对资料重建题目索引，重新解析和切题会产生正常的模型调用。
 
-- `POST /search/questions`（materials:read）：请求 `{"query":"已知函数...","subject":"math","grade":"grade12","academic_year":0,"limit":20,"offset":0}`。`query` 必填 1..2000 字；`subject`/`grade`/`academic_year` 按字典校验；`limit` 默认 20、最大 50；`offset` >= 0。只返回资料状态为 archived/degraded 且已有题目的记录。200 `{"items":[{"question_id":"...","question_no":"12","text":"完整题干（含选项/小问）","snippet":"...","highlights":[[0,6]],"score":12.3,"page_no":3,"material":{"id":"...","title":"...","file_name":"..."},"pack":{"id":"...","title":"..."},"subject_codes":["math"],"also_in":[{"id":"...","title":"..."}]}],"total":1,"took_ms":23}`。`pack` 是文件所属套卷；`also_in` 是同一题干在其他套卷中的重复出现（按套卷去重，可空数组）。`snippet` 围绕最长连续文字匹配或命中公式截取，省略处有 `…`；`highlights` 是相对于 `snippet` 的 Unicode 字符区间数组，无匹配时为空数组，客户端自行渲染，禁止返回 HTML。
+- `POST /search/questions`（materials:read）：请求 `{"query":"已知函数...","subject":"math","grade":"grade12","academic_year":0,"limit":20,"offset":0}`。`query` 必填 1..2000 字；`subject`/`grade`/`academic_year` 按字典校验；`limit` 默认 20、最大 50；`offset` >= 0。只返回已有题目、未删除的资料（归档状态 archived 或 missing）。200 `{"items":[{"question_id":"...","question_no":"12","text":"完整题干（含选项/小问）","snippet":"...","highlights":[[0,6]],"score":12.3,"page_no":3,"material":{"id":"...","title":"...","file_name":"..."},"pack":{"id":"...","title":"..."},"subject_codes":["math"],"also_in":[{"id":"...","title":"..."}]}],"total":1,"took_ms":23}`。`pack` 是文件所属套卷；`also_in` 是同一题干在其他套卷中的重复出现（按套卷去重，可空数组）。`snippet` 围绕最长连续文字匹配或命中公式截取，省略处有 `…`；`highlights` 是相对于 `snippet` 的 Unicode 字符区间数组，无匹配时为空数组，客户端自行渲染，禁止返回 HTML。
 - `GET /search/questions/{id}`（materials:read）：单题详情（同上字段，score 为 0）；没有查询词，`snippet` 为题干首段，`highlights` 为空数组。
 - `GET /materials/{id}/questions`（materials:read）：分页 `{id,material_id,page_no,seq,question_no,text,confidence,created_at}`，按 `seq` 升序。
 - `GET /materials/{id}/index`（materials:read）：`{status:pending|running|succeeded|failed|not_applicable,job_id,page_count,question_count,llm_calls,llm_failed_batches,error,indexed_at}`；试卷类资料尚无索引记录时返回 `status=pending`、`job_id=""`；其他角色返回 `status=not_applicable`、`job_id=""`。
@@ -329,7 +373,7 @@ Job 的 `material_id` 关联 analyze/index/group 等任务资料；`kind` 包含
 - `GET /search/settings`（search:read）：`{enabled,max_pages,batch_pages,batch_chars,provider_id,model}`。
 - `PUT /search/settings`（search:write）：完整替换；默认 enabled=true、max_pages=500、batch_pages=10、batch_chars=12000；max_pages 1..5000、batch_pages 1..50、batch_chars 1000..100000。未指定 provider/model 时使用第一个启用端点及其默认模型；指定的 provider 必须存在且启用，否则任务失败。搜索设置可通过 HTTP 或 MCP 访问，目前没有独立管理台页面。
 
-索引失败不阻塞归档与下载；搜索只返回已有题目且资料状态为 archived/degraded 的记录。搜索不检查 `material_index_states.status`，因此重建失败时旧索引仍可搜索，状态显示失败。
+索引失败不阻塞归档与下载；搜索只返回已有题目的未删除资料。搜索不检查 `material_index_states.status`，因此重建失败时旧索引仍可搜索，状态显示失败。
 
 ## MCP
 
@@ -346,4 +390,33 @@ curl -X POST http://127.0.0.1:8080/mcp -H "Authorization: Bearer $PAPER_COLLECT_
 
 ## 版本与扩展约定
 
-不支持物理删除云盘文件、在线文档编辑、宏执行和跨请求断点分块合并。新增 Adapter 只实现 storage.Adapter；新增资料元数据须同时更新本文和前端 DTO；分层、任务和数据流变更同步 [ARCHITECTURE.md](ARCHITECTURE.md)。SQLite 为单实例 WAL；PostgreSQL 多实例必须配置唯一 `WORKER_INSTANCE_ID` 并共享 `DATA_DIR`。
+不会自动删除网盘文件（只能通过 `storage/replicas/bulk` 的 `delete_remote` 人工删除规则外副本）；不支持在线文档编辑、宏执行和跨请求断点分块合并。新增 Adapter 实现 storage.Adapter，支持移动、删除时另外实现 `storage.Mover`、`storage.Deleter` 并在 Capabilities 中声明；新增资料元数据须同时更新本文和前端 DTO；分层、任务和数据流变更同步 [ARCHITECTURE.md](ARCHITECTURE.md)。主端只有一个实例；从端见下方「节点」一节。
+
+## 节点
+
+以下接口需要 `nodes:manage`（管理员），并提供同名 MCP 工具 `nodes_list`、`nodes_create`、`nodes_update`、`nodes_metrics`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/nodes` | 节点列表，主端在前 |
+| POST | `/api/v1/nodes` | 创建从端，body `{"name"}`；响应额外包含只出现一次的 `token` |
+| PATCH | `/api/v1/nodes/:id` | 修改 `name`、`enabled`、`draining`；主端不能停用，可以排空 |
+| GET | `/api/v1/nodes/:id/metrics` | 最近 1 小时指标，保存在主端内存，重启后清空 |
+
+节点字段：`id`、`name`、`is_master`、`enabled`、`draining`、`status`（`online`、`stale`、`offline`、`draining`、`disabled`）、`kinds`、`slots`、`running`（节点上报）、`running_kinds`（按类型统计的租约任务）、`succeeded_1h`、`failed_1h`、`version`、`protocol`、`last_ip`、`last_seen_at`、`started_at`、`cpu_percent`、`cpu_cores`、`proc_cpu_percent`、`mem_used`、`mem_total`、`proc_rss`、`net_rx_bps`、`net_tx_bps`、`cache_used`、`cache_max`、`created_at`。
+
+任务列表支持 `node_id` 筛选，任务响应包含 `node_id`、`node_name`。
+
+### 节点协议 `/internal/v1`
+
+只接受节点令牌；节点令牌不能访问其他接口，用户令牌和 API Key 也不能访问这组接口。不属于公开 API 和 MCP。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/heartbeat` | 上报指标和 `running_job_ids`，续租，返回 `lost_job_ids`、`draining` |
+| POST | `/jobs/claim` | 长轮询领取，body `{"kinds","wait_ms","protocol","rapidocr"}`，最长 25 秒；无任务返回 204，协议版本不一致返回 409 |
+| POST | `/jobs/:id/progress` | 进度 |
+| POST | `/jobs/:id/complete` | 提交结果，可 gzip，上限 32 MiB；幂等，非当前租约返回 409 |
+| POST | `/jobs/:id/fail` | `{"error","extra"}` 记录失败，`{"interrupted":true}` 重新排队 |
+| GET | `/blobs/:sha` | 下载原件，本地原件支持 Range |
+| POST | `/drives/:id/refresh-token` | 回写轮换后的 OneDrive refresh token |

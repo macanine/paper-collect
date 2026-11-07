@@ -20,10 +20,10 @@ func TestEnqueueMissingIndexesConcurrentAndIdempotent(t *testing.T) {
 	}
 	materials := []model.Material{
 		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()},
-		{ID: newID(), Status: model.StatusDegraded, MediaType: "application/pdf", Part: model.PartFull, SHA256: testSHA()},
+		{ID: newID(), Status: model.StatusMissing, MediaType: "application/pdf", Part: model.PartFull, SHA256: testSHA()},
 		{ID: newID(), Status: model.StatusArchived, MediaType: "application/pdf", Part: model.PartMain, SHA256: testSHA()},
 		{ID: newID(), Status: model.StatusArchived, MediaType: "application/zip", Part: model.PartQuestions, SHA256: testSHA()},
-		{ID: newID(), Status: model.StatusPendingStorage, MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()},
+		{ID: newID(), Status: "", MediaType: "application/pdf", Part: model.PartQuestions, SHA256: testSHA()},
 	}
 	if err := db.Create(&materials).Error; err != nil {
 		t.Fatal(err)

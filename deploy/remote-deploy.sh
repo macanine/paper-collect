@@ -57,7 +57,7 @@ trap rollback ERR
 write_env APP_IMAGE "$APP_IMAGE"
 write_env RAPIDOCR_IMAGE "$RAPIDOCR_IMAGE"
 
-"${compose[@]}" pull app-1 app-2 migrate rapidocr
+"${compose[@]}" pull app migrate rapidocr
 "${compose[@]}" up -d --remove-orphans --no-build
 
 healthy=0
@@ -72,7 +72,7 @@ done
 if [[ "$healthy" -ne 1 ]]; then
   echo "Health check did not recover within 60 seconds." >&2
   "${compose[@]}" ps >&2 || true
-  "${compose[@]}" logs --tail=80 migrate app-1 app-2 gateway >&2 || true
+  "${compose[@]}" logs --tail=80 migrate app gateway >&2 || true
   false
 fi
 

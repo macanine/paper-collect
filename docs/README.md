@@ -18,5 +18,5 @@
 - 修改接口、状态或对外字段时，同步更新 `API.md` 和前端类型。
 - 修改分层、任务、事务或数据流时，同步更新 `ARCHITECTURE.md`。
 - 修改模型、表、数据目录或备份方式时，同步更新 `DATA.md`。
-- 只记录实际执行过的验证；真实云盘、MinerU、PaddleOCR、模型网关和 PostgreSQL 未测试时明确标注。自建 RapidOCR 已在远端 Compose 用真实扫描 PDF 验证 OCR 与分析全链路。
+- 只记录实际执行过的验证；真实云盘、MinerU、PaddleOCR、模型网关和 PostgreSQL 未测试时明确标注。自建 RapidOCR 曾于 2026-10-28（套卷重构前）在远端 Compose 用真实扫描 PDF 验证 OCR 与分析全链路。验证结论统一记录在 [ARCHITECTURE.md 第 16 节](ARCHITECTURE.md#16-验证状态)。
 - 不提交 `data/`、`.cache/`、`web/dist/`、构建二进制、日志或密钥；临时预览入口不作为产品功能保留。

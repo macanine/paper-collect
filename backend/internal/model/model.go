@@ -34,6 +34,7 @@ const (
 	ScopeAIWrite          = "ai:write"
 	ScopeSearchRead       = "search:read"
 	ScopeSearchWrite      = "search:write"
+	ScopeNodesManage      = "nodes:manage"
 )
 
 // AllScopes lists every known scope.
@@ -41,7 +42,7 @@ var AllScopes = []string{
 	ScopeMaterialsRead, ScopeMaterialsWrite, ScopeCollectionsRead, ScopeCollectionsWrite,
 	ScopeUploadsWrite, ScopeJobsRead, ScopeJobsWrite, ScopeStorageRead, ScopeStorageWrite,
 	ScopeKeysManage, ScopeUsersManage, ScopeAuditRead,
-	ScopeAIRead, ScopeAIWrite, ScopeSearchRead, ScopeSearchWrite,
+	ScopeAIRead, ScopeAIWrite, ScopeSearchRead, ScopeSearchWrite, ScopeNodesManage,
 }
 
 // Material parts describe what one file is inside its pack.
@@ -67,12 +68,18 @@ const (
 // MaterialParts lists the accepted material parts.
 var MaterialParts = []string{PartQuestions, PartAnswers, PartFull, PartTeacher, PartAnswerSheet, PartListening, PartMain, PartOther}
 
-// Material storage statuses (replica health, secondary to the curation stage).
+// Material sync statuses: how far a ready file's drive copies have got. The
+// original is always safe in the local CAS; this only reports the drives.
 const (
-	StatusPendingStorage = "pending_storage"
-	StatusArchived       = "archived"
-	StatusDegraded       = "degraded"
+	SyncWaitingCatalog = "waiting_catalog" // catalogue not confirmed yet, rules cannot run
+	SyncNotRequired    = "not_required"    // the matched rule uploads nowhere
+	SyncSyncing        = "syncing"         // some required target is pending, uploading or moving
+	SyncSynced         = "synced"          // every required target is ready
+	SyncAttention      = "attention"       // a required target failed, or a path drifted under on_path_change=keep
 )
+
+// SyncStatuses lists material sync statuses.
+var SyncStatuses = []string{SyncWaitingCatalog, SyncNotRequired, SyncSyncing, SyncSynced, SyncAttention}
 
 // Material curation stages: the one status a person needs to read.
 const (
@@ -133,7 +140,7 @@ const (
 	JobFailed    = "failed"
 )
 
-// Storage provider kinds, roles and policy modes.
+// Storage drive kinds.
 const (
 	KindLocal    = "local"
 	KindWebDAV   = "webdav"
@@ -141,26 +148,33 @@ const (
 	KindPan123   = "123pan"
 	KindOneDrive = "onedrive"
 	KindS3       = "s3"
-	RolePrimary  = "primary"
-	RoleBackup   = "backup"
-
-	ModeMirrorAll     = "mirror_all"
-	ModePrimaryBackup = "primary_backup"
-	ModeBalanced      = "balanced"
 )
 
-// StorageKinds lists provider kinds.
+// DefaultPathTemplate lays drive copies out as a browsable folder tree.
+const DefaultPathTemplate = "{学科}/{届别}/{类型}/{套卷}/{文件名}"
+
+// StorageKinds lists drive kinds.
 var StorageKinds = []string{KindLocal, KindWebDAV, KindLanzou, KindPan123, KindOneDrive, KindS3}
 
-// PolicyModes lists storage policy modes.
-var PolicyModes = []string{ModeMirrorAll, ModePrimaryBackup, ModeBalanced}
+// On-path-change behaviours for a drive: whether a desired-path change (rename,
+// re-catalogue, template edit) moves the remote copy or leaves it where it is.
+const (
+	OnPathChangeMove = "move"
+	OnPathChangeKeep = "keep"
+)
+
+// OnPathChangeModes lists the accepted values.
+var OnPathChangeModes = []string{OnPathChangeMove, OnPathChangeKeep}
 
 // Replica states.
 const (
-	ReplicaPending   = "pending"
+	ReplicaPending   = "pending" // queued, not yet attempted
 	ReplicaUploading = "uploading"
 	ReplicaReady     = "ready"
+	ReplicaMoving    = "moving"
 	ReplicaFailed    = "failed"
+	ReplicaSkipped   = "skipped"  // desired, but the drive rejects it (size/ext/disabled)
+	ReplicaOrphaned  = "orphaned" // no longer desired by any rule; kept until a person deletes it
 
 	ShareStatusPending     = "pending"
 	ShareStatusReady       = "ready"
@@ -264,15 +278,25 @@ type Material struct {
 	Stage             string `gorm:"size:16;not null;index"`
 	ReviewReasonsJSON string `gorm:"type:text;not null"`
 	SuggestedPackID   string `gorm:"size:36"`
-	Status            string `gorm:"size:24;not null;index"`
-	BlobID            string `gorm:"size:36;not null;index"`
-	MediaType         string `gorm:"size:128;not null"`
-	SizeBytes         int64  `gorm:"not null"`
-	SHA256            string `gorm:"size:64;not null;uniqueIndex"`
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	DeletedAt         gorm.DeletedAt `gorm:"index"`
+	// Status reports whether the original is safe: archived once it is in the
+	// local CAS, missing when it can only be pulled back from a drive.
+	Status        string `gorm:"size:16;not null;index"`
+	SyncStatus    string `gorm:"size:16;not null;index"`
+	SyncPlannedAt *time.Time
+	BlobID        string `gorm:"size:36;not null;index"`
+	MediaType     string `gorm:"size:128;not null"`
+	SizeBytes     int64  `gorm:"not null"`
+	SHA256        string `gorm:"size:64;not null;uniqueIndex"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	DeletedAt     gorm.DeletedAt `gorm:"index"`
 }
+
+// Material archival statuses.
+const (
+	StatusArchived = "archived"
+	StatusMissing  = "missing"
+)
 
 // MaterialSource records each time and place a file arrived.
 type MaterialSource struct {
@@ -379,7 +403,9 @@ type Job struct {
 	ProgressCurrent int    `gorm:"not null;default:0"`
 	ProgressTotal   int    `gorm:"not null;default:0"`
 	LogJSON         string `gorm:"type:text;not null;default:''"`
-	LeaseOwner      string `gorm:"size:128;index"`
+	LeaseOwner      string `gorm:"size:128;index"` // node ID while running
+	NodeID          string `gorm:"size:36;index"`  // node of the latest execution
+	NodeName        string `gorm:"size:64"`
 	LeaseUntil      *time.Time
 	HeartbeatAt     *time.Time
 	StartedAt       *time.Time
@@ -399,6 +425,38 @@ type JobLog struct {
 	Metrics    map[string]any `json:"metrics,omitempty"`
 }
 
+// Node is one job executor. The master registers itself; workers authenticate
+// with a token whose hash is stored here. Only the latest metrics are kept.
+type Node struct {
+	ID         string `gorm:"primaryKey;size:36"`
+	Name       string `gorm:"size:64;not null"`
+	TokenHash  string `gorm:"size:64;uniqueIndex"`
+	IsMaster   bool   `gorm:"not null;default:false"`
+	Enabled    bool   `gorm:"not null;default:true"`
+	Draining   bool   `gorm:"not null;default:false"`
+	KindsJSON  string `gorm:"type:text;not null;default:'[]'"`
+	SlotsJSON  string `gorm:"type:text;not null;default:'{}'"`
+	Version    string `gorm:"size:64"`
+	Protocol   int    `gorm:"not null;default:0"`
+	LastIP     string `gorm:"size:64"`
+	LastSeenAt *time.Time
+	StartedAt  *time.Time
+	// The most recent heartbeat sample.
+	CPUPercent float64
+	CPUCores   int
+	ProcCPU    float64
+	MemUsed    int64
+	MemTotal   int64
+	ProcRSS    int64
+	NetRxBps   int64
+	NetTxBps   int64
+	CacheUsed  int64
+	CacheMax   int64
+	Running    int `gorm:"not null;default:0"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 // JobLock serialises analyze and index work for one material across instances.
 // Keys are stable resource names; the lease makes an abandoned claim recoverable.
 type JobLock struct {
@@ -408,52 +466,110 @@ type JobLock struct {
 	UpdatedAt  time.Time
 }
 
-// StorageProvider is one storage endpoint. Secrets are stored encrypted.
-type StorageProvider struct {
-	ID           string `gorm:"primaryKey;size:36"`
-	Name         string `gorm:"size:128;not null"`
-	Kind         string `gorm:"size:16;not null"`
-	Role         string `gorm:"size:16;not null"`
-	Enabled      bool   `gorm:"not null;index"`
-	Priority     int    `gorm:"not null;index"`
-	Weight       int    `gorm:"not null"`
-	ConfigJSON   string `gorm:"type:text;not null"`
-	SecretCipher string `gorm:"type:text"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+// Drive is one network storage destination. It only describes where and how
+// to connect; which files go there and under what path is decided entirely by
+// Rules. Secrets are stored encrypted.
+type Drive struct {
+	ID              string `gorm:"primaryKey;size:36"`
+	Name            string `gorm:"size:128;not null"`
+	Kind            string `gorm:"size:16;not null"`
+	Enabled         bool   `gorm:"not null;index"`
+	RootPath        string `gorm:"type:text;not null"`
+	MaxFileBytes    int64  `gorm:"not null"` // 0 means no system-imposed limit
+	AllowedExtsJSON string `gorm:"type:text;not null"`
+	ReadOrder       int    `gorm:"not null;index"`
+	OnPathChange    string `gorm:"size:8;not null"`
+	ConfigJSON      string `gorm:"type:text;not null"`
+	SecretCipher    string `gorm:"type:text"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
-// Replica is one blob stored on one provider. (BlobID, ProviderID) is unique.
-type Replica struct {
+// TableName names the drives table (kept plural per convention; "storage_drives"
+// avoids colliding with a future generic "drives" concept).
+func (Drive) TableName() string { return "storage_drives" }
+
+// Rule is one ordered sync rule. Rules are matched top to bottom; the first
+// whose Conditions match a material governs it. A disabled rule is skipped as
+// if absent. Exactly one row has IsDefault=true: the fixed "everything else"
+// rule at the bottom of the list, which always matches and cannot be deleted.
+type Rule struct {
 	ID             string `gorm:"primaryKey;size:36"`
-	BlobID         string `gorm:"size:36;not null;uniqueIndex:uq_replica_blob_provider,priority:1;index"`
-	ProviderID     string `gorm:"size:36;not null;uniqueIndex:uq_replica_blob_provider,priority:2;index"`
-	Status         string `gorm:"size:16;not null;index"`
-	SizeBytes      int64  `gorm:"not null"`
-	Verification   string `gorm:"size:16"`
-	Error          string `gorm:"type:text;not null"`
-	ShareStatus    string `gorm:"size:16;not null"`
-	ShareURL       string `gorm:"type:text;not null"`
-	SharePassword  string `gorm:"type:text;not null"`
-	ShareExpiresAt *time.Time
-	RemoteID       string `gorm:"type:text;not null"`
-	RemoteKey      string `gorm:"type:text;not null"`
-	RemoteName     string `gorm:"type:text;not null"`
-	PlanMode       string `gorm:"size:16;not null"`
+	Position       int    `gorm:"not null;index"`
+	Name           string `gorm:"size:128;not null"`
+	Enabled        bool   `gorm:"not null;index"`
+	IsDefault      bool   `gorm:"not null"`
+	ConditionsJSON string `gorm:"type:text;not null"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
 
-// Policy is the singleton storage policy (ID is always 1).
-type Policy struct {
-	ID              int    `gorm:"primaryKey"`
-	Mode            string `gorm:"size:16;not null"`
-	MinimumReplicas int    `gorm:"not null"`
-	UpdatedAt       time.Time
+// TableName names the rules table.
+func (Rule) TableName() string { return "sync_rules" }
+
+// RuleConditions is the decoded form of Rule.ConditionsJSON. Fields are AND'd
+// together; values within a field are OR'd. A zero value matches everything.
+type RuleConditions struct {
+	Subjects   []string `json:"subjects,omitempty"`
+	DocTypes   []string `json:"doc_types,omitempty"`
+	Grades     []string `json:"grades,omitempty"`
+	Cohorts    []int    `json:"cohorts,omitempty"`
+	Regions    []string `json:"regions,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Parts      []string `json:"parts,omitempty"`
+	MediaTypes []string `json:"media_types,omitempty"`
+	MinSize    int64    `json:"min_size,omitempty"`
+	MaxSize    int64    `json:"max_size,omitempty"` // 0 means no upper bound
 }
 
-// TableName pins the singleton policy table name.
-func (Policy) TableName() string { return "storage_policies" }
+// RuleTarget is one drive a rule uploads matching files to.
+type RuleTarget struct {
+	ID           string `gorm:"primaryKey;size:36"`
+	RuleID       string `gorm:"size:36;not null;uniqueIndex:uq_rule_target_drive,priority:1;index"`
+	DriveID      string `gorm:"size:36;not null;uniqueIndex:uq_rule_target_drive,priority:2;index"`
+	PathTemplate string `gorm:"type:text;not null"`
+	Share        bool   `gorm:"not null"`
+	Required     bool   `gorm:"not null"`
+	Position     int    `gorm:"not null"`
+}
+
+// TableName names the rule targets table.
+func (RuleTarget) TableName() string { return "sync_rule_targets" }
+
+// Replica is one blob stored, or wanted, on one drive. (BlobID, DriveID) is
+// unique. RuleID records which rule currently wants this copy; it is empty
+// once the copy becomes orphaned (no rule wants it any more) but the row is
+// kept so a person can review and delete it.
+//
+// DesiredPath is what the owning rule's template resolves to right now;
+// RemotePath is where the bytes actually sit. They differ after a rename, a
+// catalogue change or a template edit, until a move (or a person) reconciles
+// them. A replica is readable once RemoteID is set, regardless of Status.
+type Replica struct {
+	ID             string `gorm:"primaryKey;size:36"`
+	BlobID         string `gorm:"size:36;not null;uniqueIndex:uq_replica_blob_drive,priority:1;index"`
+	DriveID        string `gorm:"size:36;not null;uniqueIndex:uq_replica_blob_drive,priority:2;index"`
+	RuleID         string `gorm:"size:36;index"`
+	Status         string `gorm:"size:16;not null;index"`
+	SkipReason     string `gorm:"type:text;not null"`
+	Error          string `gorm:"type:text;not null"`
+	DesiredPath    string `gorm:"type:text;not null"`
+	RemotePath     string `gorm:"type:text;not null"`
+	RemoteID       string `gorm:"type:text;not null"`
+	Share          bool   `gorm:"not null"`
+	Required       bool   `gorm:"not null"`
+	ShareStatus    string `gorm:"size:16;not null"`
+	ShareURL       string `gorm:"type:text;not null"`
+	SharePassword  string `gorm:"type:text;not null"`
+	ShareExpiresAt *time.Time
+	Verification   string `gorm:"size:16"`
+	SizeBytes      int64  `gorm:"not null"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// TableName names the replicas table.
+func (Replica) TableName() string { return "replicas" }
 
 // TableName keeps audit rows in a conventional plural table.
 func (Audit) TableName() string { return "audits" }
@@ -614,9 +730,10 @@ func Models() []any {
 		&Blob{}, &Material{}, &MaterialSource{}, &Pack{}, &PackSubject{},
 		&Collection{}, &CollectionItem{},
 		&Upload{}, &UploadEntry{}, &Job{}, &JobLock{},
-		&StorageProvider{}, &Replica{}, &Policy{},
+		&Drive{}, &Rule{}, &RuleTarget{}, &Replica{},
 		&AIProvider{}, &OCRProvider{}, &AISettings{}, &MaterialAnalysis{},
 		&SearchSettings{}, &MaterialText{}, &QuestionBlock{}, &QuestionTerm{}, &MaterialIndexState{},
+		&Node{},
 	}
 }
 

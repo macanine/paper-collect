@@ -1,6 +1,6 @@
-import { PROVIDER_KINDS, type ProviderKind, type ProviderRole, type StorageProvider } from '../../shared/api/types';
+import { PROVIDER_KINDS, type Drive, type OnPathChange, type ProviderKind } from '../../shared/api/types';
 
-// 存储端点 config / secret 字段表，严格对应 docs/API.md「POST /storage/providers」的适配器字段表。
+// 网盘 config / secret 字段表，严格对应 docs/API.md「POST /storage/drives」的适配器字段表。
 // 不得增加合同之外的字段；secret 永不回显，编辑时留空表示保留原值。
 
 type FieldInput = 'text' | 'password' | 'select';
@@ -82,12 +82,6 @@ export const PROVIDER_FIELD_SPECS: Record<ProviderKind, KindSpec> = {
         validate: validateHttpUrl,
       },
       {
-        key: 'path_prefix',
-        label: '路径前缀',
-        required: false,
-        placeholder: 'paper-collect',
-      },
-      {
         key: 'public_base_url',
         label: '公开根地址',
         required: false,
@@ -111,14 +105,6 @@ export const PROVIDER_FIELD_SPECS: Record<ProviderKind, KindSpec> = {
         defaultValue: 'https://pc.woozooo.com',
         placeholder: 'https://pc.woozooo.com',
         validate: validateHttpUrl,
-      },
-      {
-        key: 'folder_id',
-        label: '目录 ID',
-        required: false,
-        defaultValue: '-1',
-        placeholder: '-1',
-        validate: validateInteger(-1, Number.MAX_SAFE_INTEGER),
       },
       {
         key: 'verify_remote_hash',
@@ -176,7 +162,6 @@ export const PROVIDER_FIELD_SPECS: Record<ProviderKind, KindSpec> = {
       ] },
       { key: 'client_id', label: '应用程序 ID', required: true },
       { key: 'tenant', label: '租户', required: false, defaultValue: 'common', placeholder: 'common' },
-      { key: 'path_prefix', label: '文件夹路径', required: false, placeholder: 'paper-collect' },
       { key: 'share_scope', label: '分享范围', required: false, defaultValue: 'anonymous', input: 'select', options: [
         { value: 'anonymous', label: '持链接可查看' }, { value: 'organization', label: '仅组织内可查看' }, { value: 'disabled', label: '不创建分享链接' },
       ] },
@@ -193,7 +178,6 @@ export const PROVIDER_FIELD_SPECS: Record<ProviderKind, KindSpec> = {
       { key: 'bucket', label: '存储桶', required: true },
       { key: 'region', label: '区域', required: true, placeholder: 'us-east-1' },
       { key: 'endpoint', label: '服务地址', required: false, placeholder: '留空使用 AWS 默认地址', validate: validateHttpUrl },
-      { key: 'path_prefix', label: '路径前缀', required: false, placeholder: 'paper-collect' },
       { key: 'path_style', label: '路径式访问', required: false, defaultValue: 'false', input: 'select', options: [{ value: 'false', label: '关闭' }, { value: 'true', label: '开启（兼容服务常用）' }] },
       { key: 'share_expires_seconds', label: '分享有效期（秒）', required: false, defaultValue: '3600', validate: validateInteger(60, 604800) },
     ],
@@ -213,32 +197,39 @@ export const PROVIDER_KIND_OPTIONS = PROVIDER_KINDS.map((kind) => ({
 export interface ProviderDraft {
   name: string;
   kind: ProviderKind;
-  role: ProviderRole;
   enabled: boolean;
-  priority: number;
-  weight: number;
+  root_path: string;
+  max_file_bytes: number;
+  allowed_exts: string[];
+  read_order: number;
+  on_path_change: OnPathChange;
   config: Record<string, string>;
   secret?: Record<string, string>;
 }
 
 /** PATCH 不允许修改 kind。 */
 export interface ProviderPatch {
-  name: string;
-  role: ProviderRole;
-  enabled: boolean;
-  priority: number;
-  weight: number;
-  config: Record<string, string>;
+  name?: string;
+  enabled?: boolean;
+  root_path?: string;
+  max_file_bytes?: number;
+  allowed_exts?: string[];
+  read_order?: number;
+  on_path_change?: OnPathChange;
+  config?: Record<string, string>;
   secret?: Record<string, string>;
 }
 
 export interface ProviderFormValues {
   name: string;
   kind: ProviderKind;
-  role: ProviderRole;
   enabled: boolean;
-  priority: number;
-  weight: number;
+  root_path: string;
+  /** 单位 MiB；0 表示不限。 */
+  max_file_mib: number;
+  allowed_exts: string[];
+  read_order: number;
+  on_path_change: OnPathChange;
   config: Record<string, string>;
   secret: Record<string, string>;
   /** 编辑时是否显式清空已保存凭据（发送空对象 secret）。 */
@@ -283,14 +274,29 @@ export function configDefaultsForKind(kind: ProviderKind): Record<string, string
 export function validateProviderForm(values: ProviderFormValues, mode: 'create' | 'edit'): ProviderValidation {
   const errors: Record<string, string> = {};
 
-  if (isBlank(values.name)) errors.name = '请输入端点名称';
+  if (isBlank(values.name)) errors.name = '请输入网盘名称';
   else if (values.name.trim().length > 128) errors.name = '名称不能超过 128 个字符';
 
-  if (!Number.isInteger(values.priority) || values.priority < 0 || values.priority > 1000) {
-    errors.priority = '优先级取值为 0 至 1000，数字越小越优先';
+  if (!Number.isInteger(values.max_file_mib) || values.max_file_mib < 0) {
+    errors.max_file_mib = '单文件上限必须为不小于 0 的整数（0 表示不限）';
   }
-  if (!Number.isInteger(values.weight) || values.weight < 1 || values.weight > 1000) {
-    errors.weight = '权重取值为 1 至 1000';
+  if (!Number.isInteger(values.read_order) || values.read_order < 0 || values.read_order > 1000) {
+    errors.read_order = '读取顺序取值为 0 至 1000，数字越小越优先';
+  }
+  if ((values.kind === 'lanzou' || values.kind === '123pan') && values.on_path_change !== 'keep') {
+    errors.on_path_change = '该网盘不支持移动，请选择保持原位';
+  }
+  if (values.kind === 'lanzou') {
+    if (/[/\\]/.test(values.root_path.trim())) {
+      errors.root_path = '蓝奏云根目录应填写文件夹 ID，不能包含斜杠';
+    }
+  } else if (values.root_path.trim()) {
+    for (const segment of values.root_path.trim().split('/')) {
+      if (!segment || segment === '.' || segment === '..' || /[/\\:*?"<>|]/.test(segment)) {
+        errors.root_path = '根目录必须为安全的相对路径';
+        break;
+      }
+    }
   }
 
   for (const field of visibleConfigFields(values.kind, values.config)) {
@@ -343,10 +349,12 @@ export function buildCreatePayload(values: ProviderFormValues): ProviderDraft {
   return {
     name: values.name.trim(),
     kind: values.kind,
-    role: values.role,
     enabled: values.enabled,
-    priority: values.priority,
-    weight: values.weight,
+    root_path: values.root_path.trim(),
+    max_file_bytes: Math.round(values.max_file_mib * 1024 * 1024),
+    allowed_exts: values.allowed_exts.map((ext) => ext.trim().toLowerCase()).filter((ext) => ext !== ''),
+    read_order: values.read_order,
+    on_path_change: values.on_path_change,
     config: collectConfig(values.kind, values.config),
     secret: collectSecret(values.kind, values.config, values.secret),
   };
@@ -360,10 +368,12 @@ export function buildCreatePayload(values: ProviderFormValues): ProviderDraft {
 export function buildPatchPayload(values: ProviderFormValues): ProviderPatch {
   const patch: ProviderPatch = {
     name: values.name.trim(),
-    role: values.role,
     enabled: values.enabled,
-    priority: values.priority,
-    weight: values.weight,
+    root_path: values.root_path.trim(),
+    max_file_bytes: Math.round(values.max_file_mib * 1024 * 1024),
+    allowed_exts: values.allowed_exts.map((ext) => ext.trim().toLowerCase()).filter((ext) => ext !== ''),
+    read_order: values.read_order,
+    on_path_change: values.on_path_change,
     config: collectConfig(values.kind, values.config),
   };
   if (values.clearSecret) {
@@ -375,21 +385,23 @@ export function buildPatchPayload(values: ProviderFormValues): ProviderPatch {
 }
 
 /** 编辑表单初始值：config 回填，secret 永远为空（服务端不返回）。 */
-export function initialProviderValues(provider: StorageProvider | null): ProviderFormValues {
-  const kind: ProviderKind = provider?.kind ?? 'local';
+export function initialProviderValues(drive: Drive | null): ProviderFormValues {
+  const kind: ProviderKind = drive?.kind ?? 'local';
   const spec = PROVIDER_FIELD_SPECS[kind];
   const config: Record<string, string> = {};
   for (const field of spec.config) {
-    config[field.key] = provider?.config[field.key] ?? field.defaultValue ?? '';
+    config[field.key] = drive?.config[field.key] ?? field.defaultValue ?? '';
   }
-  if (provider?.kind === 'onedrive' && !provider.config.auth_mode) config.auth_mode = 'direct';
+  if (drive?.kind === 'onedrive' && !drive.config.auth_mode) config.auth_mode = 'direct';
   return {
-    name: provider?.name ?? '',
+    name: drive?.name ?? '',
     kind,
-    role: provider?.role ?? 'backup',
-    enabled: provider?.enabled ?? true,
-    priority: provider?.priority ?? 10,
-    weight: provider?.weight ?? 1,
+    enabled: drive?.enabled ?? true,
+    root_path: drive?.root_path ?? '',
+    max_file_mib: drive ? Math.round(drive.max_file_bytes / 1024 / 1024) : 0,
+    allowed_exts: drive?.allowed_exts ?? [],
+    read_order: drive?.read_order ?? 100,
+    on_path_change: drive?.on_path_change ?? (kind === 'lanzou' || kind === '123pan' ? 'keep' : 'move'),
     config,
     secret: {},
     clearSecret: false,

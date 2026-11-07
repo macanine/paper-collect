@@ -9,55 +9,46 @@ import (
 	"github.com/nic/paper-collect/backend/internal/service"
 )
 
-func (s *Server) handleListProviders(c *gin.Context) {
-	providers, err := s.svc.ListProviders(c.Request.Context())
+func (s *Server) handleListDrives(c *gin.Context) {
+	rows, err := s.svc.ListDrives(c.Request.Context())
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	out := make([]providerDTO, 0, len(providers))
-	for _, p := range providers {
-		out = append(out, toProvider(p))
+	out := make([]driveDTO, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, s.driveWithInfo(c, r))
 	}
 	s.respondData(c, http.StatusOK, out)
 }
 
-func (s *Server) handleCreateProvider(c *gin.Context) {
+func (s *Server) handleCreateDrive(c *gin.Context) {
 	var req struct {
-		Name     string            `json:"name"`
-		Kind     string            `json:"kind"`
-		Role     string            `json:"role"`
-		Enabled  *bool             `json:"enabled"`
-		Priority *int              `json:"priority"`
-		Weight   *int              `json:"weight"`
-		Config   map[string]string `json:"config"`
-		Secret   map[string]string `json:"secret"`
+		Name         string            `json:"name"`
+		Kind         string            `json:"kind"`
+		Enabled      *bool             `json:"enabled"`
+		RootPath     string            `json:"root_path"`
+		MaxFileBytes int64             `json:"max_file_bytes"`
+		AllowedExts  []string          `json:"allowed_exts"`
+		ReadOrder    *int              `json:"read_order"`
+		OnPathChange string            `json:"on_path_change"`
+		Config       map[string]string `json:"config"`
+		Secret       map[string]string `json:"secret"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	in := service.ProviderInput{
-		Name:     req.Name,
-		Kind:     strings.TrimSpace(req.Kind),
-		Role:     strings.TrimSpace(req.Role),
-		Enabled:  true,
-		Priority: 100,
-		Weight:   1,
-		Config:   req.Config,
-		Secret:   req.Secret,
-	}
-	if in.Role == "" {
-		in.Role = model.RolePrimary
+	in := service.DriveInput{
+		Name: req.Name, Kind: strings.TrimSpace(req.Kind), Enabled: true, RootPath: strings.TrimSpace(req.RootPath),
+		MaxFileBytes: req.MaxFileBytes, AllowedExts: req.AllowedExts, ReadOrder: 100,
+		OnPathChange: strings.TrimSpace(req.OnPathChange), Config: req.Config, Secret: req.Secret,
 	}
 	if req.Enabled != nil {
 		in.Enabled = *req.Enabled
 	}
-	if req.Priority != nil {
-		in.Priority = *req.Priority
-	}
-	if req.Weight != nil {
-		in.Weight = *req.Weight
+	if req.ReadOrder != nil {
+		in.ReadOrder = *req.ReadOrder
 	}
 	if in.Config == nil {
 		in.Config = map[string]string{}
@@ -65,109 +56,184 @@ func (s *Server) handleCreateProvider(c *gin.Context) {
 	if in.Secret == nil {
 		in.Secret = map[string]string{}
 	}
-	provider, err := s.svc.CreateProvider(c.Request.Context(), principal(c), in)
+	drive, err := s.svc.CreateDrive(c.Request.Context(), principal(c), in)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusCreated, toProvider(provider))
+	s.respondData(c, http.StatusCreated, s.driveWithInfo(c, drive))
 }
 
-func (s *Server) handlePatchProvider(c *gin.Context) {
+func (s *Server) handlePatchDrive(c *gin.Context) {
 	var req struct {
-		Name     *string            `json:"name"`
-		Role     *string            `json:"role"`
-		Enabled  *bool              `json:"enabled"`
-		Priority *int               `json:"priority"`
-		Weight   *int               `json:"weight"`
-		Config   *map[string]string `json:"config"`
-		Secret   *map[string]string `json:"secret"`
+		Name         *string            `json:"name"`
+		Enabled      *bool              `json:"enabled"`
+		RootPath     *string            `json:"root_path"`
+		MaxFileBytes *int64             `json:"max_file_bytes"`
+		AllowedExts  *[]string          `json:"allowed_exts"`
+		ReadOrder    *int               `json:"read_order"`
+		OnPathChange *string            `json:"on_path_change"`
+		Config       *map[string]string `json:"config"`
+		Secret       *map[string]string `json:"secret"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	patch := service.ProviderPatch{
-		Name:     req.Name,
-		Role:     req.Role,
-		Enabled:  req.Enabled,
-		Priority: req.Priority,
-		Weight:   req.Weight,
-		Config:   req.Config,
-		Secret:   req.Secret,
-	}
-	provider, err := s.svc.UpdateProvider(c.Request.Context(), principal(c), c.Param("id"), patch)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	s.respondData(c, http.StatusOK, toProvider(provider))
-}
-
-func (s *Server) handleTestProvider(c *gin.Context) {
-	result, err := s.svc.TestProvider(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	s.respondData(c, http.StatusOK, providerTestDTO{
-		Healthy:      result.Healthy,
-		Message:      result.Message,
-		Capabilities: result.Capabilities,
+	drive, err := s.svc.UpdateDrive(c.Request.Context(), principal(c), c.Param("id"), service.DrivePatch{
+		Name: req.Name, Enabled: req.Enabled, RootPath: req.RootPath, MaxFileBytes: req.MaxFileBytes,
+		AllowedExts: req.AllowedExts, ReadOrder: req.ReadOrder, OnPathChange: req.OnPathChange,
+		Config: req.Config, Secret: req.Secret,
 	})
-}
-
-func (s *Server) handleGetPolicy(c *gin.Context) {
-	policy, err := s.svc.GetPolicy(c.Request.Context())
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, toPolicy(policy))
+	s.respondData(c, http.StatusOK, s.driveWithInfo(c, drive))
 }
 
-func (s *Server) handlePutPolicy(c *gin.Context) {
+func (s *Server) handleTestDrive(c *gin.Context) {
+	if _, _, err := decodeOptionalJSON(c, &struct{}{}); err != nil {
+		respondError(c, err)
+		return
+	}
+	r, err := s.svc.TestDrive(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, driveTestDTO{Healthy: r.Healthy, Message: r.Message, Capabilities: r.Capabilities})
+}
+
+func (s *Server) handleListRules(c *gin.Context) {
+	rules, err := s.svc.ListRules(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, rules)
+}
+
+func (s *Server) handlePreviewRules(c *gin.Context) {
+	pg, err := pageQuery(c)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
 	var req struct {
-		Mode            string `json:"mode"`
-		MinimumReplicas int    `json:"minimum_replicas"`
+		Rules []service.SyncRule `json:"rules"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	policy, err := s.svc.PutPolicy(c.Request.Context(), principal(c), service.PolicyInput{
-		Mode:            strings.TrimSpace(req.Mode),
-		MinimumReplicas: req.MinimumReplicas,
-	})
+	preview, e := s.svc.PreviewRules(c.Request.Context(), principal(c), req.Rules, (pg.Page-1)*pg.PageSize, pg.PageSize)
+	if e != nil {
+		respondError(c, e)
+		return
+	}
+	s.respondData(c, http.StatusOK, preview)
+}
+
+func (s *Server) handlePutRules(c *gin.Context) {
+	var req struct {
+		Rules        []service.SyncRule `json:"rules"`
+		PreviewToken string             `json:"preview_token"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	n, err := s.svc.PutRules(c.Request.Context(), principal(c), req.Rules, req.PreviewToken)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, toPolicy(policy))
+	s.respondData(c, http.StatusAccepted, reconcileDTO{Queued: n})
+}
+
+func (s *Server) handleExplainSync(c *gin.Context) {
+	actions, err := s.svc.ExplainSync(c.Request.Context(), c.Query("material_id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, actions)
+}
+
+func (s *Server) handleSyncMaterial(c *gin.Context) {
+	if _, _, err := decodeOptionalJSON(c, &struct{}{}); err != nil {
+		respondError(c, err)
+		return
+	}
+	n, err := s.svc.SyncMaterial(c.Request.Context(), principal(c), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusAccepted, reconcileDTO{Queued: n})
+}
+
+func (s *Server) handleListReplicas(c *gin.Context) {
+	pg, err := pageQuery(c)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	page, e := s.svc.ListReplicas(c.Request.Context(), c.Query("status"), c.Query("drive_id"), pg)
+	if e != nil {
+		respondError(c, e)
+		return
+	}
+	s.respondData(c, http.StatusOK, toPage(page, toReplica))
+}
+
+func (s *Server) handleBulkReplicas(c *gin.Context) {
+	var req struct {
+		IDs    []string `json:"ids"`
+		Action string   `json:"action"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	results, err := s.svc.BulkReplicas(c.Request.Context(), principal(c), req.IDs, req.Action)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, results)
 }
 
 func (s *Server) handleReconcile(c *gin.Context) {
-	if _, _, ae := decodeOptionalJSON(c, &struct{}{}); ae != nil {
-		respondError(c, ae)
+	if _, _, err := decodeOptionalJSON(c, &struct{}{}); err != nil {
+		respondError(c, err)
 		return
 	}
-	queued, err := s.svc.Reconcile(c.Request.Context(), principal(c))
+	n, err := s.svc.Reconcile(c.Request.Context(), principal(c))
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusAccepted, reconcileDTO{Queued: queued})
+	s.respondData(c, http.StatusAccepted, reconcileDTO{Queued: n})
 }
 
 func (s *Server) handleReplicaShare(c *gin.Context) {
-	if _, _, ae := decodeOptionalJSON(c, &struct{}{}); ae != nil {
-		respondError(c, ae)
+	if _, _, err := decodeOptionalJSON(c, &struct{}{}); err != nil {
+		respondError(c, err)
 		return
 	}
-	replica, err := s.svc.RefreshReplicaShare(c.Request.Context(), principal(c), c.Param("id"))
+	r, err := s.svc.RefreshReplicaShare(c.Request.Context(), principal(c), c.Param("id"))
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, toReplica(replica))
+	s.respondData(c, http.StatusOK, toReplica(r))
+}
+
+// driveWithInfo adds adapter capabilities and replica counts, without network calls.
+func (s *Server) driveWithInfo(c *gin.Context, d model.Drive) driveDTO {
+	out := toDrive(d)
+	out.Capabilities, out.Stats = s.svc.DriveInfo(c.Request.Context(), d)
+	return out
 }

@@ -8,6 +8,7 @@ import {
   BarsOutlined,
   BookOutlined,
   CloudServerOutlined,
+  ClusterOutlined,
   CloudUploadOutlined,
   DashboardOutlined,
   DeleteOutlined,
@@ -74,7 +75,8 @@ const NAVIGATION: NavigationSection[] = [
     key: 'system',
     label: '系统',
     items: [
-      { key: '/storage', path: '/storage', label: '存储端点', icon: <CloudServerOutlined />, scope: 'storage:read' },
+      { key: '/storage', path: '/storage', label: '存储', icon: <CloudServerOutlined />, scope: 'storage:read' },
+      { key: '/admin/nodes', path: '/admin/nodes', label: '节点', icon: <ClusterOutlined />, scope: 'nodes:manage' },
       { key: '/admin/ai-models', path: '/admin/ai-models', label: 'AI 模型', icon: <RobotOutlined />, scope: 'ai:read' },
       { key: '/admin/ai-settings', path: '/admin/ai-settings', label: 'AI 解析', icon: <ExperimentOutlined />, scope: 'ai:read' },
       { key: '/admin/api-keys', path: '/admin/api-keys', label: 'API 密钥', icon: <KeyOutlined />, scope: 'keys:manage' },
@@ -94,6 +96,7 @@ const DETAIL_LABELS: Record<string, string> = {
 
 function routeKey(pathname: string): string {
   if (pathname === '/') return '/';
+  if (pathname.startsWith('/admin/nodes')) return '/admin/nodes';
   if (pathname.startsWith('/admin/')) return pathname;
   const first = pathname.split('/')[1] ?? '';
   if (first === 'packs' || first === 'materials') return '/library';
@@ -102,6 +105,7 @@ function routeKey(pathname: string): string {
 
 function detailLabel(pathname: string, item: NavigationItem | undefined): string | null {
   if (!item || pathname === item.path) return null;
+  if (pathname.startsWith('/admin/nodes/')) return '节点详情';
   if (pathname.startsWith('/admin/')) return null;
   return DETAIL_LABELS[pathname.split('/')[1] ?? ''] ?? null;
 }

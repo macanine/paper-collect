@@ -42,6 +42,7 @@ type PackMember struct {
 	AnswerStartPage int
 	Stage           string
 	Status          string
+	SyncStatus      string
 	MediaType       string
 	SizeBytes       int64
 	Position        int
@@ -239,7 +240,7 @@ func buildPackView(p model.Pack, members []model.Material) PackView {
 	for _, m := range members {
 		view.Members = append(view.Members, PackMember{
 			ID: m.ID, Title: m.Title, FileName: m.FileName, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
-			Stage: m.Stage, Status: m.Status, MediaType: m.MediaType, SizeBytes: m.SizeBytes, Position: m.Position,
+			Stage: m.Stage, Status: m.Status, SyncStatus: m.SyncStatus, MediaType: m.MediaType, SizeBytes: m.SizeBytes, Position: m.Position,
 		})
 		parts = append(parts, m.Part)
 		if rank[m.Stage] > rank[view.Stage] {
@@ -438,7 +439,16 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 			return nil, err
 		}
 	}
-	return s.refreshPackNamesTx(tx, id)
+	ids, err := s.refreshPackNamesTx(tx, id)
+	if err != nil {
+		return nil, err
+	}
+	for _, mid := range ids {
+		if _, err := s.planMaterialTx(tx, mid, manual); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
 }
 
 // MergePacks moves every file of the source packs into the target pack. Empty

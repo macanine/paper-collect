@@ -1,61 +1,95 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createProvider, getPolicy, listProviders, reconcileStorage, refreshReplicaShare, testProvider, updatePolicy, updateProvider } from './api';
+import {
+  bulkReplicas,
+  createDrive,
+  listDrives,
+  listReplicas,
+  listRules,
+  previewRules,
+  putRules,
+  reconcileStorage,
+  refreshReplicaShare,
+  syncMaterial,
+  testDrive,
+  updateDrive,
+  type ReplicaBulkAction,
+} from './api';
 import type { ProviderDraft, ProviderPatch } from './providerFields';
-import type { StoragePolicy } from '../../shared/api/types';
+import type { SyncRule } from '../../shared/api/types';
 
-const storageKeys = {
-  providers: ['storage', 'providers'] as const,
-  policy: ['storage', 'policy'] as const,
+export const storageKeys = {
+  drives: ['storage', 'drives'] as const,
+  rules: ['storage', 'rules'] as const,
+  replicas: (status: string, driveId: string, page: number) => ['storage', 'replicas', status, driveId, page] as const,
+  explain: (materialId: string) => ['storage', 'explain', materialId] as const,
 };
 
-export function useProviders(enabled = true) {
+export function useDrives(enabled = true) {
   return useQuery({
-    queryKey: storageKeys.providers,
-    queryFn: listProviders,
+    queryKey: storageKeys.drives,
+    queryFn: listDrives,
     enabled,
   });
 }
 
-export function usePolicy(enabled = true) {
+export function useRules(enabled = true) {
   return useQuery({
-    queryKey: storageKeys.policy,
-    queryFn: getPolicy,
+    queryKey: storageKeys.rules,
+    queryFn: listRules,
     enabled,
   });
 }
 
-export function useCreateProvider() {
+export function useReplicas(status: string, driveId: string, page: number, pageSize: number, enabled = true) {
+  return useQuery({
+    queryKey: storageKeys.replicas(status, driveId, page),
+    queryFn: () => listReplicas({ status: status || undefined, drive_id: driveId || undefined, page, page_size: pageSize }),
+    enabled,
+  });
+}
+
+export function useCreateDrive() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (draft: ProviderDraft) => createProvider(draft),
+    mutationFn: (draft: ProviderDraft) => createDrive(draft),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: storageKeys.providers });
+      void queryClient.invalidateQueries({ queryKey: storageKeys.drives });
     },
   });
 }
 
-export function useUpdateProvider() {
+export function useUpdateDrive() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: ProviderPatch }) => updateProvider(id, patch),
+    mutationFn: ({ id, patch }: { id: string; patch: ProviderPatch }) => updateDrive(id, patch),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: storageKeys.providers });
+      void queryClient.invalidateQueries({ queryKey: storageKeys.drives });
     },
   });
 }
 
-export function useTestProvider() {
+export function useTestDrive() {
   return useMutation({
-    mutationFn: (id: string) => testProvider(id),
+    mutationFn: (id: string) => testDrive(id),
   });
 }
 
-export function useUpdatePolicy() {
+export function usePreviewRules() {
+  return useMutation({
+    mutationFn: ({ rules, page, pageSize }: { rules: SyncRule[]; page: number; pageSize: number }) => previewRules(rules, page, pageSize),
+  });
+}
+
+export function usePutRules() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (policy: StoragePolicy) => updatePolicy(policy),
-    onSuccess: (saved) => {
-      queryClient.setQueryData(storageKeys.policy, saved);
+    mutationFn: ({ rules, previewToken }: { rules: SyncRule[]; previewToken: string }) => putRules(rules, previewToken),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: storageKeys.rules });
+      void queryClient.invalidateQueries({ queryKey: ['storage', 'replicas'] });
+      void queryClient.invalidateQueries({ queryKey: ['materials'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
   });
 }
@@ -65,6 +99,33 @@ export function useReconcile() {
   return useMutation({
     mutationFn: reconcileStorage,
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useBulkReplicas() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ids, action }: { ids: string[]; action: ReplicaBulkAction }) => bulkReplicas(ids, action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['storage', 'replicas'] });
+      void queryClient.invalidateQueries({ queryKey: storageKeys.drives });
+      void queryClient.invalidateQueries({ queryKey: ['materials'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+}
+
+export function useSyncMaterial() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (materialId: string) => syncMaterial(materialId),
+    onSuccess: (_result, materialId) => {
+      void queryClient.invalidateQueries({ queryKey: storageKeys.explain(materialId) });
+      void queryClient.invalidateQueries({ queryKey: ['materials'] });
       void queryClient.invalidateQueries({ queryKey: ['jobs'] });
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },

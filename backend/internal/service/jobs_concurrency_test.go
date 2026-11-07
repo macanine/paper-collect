@@ -47,7 +47,6 @@ func newWorkerTestService(t *testing.T, dir, instance string) (*Service, *gorm.D
 			InstanceID: instance, LeaseDuration: time.Minute,
 			HeartbeatInterval: 10 * time.Second, PollInterval: 10 * time.Millisecond,
 		},
-		ResetAllRunningOnStart: true,
 	})
 	if err != nil {
 		t.Fatal(err)

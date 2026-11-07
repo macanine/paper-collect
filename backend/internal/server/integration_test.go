@@ -48,6 +48,13 @@ func newEnv(t *testing.T) *testEnv {
 
 func newEnvWithPullCacheTTL(t *testing.T, ttl time.Duration) *testEnv {
 	t.Helper()
+	return newEnvWith(t, ttl, nil)
+}
+
+// newEnvWith builds a master. kinds nil runs every job kind on the master;
+// an empty slice leaves replicate, analyze and index to worker nodes.
+func newEnvWith(t *testing.T, ttl time.Duration, kinds []string) *testEnv {
+	t.Helper()
 	dir := t.TempDir()
 	conn, err := db.Open("sqlite", filepath.Join(dir, "test.db"))
 	if err != nil {
@@ -72,6 +79,7 @@ func newEnvWithPullCacheTTL(t *testing.T, ttl time.Duration) *testEnv {
 	svc, err := service.New(service.Options{
 		DB: conn, Blobs: store, Box: box, Signer: signer, Limiter: limiter,
 		Factory: storage.New, Logf: t.Logf, PullCacheTTL: ttl,
+		Worker: service.WorkerSettings{Kinds: kinds},
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -79,6 +87,9 @@ func newEnvWithPullCacheTTL(t *testing.T, ttl time.Duration) *testEnv {
 	ctx := context.Background()
 	if err := svc.Bootstrap(ctx, adminUser, adminPassword); err != nil {
 		t.Fatalf("bootstrap: %v", err)
+	}
+	if _, err := svc.RegisterMaster(ctx, "主端", "test"); err != nil {
+		t.Fatalf("register master: %v", err)
 	}
 	srv, err := server.New(server.Options{Service: svc, WebDist: filepath.Join(dir, "missing")})
 	if err != nil {
@@ -315,8 +326,55 @@ func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
 	}
 }
 
+// syncAllToLocalDrive adds a local drive and points the fallback rule at it,
+// going through the same preview-then-save flow as the storage page.
+func (e *testEnv) syncAllToLocalDrive(t *testing.T) string {
+	t.Helper()
+	return e.syncAllToDrive(t, map[string]any{"name": "本地目录", "kind": "local"})
+}
+
+func (e *testEnv) syncAllToDrive(t *testing.T, input map[string]any) string {
+	t.Helper()
+	status, body := e.do(t, http.MethodPost, "/api/v1/storage/drives", input, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("create drive %d: %s", status, body)
+	}
+	var drive struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &drive); err != nil {
+		t.Fatal(err)
+	}
+	status, body = e.do(t, http.MethodGet, "/api/v1/storage/rules", nil, nil)
+	var listed struct {
+		Data []map[string]any `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &listed) != nil || len(listed.Data) != 1 {
+		t.Fatalf("list rules %d: %s", status, body)
+	}
+	rules := listed.Data
+	rules[0]["targets"] = []any{map[string]any{"drive_id": drive.Data.ID, "path_template": model.DefaultPathTemplate, "required": true}}
+	status, body = e.do(t, http.MethodPost, "/api/v1/storage/rules/preview", map[string]any{"rules": rules}, nil)
+	var preview struct {
+		Data struct {
+			PreviewToken string `json:"preview_token"`
+		} `json:"data"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &preview) != nil || preview.Data.PreviewToken == "" {
+		t.Fatalf("preview rules %d: %s", status, body)
+	}
+	status, body = e.do(t, http.MethodPut, "/api/v1/storage/rules", map[string]any{"rules": rules, "preview_token": preview.Data.PreviewToken}, nil)
+	if status != http.StatusAccepted {
+		t.Fatalf("save rules %d: %s", status, body)
+	}
+	return drive.Data.ID
+}
+
 func TestPullCloudReplicaIntoTemporaryCache(t *testing.T) {
 	env := newEnvWithPullCacheTTL(t, 2*time.Hour)
+	env.syncAllToLocalDrive(t)
 	pdf := minimalPDF()
 	uploadID, _ := env.upload(t, "临时拉取测试", map[string][]byte{"学生版.pdf": pdf})
 	env.finalizeAndWait(t, uploadID)
@@ -400,6 +458,7 @@ func TestPullCloudReplicaIntoTemporaryCache(t *testing.T) {
 
 func TestPullCacheRejectsCorruptCloudReplicaWithoutPublishing(t *testing.T) {
 	env := newEnv(t)
+	env.syncAllToLocalDrive(t)
 	pdf := minimalPDF()
 	uploadID, _ := env.upload(t, "损坏副本测试", map[string][]byte{"学生版.pdf": pdf})
 	env.finalizeAndWait(t, uploadID)
@@ -423,9 +482,9 @@ func TestPullCacheRejectsCorruptCloudReplicaWithoutPublishing(t *testing.T) {
 	tampered[len(tampered)-1] ^= 1
 	remoteKey := replica.RemoteID
 	if remoteKey == "" {
-		remoteKey = replica.RemoteKey
+		remoteKey = replica.RemotePath
 	}
-	replicaPath := filepath.Join(env.dataDir, "providers", replica.ProviderID, filepath.FromSlash(remoteKey))
+	replicaPath := filepath.Join(env.dataDir, "drives", replica.DriveID, filepath.FromSlash(remoteKey))
 	if err := os.WriteFile(replicaPath, tampered, 0o600); err != nil {
 		t.Fatalf("tamper local replica: %v", err)
 	}
@@ -584,7 +643,7 @@ func TestDirectKeyEnforcesScopesAndMCPToolVisibility(t *testing.T) {
 func TestUnauthenticatedRequestsAreRejected(t *testing.T) {
 	env := newEnv(t)
 	env.token = ""
-	for _, path := range []string{"/api/v1/materials", "/api/v1/storage/providers", "/api/v1/jobs"} {
+	for _, path := range []string{"/api/v1/materials", "/api/v1/storage/drives", "/api/v1/jobs"} {
 		status, _ := env.do(t, http.MethodGet, path, nil, nil)
 		if status != http.StatusUnauthorized {
 			t.Fatalf("%s: got %d, want 401", path, status)

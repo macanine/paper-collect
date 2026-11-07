@@ -32,7 +32,7 @@ func TestMigrateCurrentSchemaIsIdempotent(t *testing.T) {
 	}
 
 	user := model.User{ID: "user", Username: "admin", PasswordHash: "test-hash", Role: "admin", Enabled: true}
-	provider := model.StorageProvider{ID: "provider", Name: "local", Kind: "local", Role: "primary", Enabled: true, ConfigJSON: "{}"}
+	provider := model.Drive{ID: "provider", Name: "local", Kind: "local", Enabled: true, ConfigJSON: "{}"}
 	if err := conn.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -46,93 +46,8 @@ func TestMigrateCurrentSchemaIsIdempotent(t *testing.T) {
 	if err := conn.First(&savedUser, "id = ?", user.ID).Error; err != nil || savedUser.Username != user.Username || savedUser.PasswordHash != user.PasswordHash || !savedUser.Enabled {
 		t.Fatalf("account not preserved: %v", err)
 	}
-	var savedProvider model.StorageProvider
+	var savedProvider model.Drive
 	if err := conn.First(&savedProvider, "id = ?", provider.ID).Error; err != nil || savedProvider.Name != provider.Name || savedProvider.ConfigJSON != provider.ConfigJSON || !savedProvider.Enabled {
 		t.Fatalf("storage settings not preserved: %v", err)
-	}
-}
-
-func TestMigrateAddsProgressToExistingJobs(t *testing.T) {
-	conn, err := db.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := conn.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sqlDB.Close()
-	if err := conn.Exec(`CREATE TABLE jobs (id text PRIMARY KEY, kind text NOT NULL, status text NOT NULL, upload_id text, replica_id text, material_id text, attempts integer NOT NULL, error text NOT NULL, lease_owner text, lease_until datetime, heartbeat_at datetime, created_at datetime, updated_at datetime)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Exec(`INSERT INTO jobs (id,kind,status,attempts,error) VALUES ('old','ingest','pending',0,'')`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(conn); err != nil {
-		t.Fatal(err)
-	}
-	var job model.Job
-	if err := conn.First(&job, "id = ?", "old").Error; err != nil {
-		t.Fatal(err)
-	}
-	if job.ProgressMessage != "" || job.LogJSON != "" || job.ProgressTotal != 0 {
-		t.Fatal("legacy job was not preserved")
-	}
-}
-
-func TestMigrateAddsKeyLookupIndexWithoutChangingKeys(t *testing.T) {
-	conn, err := db.Open("sqlite", filepath.Join(t.TempDir(), "keys.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := conn.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sqlDB.Close()
-	if err := db.Migrate(conn); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Migrator().DropIndex(&model.APIKey{}, "idx_api_keys_secret_hash"); err != nil {
-		t.Fatal(err)
-	}
-	key := model.APIKey{ID: "old-key", UserID: "owner", Name: "old", SecretHash: "legacy-hash", ScopesJSON: `["materials:read"]`}
-	if err := conn.Create(&key).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(conn); err != nil {
-		t.Fatal(err)
-	}
-	var saved model.APIKey
-	if err := conn.First(&saved, "id = ?", key.ID).Error; err != nil || saved.SecretHash != key.SecretHash || !conn.Migrator().HasIndex(&model.APIKey{}, "idx_api_keys_secret_hash") {
-		t.Fatal("migration did not preserve the legacy key and add its lookup index")
-	}
-}
-
-func TestMigrateAddsMathIndexVersionToExistingQuestions(t *testing.T) {
-	conn, err := db.Open("sqlite", filepath.Join(t.TempDir(), "questions.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := conn.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sqlDB.Close()
-	if err := conn.Exec(`CREATE TABLE question_blocks (id text PRIMARY KEY, material_id text NOT NULL, page_no integer NOT NULL, seq integer NOT NULL, question_no text, text text NOT NULL, normalized text NOT NULL, confidence real NOT NULL, model text, prompt_version text, created_at datetime)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Exec(`INSERT INTO question_blocks (id, material_id, page_no, seq, text, normalized, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)`, "old", "material", 1, 0, "x+y", "xy", 0.8).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Migrate(conn); err != nil {
-		t.Fatal(err)
-	}
-	var question model.QuestionBlock
-	if err := conn.First(&question, "id = ?", "old").Error; err != nil || question.Text != "x+y" || question.MathIndexVersion != 0 {
-		t.Fatalf("legacy question was not preserved: %+v, %v", question, err)
-	}
-	if !conn.Migrator().HasIndex(&model.QuestionBlock{}, "idx_question_blocks_math_index_version") {
-		t.Fatal("math index backfill lookup index is missing")
 	}
 }

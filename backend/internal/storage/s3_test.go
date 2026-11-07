@@ -27,6 +27,10 @@ func TestS3UploadDownloadAndPresignedShare(t *testing.T) {
 			saved, _ = io.ReadAll(r.Body)
 			w.Header().Set("ETag", `"etag"`)
 		case r.URL.Path == "/bucket/archive/a/file.pdf" && r.Method == http.MethodHead:
+			if saved == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
 			w.Header().Set("Content-Length", strconv.Itoa(len(saved)))
 		case r.URL.Path == "/bucket/archive/a/file.pdf" && r.Method == http.MethodGet:
 			_, _ = w.Write(saved)
@@ -101,6 +105,10 @@ func TestS3MultipartUploadAndAbort(t *testing.T) {
 					aborted = true
 					w.WriteHeader(http.StatusNoContent)
 				case r.Method == http.MethodHead:
+					if !completed {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
 					w.Header().Set("Content-Length", strconv.Itoa(17<<20))
 				default:
 					t.Errorf("unexpected multipart operation %s %s", r.Method, r.URL.Path)
@@ -127,5 +135,65 @@ func TestS3MultipartUploadAndAbort(t *testing.T) {
 				t.Fatalf("multipart upload failed: err=%v parts=%d", err, len(parts))
 			}
 		})
+	}
+}
+
+func TestS3PutAdoptsSameSizeAndMoveCopiesThenDeletes(t *testing.T) {
+	var mu sync.Mutex
+	objects := map[string]string{"/bucket/p/a.pdf": "content", "/bucket/p/taken.pdf": "longer content"}
+	copies := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		body, exists := objects[r.URL.Path]
+		switch r.Method {
+		case http.MethodHead:
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		case http.MethodPut:
+			source := r.Header.Get("X-Amz-Copy-Source")
+			if source == "" {
+				t.Errorf("unexpected upload to %s", r.URL.Path)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			copies++
+			objects[r.URL.Path] = objects["/"+source]
+			_, _ = io.WriteString(w, `<CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`)
+		case http.MethodDelete:
+			delete(objects, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected operation %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	a, err := NewS3(Config{Settings: map[string]string{"endpoint": server.URL, "region": "us-east-1", "bucket": "bucket", "path_prefix": "p", "path_style": "true"}, Secrets: map[string]string{"access_key_id": "a", "secret_access_key": "b"}}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := a.Put(context.Background(), Object{Key: "a.pdf", Path: file, Size: 7}); err != nil || stored.RemoteID != "a.pdf" {
+		t.Fatalf("adopt = %+v, %v", stored, err)
+	}
+	if _, err := a.Put(context.Background(), Object{Key: "taken.pdf", Path: file, Size: 7}); AsCloudError(err).Class != ClassConflict {
+		t.Fatalf("different existing object: %v", err)
+	}
+	stored, err := a.(Mover).Move(context.Background(), "a.pdf", "dir/b.pdf")
+	if err != nil || stored.RemoteID != "dir/b.pdf" || copies != 1 {
+		t.Fatalf("move = %+v, %v, copies=%d", stored, err, copies)
+	}
+	if objects["/bucket/p/dir/b.pdf"] != "content" || objects["/bucket/p/a.pdf"] != "" {
+		t.Fatalf("objects after move: %v", objects)
+	}
+	if err := a.(Deleter).Delete(context.Background(), "dir/b.pdf"); err != nil || len(objects) != 1 {
+		t.Fatalf("delete: %v, %v", err, objects)
 	}
 }

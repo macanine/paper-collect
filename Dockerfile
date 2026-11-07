@@ -21,7 +21,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system app \
     && useradd --system --gid app --home-dir /app --no-create-home app \
-    && mkdir -p /app/data /app/web \
+    && mkdir -p /app/data /app/web /app/cache \
     && chown -R app:app /app
 
 COPY --from=server-build /out/paper-collect /app/paper-collect

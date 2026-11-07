@@ -142,14 +142,34 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.GET("/jobs/:id", s.requireScope(model.ScopeJobsRead), s.handleGetJob)
 	authGroup.POST("/jobs/:id/retry", s.requireScope(model.ScopeJobsWrite), s.handleRetryJob)
 
-	authGroup.GET("/storage/providers", s.requireScope(model.ScopeStorageRead), s.handleListProviders)
-	authGroup.POST("/storage/providers", s.requireScope(model.ScopeStorageWrite), s.handleCreateProvider)
-	authGroup.PATCH("/storage/providers/:id", s.requireScope(model.ScopeStorageWrite), s.handlePatchProvider)
-	authGroup.POST("/storage/providers/:id/test", s.requireScope(model.ScopeStorageWrite), s.handleTestProvider)
-	authGroup.GET("/storage/policy", s.requireScope(model.ScopeStorageRead), s.handleGetPolicy)
-	authGroup.PUT("/storage/policy", s.requireScope(model.ScopeStorageWrite), s.handlePutPolicy)
+	authGroup.GET("/storage/drives", s.requireScope(model.ScopeStorageRead), s.handleListDrives)
+	authGroup.POST("/storage/drives", s.requireScope(model.ScopeStorageWrite), s.handleCreateDrive)
+	authGroup.PATCH("/storage/drives/:id", s.requireScope(model.ScopeStorageWrite), s.handlePatchDrive)
+	authGroup.POST("/storage/drives/:id/test", s.requireScope(model.ScopeStorageWrite), s.handleTestDrive)
+	authGroup.GET("/storage/rules", s.requireScope(model.ScopeStorageRead), s.handleListRules)
+	authGroup.PUT("/storage/rules", s.requireScope(model.ScopeStorageWrite), s.handlePutRules)
+	authGroup.POST("/storage/rules/preview", s.requireScope(model.ScopeStorageWrite), s.handlePreviewRules)
+	authGroup.GET("/storage/rules/explain", s.requireScope(model.ScopeStorageRead), s.handleExplainSync)
+	authGroup.GET("/storage/replicas", s.requireScope(model.ScopeStorageRead), s.handleListReplicas)
+	authGroup.POST("/storage/replicas/bulk", s.requireScope(model.ScopeStorageWrite), s.handleBulkReplicas)
+	authGroup.POST("/materials/:id/sync", s.requireScope(model.ScopeStorageWrite), s.handleSyncMaterial)
 	authGroup.POST("/storage/reconcile", s.requireScope(model.ScopeStorageWrite), s.handleReconcile)
 	authGroup.POST("/storage/replicas/:id/share", s.requireScope(model.ScopeStorageWrite), s.handleReplicaShare)
+
+	authGroup.GET("/nodes", s.requireScope(model.ScopeNodesManage), s.handleListNodes)
+	authGroup.POST("/nodes", s.requireScope(model.ScopeNodesManage), s.handleCreateNode)
+	authGroup.PATCH("/nodes/:id", s.requireScope(model.ScopeNodesManage), s.handlePatchNode)
+	authGroup.GET("/nodes/:id/metrics", s.requireScope(model.ScopeNodesManage), s.handleNodeMetrics)
+
+	// Worker nodes only; not part of the public API or MCP.
+	node := r.Group("/internal/v1", s.nodeAuth())
+	node.POST("/heartbeat", s.handleNodeHeartbeat)
+	node.POST("/jobs/claim", s.handleNodeClaim)
+	node.POST("/jobs/:id/progress", s.handleNodeProgress)
+	node.POST("/jobs/:id/complete", s.handleNodeComplete)
+	node.POST("/jobs/:id/fail", s.handleNodeFail)
+	node.GET("/blobs/:sha", s.handleNodeBlob)
+	node.POST("/drives/:id/refresh-token", s.handleNodeRefreshToken)
 
 	r.NoRoute(s.handleNoRoute)
 	return r
@@ -171,7 +191,7 @@ func requestLogMiddleware() gin.HandlerFunc {
 		started := time.Now()
 		c.Next()
 		requestPath := c.Request.URL.Path
-		if requestPath != "/mcp" && !strings.HasPrefix(requestPath, "/api/") {
+		if requestPath != "/mcp" && !strings.HasPrefix(requestPath, "/api/") && !strings.HasPrefix(requestPath, "/internal/") {
 			return
 		}
 		size := c.Writer.Size()
@@ -272,7 +292,7 @@ func principal(c *gin.Context) auth.Principal {
 // handleNoRoute serves the SPA when web/dist exists and JSON 404 otherwise.
 func (s *Server) handleNoRoute(c *gin.Context) {
 	requestPath := c.Request.URL.Path
-	if requestPath == "/healthz" || requestPath == "/mcp" ||
+	if requestPath == "/healthz" || requestPath == "/mcp" || strings.HasPrefix(requestPath, "/internal/") ||
 		strings.HasPrefix(requestPath, "/api/") || requestPath == "/api" {
 		respondError(c, apperr.NotFound("接口不存在"))
 		return

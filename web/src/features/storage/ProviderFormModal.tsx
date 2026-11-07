@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormInstance } from 'antd';
 import { Alert, App, Checkbox, Form, Input, InputNumber, Modal, Select, Switch } from 'antd';
-import type { ProviderKind, ProviderRole, StorageProvider } from '../../shared/api/types';
-import { PROVIDER_ROLE_LABELS } from '../../shared/lib/labels';
+import type { Drive, OnPathChange, ProviderKind } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import {
   PROVIDER_FIELD_SPECS,
@@ -18,19 +17,19 @@ import {
   type FieldSpec,
   type ProviderFormValues,
 } from './providerFields';
-import { useCreateProvider, useUpdateProvider } from './queries';
+import { useCreateDrive, useUpdateDrive } from './queries';
 
 interface ProviderFormModalProps {
   open: boolean;
-  provider?: StorageProvider;
+  drive?: Drive;
   onClose: () => void;
-  onSaved?: (provider: StorageProvider) => void;
+  onSaved?: (drive: Drive) => void;
 }
 
-const ROLE_OPTIONS = (Object.keys(PROVIDER_ROLE_LABELS) as ProviderRole[]).map((role) => ({
-  value: role,
-  label: PROVIDER_ROLE_LABELS[role],
-}));
+const ON_PATH_CHANGE_OPTIONS: { value: OnPathChange; label: string }[] = [
+  { value: 'move', label: '随之移动（远端文件跟着改名/改目录）' },
+  { value: 'keep', label: '保持原位（只更新期望路径，不移动远端文件）' },
+];
 
 function fieldName(field: FieldSpec): (string | number)[] {
   return ['config', field.key];
@@ -47,33 +46,35 @@ function applyFieldErrors(form: FormInstance<ProviderFormValues>, errors: Record
   );
 }
 
-export function ProviderFormModal({ open, provider, onClose, onSaved }: ProviderFormModalProps) {
+export function ProviderFormModal({ open, drive, onClose, onSaved }: ProviderFormModalProps) {
   const [form] = Form.useForm<ProviderFormValues>();
   const { message } = App.useApp();
-  const create = useCreateProvider();
-  const update = useUpdateProvider();
-  const editing = provider !== undefined;
+  const create = useCreateDrive();
+  const update = useUpdateDrive();
+  const editing = drive !== undefined;
   const [submitting, setSubmitting] = useState(false);
 
   const watchedKind = Form.useWatch('kind', form) as ProviderKind | undefined;
-  const kind = watchedKind ?? provider?.kind ?? 'local';
+  const kind = watchedKind ?? drive?.kind ?? 'local';
   const spec = PROVIDER_FIELD_SPECS[kind];
   const clearSecret = Boolean(Form.useWatch('clearSecret', form));
   const watchedConfig = Form.useWatch('config', form) as Record<string, string> | undefined;
-  const config = watchedConfig ?? (provider?.kind === kind ? initialProviderValues(provider).config : configDefaultsForKind(kind));
+  const config = watchedConfig ?? (drive?.kind === kind ? initialProviderValues(drive).config : configDefaultsForKind(kind));
   const oneDriveMode = oneDriveAuthMode(config);
+  const canMove = kind !== 'lanzou' && kind !== '123pan';
 
   useEffect(() => {
     if (!open) return;
     form.resetFields();
-    form.setFieldsValue(initialProviderValues(provider ?? null));
-  }, [open, provider, form]);
+    form.setFieldsValue(initialProviderValues(drive ?? null));
+  }, [open, drive, form]);
 
   const handleKindChange = (nextKind: ProviderKind) => {
     form.setFieldsValue({
       config: configDefaultsForKind(nextKind),
       secret: {},
       clearSecret: false,
+      on_path_change: nextKind === 'lanzou' || nextKind === '123pan' ? 'keep' : 'move',
     });
   };
 
@@ -83,10 +84,11 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
       ...values,
       config: values.config ?? {},
       secret: values.secret ?? {},
+      allowed_exts: values.allowed_exts ?? [],
       clearSecret: Boolean(values.clearSecret),
     };
     const validation = validateProviderForm(normalized, editing ? 'edit' : 'create');
-    if (provider?.kind === 'onedrive' && oneDriveAuthMode(provider.config) !== oneDriveAuthMode(normalized.config) && !normalized.secret.refresh_token?.trim()) {
+    if (drive?.kind === 'onedrive' && oneDriveAuthMode(drive.config) !== oneDriveAuthMode(normalized.config) && !normalized.secret.refresh_token?.trim()) {
       validation.errors['secret.refresh_token'] = '切换授权方式时，请填写对应的刷新令牌';
       validation.valid = false;
     }
@@ -98,13 +100,13 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
 
     setSubmitting(true);
     try {
-      if (provider) {
-        const saved = await update.mutateAsync({ id: provider.id, patch: buildPatchPayload(normalized) });
-        message.success('存储端点已保存');
+      if (drive) {
+        const saved = await update.mutateAsync({ id: drive.id, patch: buildPatchPayload(normalized) });
+        message.success('网盘已保存');
         onSaved?.(saved);
       } else {
         const saved = await create.mutateAsync(buildCreatePayload(normalized));
-        message.success('存储端点已创建');
+        message.success('网盘已创建');
         onSaved?.(saved);
       }
       onClose();
@@ -117,7 +119,7 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
 
   return (
     <Modal
-      title={provider ? `编辑存储端点：${provider.name}` : '新建存储端点'}
+      title={drive ? `编辑网盘：${drive.name}` : '新建网盘'}
       open={open}
       onOk={() => void handleOk()}
       onCancel={onClose}
@@ -136,7 +138,7 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
             name="name"
             label="名称"
             rules={[
-              { required: true, whitespace: true, message: '请输入端点名称' },
+              { required: true, whitespace: true, message: '请输入网盘名称' },
               { max: 128, message: '名称不能超过 128 个字符' },
             ]}
           >
@@ -149,17 +151,27 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
               onChange={(nextKind: ProviderKind) => handleKindChange(nextKind)}
             />
           </Form.Item>
-          <Form.Item name="role" label="角色" rules={[{ required: true, message: '请选择角色' }]}>
-            <Select options={ROLE_OPTIONS} />
-          </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />
           </Form.Item>
-          <Form.Item name="priority" label="优先级">
+          <Form.Item name="read_order" label="读取顺序" tooltip="本机原件缺失时，按此顺序从各网盘拉取，数字越小越优先">
             <InputNumber min={0} max={1000} precision={0} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="weight" label="权重">
-            <InputNumber min={1} max={1000} precision={0} style={{ width: '100%' }} />
+          <Form.Item
+            name="root_path"
+            label={kind === 'lanzou' ? '根目录（文件夹 ID）' : '根目录'}
+            tooltip={kind === 'lanzou' ? '蓝奏云不支持子目录，填写文件夹 ID，-1 为根目录' : '本系统在该网盘中使用的根目录，规则中的路径模板都相对于它'}
+          >
+            <Input maxLength={512} placeholder={kind === 'lanzou' ? '-1' : '留空为网盘根目录，例如 paper-collect'} />
+          </Form.Item>
+          <Form.Item name="max_file_mib" label="单文件上限（MiB）" tooltip="0 表示不限；超出上限的文件对该网盘记为跳过，不算失败">
+            <InputNumber min={0} max={1048576} precision={0} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="allowed_exts" label="允许的扩展名" tooltip="留空表示不限；例如 .pdf">
+            <Select mode="tags" open={false} suffixIcon={null} placeholder="留空表示不限" tokenSeparators={[',', ' ', '；', ';']} />
+          </Form.Item>
+          <Form.Item name="on_path_change" label="路径变化时" tooltip="改名或编目变化导致期望路径改变时的处理方式">
+            <Select options={ON_PATH_CHANGE_OPTIONS.filter((option) => canMove || option.value === 'keep')} />
           </Form.Item>
         </div>
 
@@ -215,13 +227,13 @@ export function ProviderFormModal({ open, provider, onClose, onSaved }: Provider
                   <Input.Password
                     autoComplete="new-password"
                     disabled={clearSecret}
-                    placeholder={editing && provider.secret_configured ? '留空保留' : field.required ? `请输入${field.label}` : '可选'}
+                    placeholder={editing && drive.secret_configured ? '留空保留' : field.required ? `请输入${field.label}` : '可选'}
                   />
                 </Form.Item>
               ))}
             </div>
-            {kind === 'onedrive' && editing && provider.secret_configured ? <p className="text-xs text-slate-500">更换凭据时，请同时重新填写仍需使用的应用密钥和共享文件夹链接；留空的旧凭据不会保留。</p> : null}
-            {editing && provider.secret_configured ? (
+            {kind === 'onedrive' && editing && drive.secret_configured ? <p className="text-xs text-slate-500">更换凭据时，请同时重新填写仍需使用的应用密钥和共享文件夹链接；留空的旧凭据不会保留。</p> : null}
+            {editing && drive.secret_configured ? (
               <Form.Item name="clearSecret" valuePropName="checked">
                 <Checkbox>清空已保存凭据</Checkbox>
               </Form.Item>

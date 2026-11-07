@@ -110,14 +110,11 @@ func (a *localAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 	}
 	tmpName := tmp.Name()
 	closed := false
-	committed := false
 	defer func() {
 		if !closed {
 			_ = tmp.Close()
 		}
-		if !committed {
-			_ = os.Remove(tmpName)
-		}
+		_ = os.Remove(tmpName)
 	}()
 
 	hasher := sha256.New()
@@ -144,16 +141,126 @@ func (a *localAdapter) Put(ctx context.Context, obj Object) (Stored, error) {
 	if err := os.Chmod(tmpName, 0o640); err != nil {
 		return Stored{}, newCloudError(ClassUnavailable, "local_chmod_failed", true)
 	}
-	if err := os.Rename(tmpName, dest); err != nil {
-		return Stored{}, newCloudError(ClassUnavailable, "local_commit_failed", true)
-	}
-	committed = true
-
 	verification := "size"
 	if expectedSHA != "" {
 		verification = "sha256"
 	}
+	// A hard link commits without replacing whatever already sits at dest.
+	if err := os.Link(tmpName, dest); err != nil {
+		if !errors.Is(err, fs.ErrExist) {
+			return Stored{}, newCloudError(ClassUnavailable, "local_commit_failed", true)
+		}
+		if cerr := a.adoptExisting(dest, written, hex.EncodeToString(hasher.Sum(nil))); cerr != nil {
+			return Stored{}, cerr
+		}
+		verification = "sha256"
+	}
 	return Stored{RemoteID: obj.Key, Size: written, Verification: verification}, nil
+}
+
+// adoptExisting accepts a file already at dest only when it holds the same bytes.
+func (a *localAdapter) adoptExisting(dest string, size int64, sum string) *CloudError {
+	if cerr := a.ensureWithin(dest); cerr != nil {
+		return cerr
+	}
+	f, err := os.Open(dest)
+	if err != nil {
+		return newCloudError(ClassUnavailable, "local_existing_unreadable", true)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		return newCloudError(ClassConflict, "local_path_taken", false)
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return newCloudError(ClassUnavailable, "local_existing_unreadable", true)
+	}
+	if hex.EncodeToString(hasher.Sum(nil)) != sum {
+		return newCloudError(ClassConflict, "local_path_taken", false)
+	}
+	return nil
+}
+
+// Move renames an object inside the root without replacing another file.
+func (a *localAdapter) Move(ctx context.Context, remoteID, key string) (Stored, error) {
+	if err := ctx.Err(); err != nil {
+		return Stored{}, transportError(ctx, err, "local_move")
+	}
+	from, cerr := validateObjectKey(remoteID)
+	if cerr != nil {
+		return Stored{}, cerr
+	}
+	to, cerr := validateObjectKey(key)
+	if cerr != nil {
+		return Stored{}, cerr
+	}
+	src, dest := a.destination(from), a.destination(to)
+	if cerr := a.ensureWithin(src); cerr != nil {
+		return Stored{}, cerr
+	}
+	info, err := os.Stat(src)
+	if err != nil || !info.Mode().IsRegular() {
+		return Stored{}, newCloudError(ClassFileMissing, "local_object_missing", false)
+	}
+	if src == dest {
+		return Stored{RemoteID: key, Size: info.Size(), Verification: "size"}, nil
+	}
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return Stored{}, newCloudError(ClassUnavailable, "local_mkdir_failed", true)
+	}
+	if cerr := a.ensureWithin(dir); cerr != nil {
+		return Stored{}, cerr
+	}
+	if err := os.Link(src, dest); err != nil {
+		if !errors.Is(err, fs.ErrExist) {
+			return Stored{}, newCloudError(ClassUnavailable, "local_move_failed", true)
+		}
+		// An earlier attempt may have linked but not yet removed the source.
+		existing, statErr := os.Stat(dest)
+		if statErr != nil || !os.SameFile(info, existing) {
+			return Stored{}, newCloudError(ClassConflict, "local_path_taken", false)
+		}
+	}
+	if err := os.Remove(src); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Stored{}, newCloudError(ClassUnavailable, "local_move_cleanup_failed", true)
+	}
+	a.pruneEmptyDirs(filepath.Dir(src))
+	return Stored{RemoteID: key, Size: info.Size(), Verification: "size"}, nil
+}
+
+// Delete removes an object and any directories it leaves empty.
+func (a *localAdapter) Delete(ctx context.Context, remoteID string) error {
+	if err := ctx.Err(); err != nil {
+		return transportError(ctx, err, "local_delete")
+	}
+	segments, cerr := validateObjectKey(remoteID)
+	if cerr != nil {
+		return cerr
+	}
+	dest := a.destination(segments)
+	if cerr := a.ensureWithin(dest); cerr != nil {
+		if cerr.Class == ClassFileMissing {
+			return nil
+		}
+		return cerr
+	}
+	if err := os.Remove(dest); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return newCloudError(ClassUnavailable, "local_delete_failed", true)
+	}
+	a.pruneEmptyDirs(filepath.Dir(dest))
+	return nil
+}
+
+// pruneEmptyDirs removes empty directories from dir up to, not including, the root.
+func (a *localAdapter) pruneEmptyDirs(dir string) {
+	for dir != a.root && strings.HasPrefix(dir, a.root+string(filepath.Separator)) {
+		if os.Remove(dir) != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 func (a *localAdapter) Open(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -218,5 +325,5 @@ func (a *localAdapter) Health(ctx context.Context) error {
 }
 
 func (a *localAdapter) Capabilities() Capabilities {
-	return Capabilities{Upload: true, Download: true, Share: false}
+	return Capabilities{Upload: true, Download: true, Share: false, Folders: true, Move: true, Delete: true}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -15,8 +16,19 @@ import (
 	"unicode/utf8"
 )
 
+// Roles of a process.
+const (
+	RoleMaster = "master"
+	RoleWorker = "worker"
+)
+
+// RemoteKinds are the job kinds a worker node can execute.
+var RemoteKinds = []string{"replicate", "analyze", "index"}
+
 // Config is the validated runtime configuration.
 type Config struct {
+	Role           string // master | worker
+	NodeName       string // display name of the master's own node
 	Addr           string
 	DataDir        string
 	DatabaseDriver string // sqlite | postgres
@@ -29,12 +41,26 @@ type Config struct {
 	MasterKey      []byte // 32 bytes, decoded from base64
 	PullCacheTTL   time.Duration
 	Worker         WorkerConfig
+	Node           NodeConfig // ROLE=worker only
+}
+
+// NodeConfig configures a worker node. A worker has no database, no
+// JWT_SECRET and no MASTER_KEY; credentials arrive with each job.
+type NodeConfig struct {
+	MasterURL string
+	Token     string
+	CacheDir  string
+	CacheMax  int64
+	Slots     map[string]int
+	// RapidOCRURL replaces a self-hosted OCR address the node cannot reach.
+	RapidOCRURL string
 }
 
 // WorkerConfig controls the embedded job runners. Analyze and index tasks are
 // isolated by material; ingest and replicate have their own bounded pools.
 type WorkerConfig struct {
-	InstanceID           string
+	// Kinds lists the remote-capable kinds the master also runs itself.
+	Kinds                []string
 	IngestConcurrency    int
 	ReplicateConcurrency int
 	AnalyzeConcurrency   int
@@ -51,7 +77,18 @@ func Load(getenv func(string) string) (Config, error) {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
-	cfg := Config{}
+	cfg := Config{Role: strings.ToLower(valueOr(getenv("ROLE"), RoleMaster))}
+	switch cfg.Role {
+	case RoleWorker:
+		return loadWorker(getenv)
+	case RoleMaster:
+	default:
+		return Config{}, errors.New("ROLE 只能是 master 或 worker")
+	}
+	cfg.NodeName = valueOr(getenv("NODE_NAME"), "主端")
+	if utf8.RuneCountInString(cfg.NodeName) > 64 {
+		add("NODE_NAME 不能超过 64 个字符")
+	}
 
 	cfg.Addr = valueOr(getenv("ADDR"), ":8080")
 	if _, _, err := net.SplitHostPort(cfg.Addr); err != nil {
@@ -121,7 +158,7 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	cfg.Worker = WorkerConfig{
-		InstanceID:           strings.TrimSpace(getenv("WORKER_INSTANCE_ID")),
+		Kinds:                masterKinds(getenv("WORKER_KINDS"), &problems),
 		IngestConcurrency:    positiveInt(getenv, "WORKER_INGEST_CONCURRENCY", 1, &problems),
 		ReplicateConcurrency: positiveInt(getenv, "WORKER_REPLICATE_CONCURRENCY", 2, &problems),
 		AnalyzeConcurrency:   positiveInt(getenv, "WORKER_ANALYZE_CONCURRENCY", 2, &problems),
@@ -133,8 +170,9 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.Worker.HeartbeatInterval >= cfg.Worker.LeaseDuration {
 		add("WORKER_HEARTBEAT_INTERVAL 必须小于 WORKER_LEASE_DURATION")
 	}
-	if cfg.DatabaseDriver == "sqlite" && strings.TrimSpace(cfg.Worker.InstanceID) != "" {
-		add("SQLite 不支持多实例，WORKER_INSTANCE_ID 仅用于 PostgreSQL")
+	// Worker nodes renew their leases on a fixed 10 second heartbeat.
+	if cfg.Worker.LeaseDuration < 30*time.Second {
+		add("WORKER_LEASE_DURATION 不能小于 30s，否则从端的任务会在心跳之间失去租约")
 	}
 
 	if len(problems) > 0 {
@@ -145,6 +183,112 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.Join(errs...)
 	}
 	return cfg, nil
+}
+
+// masterKinds parses WORKER_KINDS. Empty means all remote kinds; "none" means
+// the master leaves them to worker nodes.
+func masterKinds(raw string, problems *[]string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return append([]string{}, RemoteKinds...)
+	}
+	if raw == "none" {
+		return []string{}
+	}
+	out := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		kind := strings.TrimSpace(part)
+		if !isRemoteKind(kind) {
+			*problems = append(*problems, "WORKER_KINDS 只能包含 replicate、analyze、index，或为 none")
+			return append([]string{}, RemoteKinds...)
+		}
+		out = append(out, kind)
+	}
+	return out
+}
+
+func isRemoteKind(kind string) bool {
+	for _, k := range RemoteKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func loadWorker(getenv func(string) string) (Config, error) {
+	var problems []string
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	cfg := Config{Role: RoleWorker}
+	node := NodeConfig{Token: strings.TrimSpace(getenv("NODE_TOKEN"))}
+	raw := strings.TrimRight(strings.TrimSpace(getenv("MASTER_URL")), "/")
+	u, err := url.Parse(raw)
+	switch {
+	case raw == "" || err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
+		add("ROLE=worker 时 MASTER_URL 必须是 http(s) 地址")
+	case u.Scheme == "http" && !isLoopback(u.Hostname()):
+		// Jobs carry decrypted credentials; only loopback may skip TLS.
+		add("MASTER_URL 指向非本机地址时必须使用 https")
+	}
+	node.MasterURL = raw
+	if !strings.HasPrefix(node.Token, "nd-") {
+		add("ROLE=worker 时必须设置 NODE_TOKEN（在主端「节点」页面创建，值已隐藏）")
+	}
+	cacheDir, err := filepath.Abs(valueOr(getenv("CACHE_DIR"), "./cache"))
+	if err != nil {
+		add("CACHE_DIR 无法解析为绝对路径")
+	}
+	node.CacheDir = cacheDir
+	node.CacheMax = 20 << 30
+	if v := strings.TrimSpace(getenv("CACHE_MAX_BYTES")); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			add("CACHE_MAX_BYTES 必须是非负整数（字节）")
+		} else {
+			node.CacheMax = n
+		}
+	}
+	if v := strings.TrimRight(strings.TrimSpace(getenv("RAPIDOCR_URL")), "/"); v != "" {
+		if u, err := url.Parse(v); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			add("RAPIDOCR_URL 必须是 http(s) 地址")
+		}
+		node.RapidOCRURL = v
+	}
+	node.Slots = map[string]int{"replicate": 2, "analyze": 1, "index": 1}
+	if v := strings.TrimSpace(getenv("WORKER_SLOTS")); v != "" {
+		node.Slots = map[string]int{}
+		for _, part := range strings.Split(v, ",") {
+			kind, count, ok := strings.Cut(strings.TrimSpace(part), "=")
+			n, err := strconv.Atoi(strings.TrimSpace(count))
+			if !ok || err != nil || n < 0 || n > 64 || !isRemoteKind(strings.TrimSpace(kind)) {
+				add("WORKER_SLOTS 格式为 replicate=2,analyze=1,index=1，数量 0 到 64")
+				break
+			}
+			if n > 0 {
+				node.Slots[strings.TrimSpace(kind)] = n
+			}
+		}
+		if len(node.Slots) == 0 {
+			add("WORKER_SLOTS 至少需要一种任务类型")
+		}
+	}
+	cfg.Node = node
+	if len(problems) > 0 {
+		errs := make([]error, 0, len(problems))
+		for _, p := range problems {
+			errs = append(errs, errors.New(p))
+		}
+		return Config{}, errors.Join(errs...)
+	}
+	return cfg, nil
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func positiveInt(getenv func(string) string, name string, fallback int, problems *[]string) int {

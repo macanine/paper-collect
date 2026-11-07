@@ -1,6 +1,6 @@
 # 数据结构、存储与备份
 
-版本 1.5.0 · 2026-11-03。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
+版本 1.6.0 · 2026-11-05。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
 
 ## 1. 数据库与运行形态
 
@@ -8,8 +8,8 @@
 - 本机开发默认在启动时执行 GORM `AutoMigrate` 增量建表/加列；Compose 由一次性 `migrate` 服务执行，应用设置 `DB_AUTO_MIGRATE=false`。**没有版本化迁移记录**，`AutoMigrate` 也不会删除或重命名已有表/列/索引。升级前必须先备份。
 - SQLite 使用 pragma：`foreign_keys(1)`、`busy_timeout(5000)`、`journal_mode(WAL)`、`_txlock=immediate`；连接池固定 1 个连接，避免多 writer 锁争用。PostgreSQL 默认 10 个打开连接、5 个空闲连接、30 分钟连接寿命。
 - GORM 日志级别为 silent，避免 SQL 参数中的密文/哈希进入进程日志。
-- 任务使用 `lease_owner`、`lease_until`、`heartbeat_at` 和 `job_locks`。PostgreSQL 多实例通过 `FOR UPDATE SKIP LOCKED` 领取，SQLite 通过 `BEGIN IMMEDIATE` 条件更新领取；SQLite 仍只允许单实例。
-- 数据库保存元数据、任务/副本状态、凭据密文和分析/索引结果；原件和本地副本在文件系统。两者不是同一事务，必须一起备份。
+- 任务使用 `lease_owner`、`lease_until`、`heartbeat_at` 和 `job_locks`。PostgreSQL 通过 `FOR UPDATE SKIP LOCKED` 领取，SQLite 通过 `BEGIN IMMEDIATE` 条件更新领取；所有领取都在主端完成，从端通过 HTTP 请求主端。
+- 数据库保存元数据、任务/副本状态、凭据密文和分析/索引结果；原件和 `local` 网盘副本在文件系统。两者不是同一事务，必须一起备份。
 
 ## 2. 表清单
 
@@ -23,7 +23,7 @@
 | `audits` | `Audit` | 审计元数据；`user_id`、`action`、`target_id`、`created_at`；不含正文、令牌、Cookie、密钥、分享链接 |
 | `blobs` | `Blob` | 不可变内容；`sha256` 唯一；大小/媒体类型/原始文件名；一份内容对应一个 Blob |
 | `packs` | `Pack` | 套卷（浏览单位）；`doc_type`/`grade`/`cohort`/`region` 索引；`title_locked`、`catalog_locked`、`deleted_at`（回收站）；编目字段与 JSON 列表 |
-| `materials` | `Material` | 单个文件（一份 SHA-256）；`pack_id`、`part`、`stage`、`status` 索引；`sha256` 唯一；`suggested_pack_id`、`review_reasons_json`；`deleted_at` 随套卷进回收站 |
+| `materials` | `Material` | 单个文件（一份 SHA-256）；`pack_id`、`part`、`stage`、`status`、`sync_status` 索引；`sync_planned_at`；`sha256` 唯一；`suggested_pack_id`、`review_reasons_json`；`deleted_at` 随套卷进回收站 |
 | `material_sources` | `MaterialSource` | 每次到达记录；`material_id`、`upload_id` 索引；`path`、`duplicate`、`user_id`；同一内容重复上传只追加此行 |
 | `pack_subjects` | `PackSubject` | 套卷-学科连接；主键 `(pack_id, code)`；`code` 索引；用于列表与搜题筛选 |
 | `collections` | `Collection` | 专题；`title`/`description`；只收纳套卷，无父子层级 |
@@ -32,9 +32,10 @@
 | `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status`（pending/received/existing） |
 | `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
 | `job_locks` | `JobLock` | 同资料 analyze/index/group 互斥；资源键、任务 ID、租约到期时间 |
-| `storage_providers` | `StorageProvider` | 存储端点；`enabled`、`priority` 索引；kind/role/weight/config JSON/加密 secret；kind 不可改 |
-| `replicas` | `Replica` | Blob×Provider 副本；唯一索引 `(blob_id, provider_id)`；`status` 索引；verification、分享字段、远端标识、`plan_mode` |
-| `storage_policies` | `Policy` | 单例 `id=1`；mode 与 `minimum_replicas` |
+| `storage_drives` | `Drive` | 网盘；`enabled`、`read_order` 索引；kind、`root_path`、`max_file_bytes`、`allowed_exts_json`、`on_path_change`、config JSON、加密 secret；kind 不可改 |
+| `sync_rules` | `Rule` | 有序同步规则；`position`、`enabled` 索引；`is_default` 标记兜底规则；`conditions_json` |
+| `sync_rule_targets` | `RuleTarget` | 规则目标；唯一索引 `(rule_id, drive_id)`；`path_template`、`share`、`required`、`position` |
+| `replicas` | `Replica` | Blob×Drive 副本；唯一索引 `(blob_id, drive_id)`；`status`、`rule_id` 索引；`desired_path`/`remote_path`/`remote_id`、`skip_reason`、`share`/`required`、verification、分享字段 |
 | `ai_providers` | `AIProvider` | OpenAI 兼容端点；`enabled`、`priority` 索引；加密 API Key、`models_json`、默认/视觉模型 |
 | `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型字段（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 字段默认 `PP-OCRv5`，但自建服务固定使用 RapidOCR 3.10 默认 PP-OCRv6 small），启停与优先级 |
 | `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限；旧 MinerU 字段仅用于兼容迁移 |
@@ -59,26 +60,29 @@ Material ──< MaterialAnalysis
 Material ──< MaterialText
 Material ──< QuestionBlock ──< QuestionTerm
 Material ──< MaterialIndexState
-Blob ──< Replica >── StorageProvider
+Blob ──< Replica >── Drive
+Rule ──< RuleTarget >── Drive
 Job ──< Upload / Replica / Material（按 kind 关联）
 ```
 
 - `Material` 与 `Blob` 一对一：`materials.sha256` 唯一，同一内容只建一份文件；再次上传只写 `MaterialSource`，`duplicate=true`。
 - `Material` 属于唯一 `Pack`；套卷持有编目字段，文件继承套卷的学科/年级/届别等，只有 `part`、`answer_start_page` 和 `position` 是文件级字段。
-- `Replica` 与 `Material` 不直接关联，而是挂在 Blob 上；资料 `status` 按 Blob 的副本事实刷新。
+- `Replica` 与 `Material` 不直接关联，而是挂在 Blob 上；资料 `sync_status` 按 Blob 的副本事实刷新。`Replica.rule_id` 记录当前需要它的规则，规则外副本为空。
 - `CollectionItem` 是套卷与专题的多对多（带 position）；一个套卷可在多个专题，专题不嵌套。
 - `MaterialAnalysis`、`MaterialText`、`MaterialIndexState` 都是每文件最多一行；重跑覆盖自身。
 - Job 的关联是弱引用：ingest 带 `upload_id`，replicate 带 `replica_id`，analyze/index/group 带 `material_id`；没有数据库外键。
 
 ### 2.2 状态与派生字段
 
-- `Material.status` 由 Blob 的副本事实刷新：ready 数 ≥ `minimum_replicas` 为 `archived`；0 ready、0 pending/uploading、至少 1 failed 为 `degraded`；其他不足情况为 `pending_storage`。
+- `Material.status` 只反映原件：本机 CAS 中存在为 `archived`，缺失为 `missing`。
+- `Material.sync_status` 反映网盘同步：未生成计划前为 `waiting_catalog`；之后忽略 skipped/orphaned 副本，没有其他副本为 `not_required`，必需目标全部 ready 为 `synced`，有副本 pending/uploading/moving 为 `syncing`，必需目标失败、必需目标分享失败或已写入副本路径偏离为 `attention`。`sync_planned_at` 记录最近一次生成计划的时间。
 - `Material.stage` 是人工整理阶段：processing（识别中）、review（待整理）、ready（已入库）、failed（识别失败）；`review_reasons_json` 记录 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual，`suggested_pack_id` 指向待确认的配套套卷。套卷 stage 取成员中最靠后的阶段。
 - `Material.part` 是文件在套卷中的部件：questions、answers、full、teacher、answer_sheet、listening、main、other；`answer_start_page` 记录同一文件内答案起始页。
-- `Material.title` 与 `file_name` 由「套卷标题 + part 中文标签」派生；套卷 `title_locked=true` 时固定不变，人工 PATCH 设置 `catalog_locked=true` 阻止自动编目覆盖。云盘远端对象保留上传时名字。
+- `Material.title` 与 `file_name` 由「套卷标题 + part 中文标签」派生；套卷 `title_locked=true` 时固定不变，人工 PATCH 设置 `catalog_locked=true` 阻止自动编目覆盖。改名后重新计算副本 `desired_path`，`on_path_change=move` 的网盘随之移动。
 - `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received（或 existing 秒传）→ 归档后写入 `results`。
 - `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；`group` 无匹配时记为 succeeded 并在进度/日志说明原因，手动重新分析可重新入队；启动时把遗留 running 改回 pending。
-- `Replica.status`：pending → uploading → ready/failed；failed 可重试回 pending；分享状态独立为 pending/ready/unsupported/failed。
+- `Replica.status`：pending → uploading（首次上传）或 moving（已写入、路径变化）→ ready/failed；skipped 表示网盘停用、超限或扩展名不允许；orphaned 表示不再被规则需要但远端文件仍在。分享状态独立为空/pending/ready/unsupported/failed。
+- `sync_rules` 只有一行 `is_default=true` 的兜底规则；空库启动时创建 ID 为 `default`、没有目标的「其他所有文件」。
 - `Pack.deleted_at` 非空即回收站；同一事务把成员 `materials.deleted_at` 置为非空。30 天后 `PurgeExpiredTrash` 彻底删除，`packs_purge` 只能处理回收站中的套卷。
 - `MaterialAnalysis.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
 - `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
@@ -101,18 +105,18 @@ DATA_DIR/
   tmp/fontconfig-cache/                 macOS 转换器使用的字体缓存
   previews/docx-v1/<sha前两位>/<sha>.pdf  DOCX 生成的 PDF 预览缓存
   analysis/<materialID>/document.md    识别用 Markdown（数据库存绝对路径）
-  providers/<providerID>/...           本地存储端点的副本（按对象 key 分层）
+  drives/<driveID>/...                 `local` 网盘的副本（按路径模板分层）
 ```
 
 Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL 中间结果；它不保存页面图片，也不属于业务 `DATA_DIR`。OCR 成功写入 `material_texts` 后，业务侧不再依赖这些中间文件。
 
-- `DATABASE_DSN` 若指向 `DATA_DIR` 外的 SQLite 文件或 PostgreSQL，数据库不在上述默认位置；CAS/临时文件/分析 Markdown/本地副本仍在 `DATA_DIR`。
+- `DATABASE_DSN` 若指向 `DATA_DIR` 外的 SQLite 文件或 PostgreSQL，数据库不在上述默认位置；CAS/临时文件/分析 Markdown/`local` 网盘副本仍在 `DATA_DIR`。
 - CAS 以内容 SHA-256 寻址；相同内容只存一份。`Publish` 用原子 rename 落盘，重复内容丢弃临时文件。
 - `tmp/material-pulls/<sha256>` 是按需拉取缓存，不是 CAS。写入前校验资料声明的大小和 SHA-256，过期后由读取或后续拉取机会性清理；保留期由 `PULL_CACHE_TTL` 控制，不参与资料归档或副本状态。
 - DOCX 预览是可重建的派生文件，原件最后一个资料引用删除时一并清理；转换异常退出时可能留下临时目录。预览和临时文件也可能包含资料正文，备份和权限应与原件一致。
 - 原始上传在 `tmp/` 完成后才发布到 CAS；失败不会标记 entry received，但极端情况下可能留下未被引用的 CAS 文件。
 - `analysis/<materialID>/document.md` 每次分析前会删除并重建；数据库中的 `markdown_path` 是绝对路径，移动数据目录后旧分析摘要可能读不到，直到重新识别。
-- 本地存储端点根目录固定为 `DATA_DIR/providers/<providerID>`，API 不能指定任意路径。
+- `local` 网盘根目录固定为 `DATA_DIR/drives/<driveID>`，API 不能指定任意路径；系统不再默认创建本地网盘。
 - 数据库还保存凭据密文（云盘、AI、OCR）和哈希（密码、refresh、API Key secret）；`MASTER_KEY` 不存入数据库。
 
 ## 4. 备份与恢复
@@ -136,13 +140,13 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 
 ### 4.3 一致性注意
 
-- 数据库与 CAS/远端对象不是同一事务：普通文件和 ZIP 成员先写 CAS，再在数据库事务中发布资料；进程在两步之间崩溃可能留下孤儿 CAS。复制任务先远端上传、后写副本状态，也可能出现“远端已存在但数据库未记录”的情况。
+- 数据库与 CAS/远端对象不是同一事务：普通文件和 ZIP 成员先写 CAS，再在数据库事务中发布资料；进程在两步之间崩溃可能留下孤儿 CAS。复制任务先远端上传、后写副本状态，也可能出现“远端已存在但数据库未记录”的情况；适配器上传不覆盖，重试时会接管同一路径下内容相同的对象。
 - 备份前停止所有写入比“热拷贝”更可靠。只恢复数据库而不恢复 CAS，会出现资料元数据在但原件缺失，下载只能尝试云副本；只恢复 CAS 而不恢复数据库，则原件无法被索引/关联。
 - 恢复后 worker 会处理 pending 任务和启动补建索引；在确认数据完整前，建议先禁用外部端点或隔离网络。
 
 ## 5. 结构演进与兼容
 
-- 默认使用 `db.Migrate` 在启动点调用 `AutoMigrate(model.Models()...)`；Compose 的 `cmd/migrate` 统一执行 schema 和可选 SQLite 导入。测试覆盖空库建表、重复迁移和账号/存储设置保留。
+- 默认使用 `db.Migrate` 在启动点调用 `AutoMigrate(model.Models()...)`；Compose 的 `cmd/migrate` 统一执行 schema 和可选 SQLite 导入。测试覆盖空库建表与重复迁移幂等。按项目约定，模型重构不兼容旧库：旧库中的 `storage_providers`、`storage_policies` 等表和旧列不会被迁移或清理，旧副本也不会转换为新模型，不保证旧库可以直接升级。
 - 新增字段/表必须同时更新 `internal/model`、[API.md](API.md) 和前端 `shared/api/types.ts`（如对外暴露）。
 - 已移除功能（例如上传前 AI 预检）的旧表/旧列不会被 `AutoMigrate` 删除；新库不会创建这些旧结构，但旧库升级后可能残留。需要清理时先备份并单独评估。
 - 跨 SQLite/PostgreSQL 的 SQL 约束：不使用数据库专用类型/函数；JSON 存文本；`LIKE` 使用 `ESCAPE '!'`；分页/排序由 ORM 生成；唯一性由显式索引保证。
@@ -166,9 +170,9 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 1. **让升级和恢复可控**：先以现有库为基线引入版本化迁移和恢复演练；清查孤儿数据后再考虑给关键关系增加外键（需先处理空字符串/NULL）。
 2. **控制数据增长**：为过期任务/审计/解析缓存制定保留期；清理前排除运行中任务和仍被引用的 CAS；不要删除正在使用的 `material_texts`。
 3. **可观测性**：为任务失败、解析超时、副本失败和索引重建增加指标/日志采样；日志仍须脱敏。
-4. **多实例**：使用 PostgreSQL、唯一 `WORKER_INSTANCE_ID`、共享 `DATA_DIR`，并按实例数配置各任务并发；SQLite 不得多实例。租约过期的任务会被其他实例回收，旧实例的终态写入会被租约栅栏拒绝。
+4. **主从节点**：主端只有一个实例，SQLite 和 PostgreSQL 都可以带多个从端；从端没有数据库，也不共享 `DATA_DIR`，备份只需要覆盖主端。`nodes` 表保存节点令牌哈希和最新指标。
 
-默认本机开发仍使用 SQLite 单连接、单实例 worker。生产 Compose 使用 PostgreSQL 和两个应用实例；不需要额外引入消息队列或向量库。所有实例共享同一数据库与 `DATA_DIR`，任务由租约和资源锁协调。
+默认本机开发使用 SQLite 单连接。生产 Compose 使用 PostgreSQL 和一个主端；不需要额外引入消息队列或向量库。任务由租约和资源锁协调。
 
 ## 7. 恢复后检查清单
 
@@ -179,5 +183,5 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 - [ ] 任务列表没有异常的 running 状态；必要时等待启动恢复或手动重试 failed。
 - [ ] 如使用 AI：`/ai/settings`、`/ai/providers`、`/ocr/providers` 可读且密钥配置状态正确，OCR/模型测试成功（真实联网能力另行确认）。
 - [ ] 如使用索引：抽查题目索引和搜题结果；重建失败时旧索引是否仍可查询。
-- [ ] 如使用云盘：确认端点健康、副本 ready/失败状态与远端实际文件一致。
+- [ ] 如使用网盘：确认网盘健康、同步规则正确，副本 ready/失败/规则外状态与远端实际文件一致。
 - [ ] 备份文件和 `MASTER_KEY` 已分别妥善保存，恢复演练记录已更新。

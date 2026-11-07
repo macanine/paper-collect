@@ -323,7 +323,7 @@ func TestLanzouUploadDefaultReportsUploadedWithoutDownload(t *testing.T) {
 		}},
 	}
 	a := newLanzouTest(t, fake, map[string]string{}, "")
-	stored, err := a.Put(context.Background(), Object{Key: "ab/" + sha256Lz(data) + "/n.pdf", Name: "n.pdf", Path: src, Size: int64(len(data))})
+	stored, err := a.Put(context.Background(), Object{Key: "ab/" + sha256Lz(data) + "/n.pdf", Path: src, Size: int64(len(data))})
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestLanzouStrongVerifyReportsSHA256AndKeepsCDNCookieFree(t *testing.T) {
 
 	a := newLanzouTest(t, fake, map[string]string{"verify_remote_hash": "true"}, "")
 	stored, err := a.Put(context.Background(), Object{
-		Key: "ab/" + digest + "/paper.pdf", Name: "../evil/paper.pdf", Path: src, SHA256: digest, Size: int64(len(data)),
+		Key: "ab/" + digest + "/paper.pdf", Path: src, SHA256: digest, Size: int64(len(data)),
 	})
 	if err != nil {
 		t.Fatalf("Put: %v", err)
@@ -431,7 +431,7 @@ func TestLanzouStrongVerifyRejectsRemoteHashMismatchWithoutRetry(t *testing.T) {
 	}, lzStrongRoutes(t, fake, "fid", "share1", "1", remote)...)
 
 	a := newLanzouTest(t, fake, map[string]string{"verify_remote_hash": "true"}, "")
-	_, err := a.Put(context.Background(), Object{Key: "k/a.pdf", Name: "a.pdf", Path: src, SHA256: sha256Lz(local), Size: int64(len(local))})
+	_, err := a.Put(context.Background(), Object{Key: "k/a.pdf", Path: src, SHA256: sha256Lz(local), Size: int64(len(local))})
 	requireClass(t, err, ClassHashMismatch)
 	if fake.count(lzDownload) != 1 {
 		t.Fatalf("hash mismatch is deterministic and must not be retried; downloads = %d", fake.count(lzDownload))
@@ -633,7 +633,7 @@ func TestLanzouSizeOnlyVerificationDetectsTruncation(t *testing.T) {
 		}},
 	}, lzStrongRoutes(t, fake, "fid-s", "sh-s", "5", []byte("123"))...)
 	a := newLanzouTest(t, fake, map[string]string{"verify_remote_hash": "true"}, "")
-	_, err := a.Put(context.Background(), Object{Key: "k/s.pdf", Name: "s.pdf", Path: src, Size: int64(len(data))})
+	_, err := a.Put(context.Background(), Object{Key: "k/s.pdf", Path: src, Size: int64(len(data))})
 	requireClass(t, err, ClassSizeMismatch)
 }
 
@@ -647,7 +647,7 @@ func TestLanzouUploadSessionExpiredIsAuthAndNotRetried(t *testing.T) {
 		}},
 	}
 	a := newLanzouTest(t, fake, map[string]string{}, "")
-	_, err := a.Put(context.Background(), Object{Key: "k/x.pdf", Name: "x.pdf", Path: src, Size: 1})
+	_, err := a.Put(context.Background(), Object{Key: "k/x.pdf", Path: src, Size: 1})
 	requireClass(t, err, ClassAuth)
 	if fake.count(lzBase+"/html5up.php") != 1 {
 		t.Fatalf("zt=9 must not be retried")
@@ -661,7 +661,7 @@ func TestLanzouUploadSizeLimitRejectedBeforeNetwork(t *testing.T) {
 	fake := &lzFake{t: t}
 	a := newLanzouTest(t, fake, map[string]string{}, "")
 	a.maxUploadBytes = 10
-	_, err := a.Put(context.Background(), Object{Key: "k/big.pdf", Name: "big.pdf", Path: "/nonexistent", Size: 11})
+	_, err := a.Put(context.Background(), Object{Key: "k/big.pdf", Path: "/nonexistent", Size: 11})
 	requireClass(t, err, ClassUnsupported)
 	if len(fake.calls) != 0 {
 		t.Fatalf("size limit must fail before any request")

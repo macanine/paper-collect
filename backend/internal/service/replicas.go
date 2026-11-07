@@ -2,218 +2,17 @@ package service
 
 import (
 	"context"
-	crand "crypto/rand"
-	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
 	"os"
-	"path"
 	"sort"
-	"strings"
-	"time"
-	"unicode/utf8"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/storage"
 	"gorm.io/gorm"
 )
-
-// loadPolicy returns the singleton storage policy, falling back to the documented
-// default when the row is missing. A malformed stored policy is normalised rather
-// than making the whole service unusable.
-func (s *Service) loadPolicy(tx *gorm.DB) (model.Policy, error) {
-	var pol model.Policy
-	err := tx.Where("id = ?", 1).First(&pol).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return model.Policy{ID: 1, Mode: model.ModeMirrorAll, MinimumReplicas: 1}, nil
-	}
-	if err != nil {
-		return model.Policy{}, wrap("load policy", err)
-	}
-	if !isOneOf(pol.Mode, model.PolicyModes...) {
-		pol.Mode = model.ModeMirrorAll
-	}
-	if pol.MinimumReplicas < 1 {
-		pol.MinimumReplicas = 1
-	}
-	if pol.MinimumReplicas > maxMinimumReplicas {
-		pol.MinimumReplicas = maxMinimumReplicas
-	}
-	return pol, nil
-}
-
-// loadProviders returns enabled endpoints ordered by priority. Disabled endpoints
-// keep their historical replicas but never receive new work.
-func loadProviders(tx *gorm.DB) ([]model.StorageProvider, error) {
-	var providers []model.StorageProvider
-	err := tx.Where("enabled = ?", true).
-		Order("priority ASC").Order("id ASC").Find(&providers).Error
-	if err != nil {
-		return nil, wrap("load providers", err)
-	}
-	return providers, nil
-}
-
-func splitProviders(providers []model.StorageProvider) (primary, backup []model.StorageProvider) {
-	for _, p := range providers {
-		if p.Role == model.RolePrimary {
-			primary = append(primary, p)
-		} else {
-			backup = append(backup, p)
-		}
-	}
-	return primary, backup
-}
-
-// planBlob freezes the target endpoints of one blob into Replica rows.
-//
-//	mirror_all / primary_backup: every enabled endpoint (primary and backup)
-//	balanced: minimum_replicas distinct primaries selected by weight, plus every backup
-//
-// Rows that already exist are kept, so a retry or reconcile never re-randomises a
-// previously chosen target. The mode in force at planning time is stored on each row.
-func (s *Service) planBlob(tx *gorm.DB, b model.Blob, pol model.Policy, providers []model.StorageProvider) ([]model.Replica, error) {
-	var existing []model.Replica
-	if err := tx.Where("blob_id = ?", b.ID).Find(&existing).Error; err != nil {
-		return nil, wrap("load replicas", err)
-	}
-	have := make(map[string]model.Replica, len(existing))
-	for _, r := range existing {
-		have[r.ProviderID] = r
-	}
-
-	primary, backup := splitProviders(providers)
-	var selected []model.StorageProvider
-	switch pol.Mode {
-	case model.ModeBalanced:
-		want := pol.MinimumReplicas
-		if want > len(primary) {
-			want = len(primary)
-		}
-		chosen := make([]model.StorageProvider, 0, want)
-		// Existing primaries are already frozen targets and fill the slots first.
-		for _, p := range primary {
-			if len(chosen) >= want {
-				break
-			}
-			if _, ok := have[p.ID]; ok {
-				chosen = append(chosen, p)
-			}
-		}
-		if len(chosen) < want {
-			var candidates []model.StorageProvider
-			for _, p := range primary {
-				if _, ok := have[p.ID]; !ok {
-					candidates = append(candidates, p)
-				}
-			}
-			chosen = append(chosen, weightedSample(candidates, want-len(chosen))...)
-		}
-		selected = append(selected, chosen...)
-		selected = append(selected, backup...)
-	default: // mirror_all and primary_backup write every enabled endpoint.
-		selected = append(selected, primary...)
-		selected = append(selected, backup...)
-	}
-
-	now := s.now()
-	out := make([]model.Replica, 0, len(selected))
-	seen := make(map[string]bool, len(selected))
-	for _, p := range selected {
-		if seen[p.ID] {
-			continue
-		}
-		seen[p.ID] = true
-		if r, ok := have[p.ID]; ok {
-			out = append(out, r)
-			continue
-		}
-		r := model.Replica{
-			ID:          newID(),
-			BlobID:      b.ID,
-			ProviderID:  p.ID,
-			Status:      model.ReplicaPending,
-			SizeBytes:   b.SizeBytes,
-			ShareStatus: model.ShareStatusPending,
-			PlanMode:    pol.Mode,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-		if err := tx.Create(&r).Error; err != nil {
-			return nil, wrap("create replica", err)
-		}
-		have[p.ID] = r
-		out = append(out, r)
-	}
-	return out, nil
-}
-
-// planBlobWork plans replicas and queues a replicate job for every pending one.
-// It returns the number of newly queued jobs.
-func (s *Service) planBlobWork(tx *gorm.DB, b model.Blob, pol model.Policy, providers []model.StorageProvider) (int, error) {
-	replicas, err := s.planBlob(tx, b, pol, providers)
-	if err != nil {
-		return 0, err
-	}
-	queued := 0
-	for _, r := range replicas {
-		if r.Status != model.ReplicaPending {
-			continue
-		}
-		created, err := s.queueReplicaJob(tx, r.ID)
-		if err != nil {
-			return queued, err
-		}
-		if created {
-			queued++
-		}
-	}
-	if err := s.refreshBlobStatus(tx, b.ID, pol.MinimumReplicas); err != nil {
-		return queued, err
-	}
-	return queued, nil
-}
-
-// refreshBlobStatus recomputes the material status of one blob from replica facts.
-// A material becomes archived only when the policy minimum is actually ready.
-func (s *Service) refreshBlobStatus(tx *gorm.DB, blobID string, minimum int) error {
-	if minimum < 1 {
-		minimum = 1
-	}
-	var rows []struct {
-		Status string
-		N      int64
-	}
-	if err := tx.Model(&model.Replica{}).
-		Select("status, COUNT(*) AS n").
-		Where("blob_id = ?", blobID).
-		Group("status").Scan(&rows).Error; err != nil {
-		return wrap("count replicas", err)
-	}
-	counts := map[string]int64{}
-	for _, r := range rows {
-		counts[r.Status] += r.N
-	}
-	status := model.StatusPendingStorage
-	switch {
-	case counts[model.ReplicaReady] >= int64(minimum):
-		status = model.StatusArchived
-	case counts[model.ReplicaReady] == 0 &&
-		counts[model.ReplicaPending] == 0 &&
-		counts[model.ReplicaUploading] == 0 &&
-		counts[model.ReplicaFailed] > 0:
-		status = model.StatusDegraded
-	}
-	err := tx.Model(&model.Material{}).Where("blob_id = ?", blobID).
-		Updates(map[string]any{"status": status, "updated_at": s.now()}).Error
-	if err != nil {
-		return wrap("update material status", err)
-	}
-	return nil
-}
 
 // queueReplicaJob creates at most one pending/running replicate job per replica.
 func (s *Service) queueReplicaJob(tx *gorm.DB, replicaID string) (bool, error) {
@@ -248,225 +47,119 @@ func (s *Service) queueReplicaJob(tx *gorm.DB, replicaID string) (bool, error) {
 	return true, nil
 }
 
-// Reconcile adds missing replicas (and their jobs) for existing blobs under the
-// current policy. Extra replicas are never removed.
+// Reconcile replans catalogued files under the current rules.
 func (s *Service) Reconcile(ctx context.Context, p auth.Principal) (int, error) {
-	db := s.db.WithContext(ctx)
-	queued := 0
-	err := db.Transaction(func(tx *gorm.DB) error {
-		pol, err := s.loadPolicy(tx)
-		if err != nil {
+	n := 0
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSyncTx(tx); err != nil {
 			return err
 		}
-		providers, err := loadProviders(tx)
-		if err != nil {
+		var ms []model.Material
+		if err := tx.Order("created_at ASC").Order("id ASC").Find(&ms).Error; err != nil {
 			return err
 		}
-		var blobs []model.Blob
-		if err := tx.Order("created_at ASC").Order("id ASC").Find(&blobs).Error; err != nil {
-			return wrap("list blobs", err)
-		}
-		for _, b := range blobs {
-			n, err := s.planBlobWork(tx, b, pol, providers)
+		for _, m := range ms {
+			q, err := s.planMaterialTx(tx, m.ID, false)
 			if err != nil {
 				return err
 			}
-			queued += n
+			n += q
 		}
 		return s.audit(tx, p, "storage.reconcile", "")
 	})
-	if err != nil {
-		return 0, apperr.Internal(err)
-	}
-	if queued > 0 {
+	if err == nil {
 		s.notify()
 	}
-	return queued, nil
+	return n, err
 }
 
-// RunReplicate executes one replicate job. Upload success and share success are
-// tracked separately: a share failure never rolls back an uploaded replica.
-func (s *Service) RunReplicate(ctx context.Context, jobID string) {
-	db := s.db.WithContext(ctx)
-	var job model.Job
-	if err := db.Where("id = ?", jobID).First(&job).Error; err != nil || job.Kind != model.JobReplicate {
-		return
-	}
-	if err := s.replicate(ctx, job); err != nil {
-		if ctx.Err() != nil {
-			if !errors.Is(context.Cause(ctx), errLeaseLost) {
-				s.requeueJob(job.ID, job.LeaseOwner, func(tx *gorm.DB) error {
-					return tx.Model(&model.Replica{}).
-						Where("id = ? AND status = ?", job.ReplicaID, model.ReplicaUploading).
-						Updates(map[string]any{"status": model.ReplicaPending, "updated_at": s.now()}).Error
-				})
-			}
-			return
+// prepareReplicate marks the replica in progress and builds the executor input.
+// A nil input means there is nothing to transfer; the job completes at once.
+func (s *Service) prepareReplicate(ctx context.Context, job model.Job) (*jobexec.ReplicateInput, error) {
+	var in *jobexec.ReplicateInput
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockSyncTx(tx); err != nil {
+			return err
 		}
-		if errors.Is(err, errLeaseLost) {
-			return
-		}
-		s.logf("replicate job failed: %s", storageErrorText(err))
-		s.failReplicaJob(job.ID, job.LeaseOwner, job.ReplicaID, storageErrorText(err))
-	}
-}
-
-func (s *Service) replicate(ctx context.Context, job model.Job) error {
-	s.jobProgress(ctx, job, "检查副本、原文件和存储端点", 0, 0)
-	db := s.db.WithContext(ctx)
-	var replica model.Replica
-	if err := db.Where("id = ?", job.ReplicaID).First(&replica).Error; err != nil {
-		return fmt.Errorf("load replica: %w", err)
-	}
-	var blob model.Blob
-	if err := db.Where("id = ?", replica.BlobID).First(&blob).Error; err != nil {
-		return fmt.Errorf("load blob: %w", err)
-	}
-	var provider model.StorageProvider
-	if err := db.Where("id = ?", replica.ProviderID).First(&provider).Error; err != nil {
-		return fmt.Errorf("load provider: %w", err)
-	}
-
-	if replica.Status == model.ReplicaReady {
-		return s.completeReplicateInTx(job, replica, nil)
-	}
-	if !provider.Enabled {
-		return errors.New("storage provider is disabled")
-	}
-	if !s.blobs.Exists(blob.SHA256) {
-		return errors.New("blob content is missing from the local store")
-	}
-	adapter, err := s.adapterFor(provider)
-	if err != nil {
-		return err
-	}
-
-	now := s.now()
-	if err := db.Transaction(func(tx *gorm.DB) error {
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
 			return err
 		}
-		res := tx.Model(&model.Replica{}).
-			Where("id = ? AND status IN ?", replica.ID, []string{model.ReplicaPending, model.ReplicaFailed, model.ReplicaUploading}).
-			Updates(map[string]any{"status": model.ReplicaUploading, "error": "", "updated_at": now})
-		if res.Error != nil {
-			return res.Error
+		var replica model.Replica
+		var drive model.Drive
+		var blob model.Blob
+		if err := tx.Where("id = ?", job.ReplicaID).First(&replica).Error; err != nil {
+			return err
 		}
-		if res.RowsAffected != 1 {
-			return errLeaseLost
+		if err := tx.Where("id = ?", replica.DriveID).First(&drive).Error; err != nil {
+			return err
 		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("mark replica uploading: %w", err)
-	}
-
-	name := safeRemoteName(s.replicaFileName(ctx, blob.ID, blob.FileName))
-	obj := storage.Object{
-		Key:    objectKey(blob.SHA256, name),
-		Name:   name,
-		Path:   s.blobs.Path(blob.SHA256),
-		SHA256: blob.SHA256,
-		Size:   blob.SizeBytes,
-	}
-	s.jobProgressWithMetrics(ctx, job, "正在上传文件并验证远端副本", 0, 0, map[string]any{
-		"provider":   provider.Name,
-		"size_bytes": blob.SizeBytes,
+		if err := tx.Where("id = ?", replica.BlobID).First(&blob).Error; err != nil {
+			return err
+		}
+		if !drive.Enabled || replica.Status == model.ReplicaSkipped || replica.Status == model.ReplicaOrphaned || replica.Status == model.ReplicaReady {
+			return nil
+		}
+		cfg, err := s.driveConfig(drive)
+		if err != nil {
+			return err
+		}
+		var m model.Material
+		_ = tx.Select("file_name", "media_type").Where("blob_id = ?", blob.ID).First(&m).Error
+		in = &jobexec.ReplicateInput{
+			Drive:       cfg,
+			Blob:        jobexec.Blob{SHA256: blob.SHA256, Size: blob.SizeBytes, FileName: m.FileName, MediaType: m.MediaType},
+			DesiredPath: replica.DesiredPath, RemoteID: replica.RemoteID, RemotePath: replica.RemotePath,
+			Move: drive.OnPathChange == model.OnPathChangeMove, Share: replica.Share,
+		}
+		state := model.ReplicaUploading
+		if replica.RemoteID != "" {
+			state = model.ReplicaMoving
+		}
+		return tx.Model(&replica).Updates(map[string]any{"status": state, "error": "", "updated_at": s.now()}).Error
 	})
-	type uploadProgress struct{ done, total int64 }
-	updatesProgress := make(chan uploadProgress, 1)
-	progressDone := make(chan struct{})
-	go func() {
-		defer close(progressDone)
-		var last time.Time
-		for p := range updatesProgress {
-			if p.total <= 0 || time.Since(last) < 5*time.Second {
-				continue
-			}
-			last = time.Now()
-			s.jobProgress(ctx, job, fmt.Sprintf("文件传输中：%.1f / %.1f MiB", float64(p.done)/(1<<20), float64(p.total)/(1<<20)), int(p.done), int(p.total))
-		}
-	}()
-	obj.Progress = func(done, total int64) {
-		select {
-		case updatesProgress <- uploadProgress{done, total}:
-		default:
-		}
-	}
-	uploadStarted := time.Now()
-	stored, err := adapter.Put(ctx, obj)
-	uploadDuration := time.Since(uploadStarted)
-	close(updatesProgress)
-	<-progressDone
-	if err != nil {
+	return in, err
+}
+
+// commitReplicate stores the observed remote state. Upload success and share
+// success are tracked separately: a share failure never rolls back an upload.
+func (s *Service) commitReplicate(job model.Job, out *jobexec.ReplicateResult) error {
+	var replica model.Replica
+	if err := s.db.Where("id = ?", job.ReplicaID).First(&replica).Error; err != nil {
 		return err
 	}
-	size := stored.Size
-	if size <= 0 {
-		size = blob.SizeBytes
+	if out == nil {
+		return s.completeReplicateInTx(job, replica, nil)
 	}
-	updates := map[string]any{
-		"status":       model.ReplicaReady,
-		"size_bytes":   size,
-		"verification": stored.Verification,
-		"error":        "",
-		"remote_id":    stored.RemoteID,
-		"remote_key":   obj.Key,
-		"remote_name":  obj.Name,
-		"updated_at":   now,
+	updates := map[string]any{"status": model.ReplicaReady, "error": "", "updated_at": s.now()}
+	if out.Uploaded {
+		updates["remote_id"] = out.RemoteID
+		updates["remote_path"] = out.RemotePath
+		updates["size_bytes"] = out.SizeBytes
+		updates["verification"] = out.Verification
+	} else if out.Moved {
+		updates["remote_id"] = out.RemoteID
+		updates["remote_path"] = out.RemotePath
 	}
-	throughput := float64(0)
-	if uploadDuration > 0 {
-		throughput = float64(size) / uploadDuration.Seconds()
-	}
-	s.jobProgressWithMetrics(ctx, job, "副本上传完成，正在处理分享链接", 0, 0, map[string]any{
-		"provider":               provider.Name,
-		"size_bytes":             size,
-		"duration_ms":            uploadDuration.Milliseconds(),
-		"throughput_bytes_per_s": throughput,
-		"verification":           stored.Verification,
-	})
-	shareStarted := time.Now()
-	shareURL, sharePassword, shareExpires, shareStatus, shareErr := s.shareReplica(ctx, adapter, stored.RemoteID)
-	shareDuration := time.Since(shareStarted)
-	updates["share_status"] = shareStatus
-	updates["share_url"] = shareURL
-	updates["share_password"] = sharePassword
-	updates["share_expires_at"] = shareExpires
-	if shareErr != "" {
-		updates["error"] = shareErr
-		s.jobProgressWithMetrics(ctx, job, "副本已保存，分享链接创建失败，可稍后重试", 0, 0, map[string]any{
-			"provider": provider.Name, "duration_ms": shareDuration.Milliseconds(), "share_status": shareStatus,
-		})
-	} else if shareStatus == model.ShareStatusUnsupported {
-		s.jobProgressWithMetrics(ctx, job, "副本已保存，此端点不支持分享链接", 0, 0, map[string]any{
-			"provider": provider.Name, "duration_ms": shareDuration.Milliseconds(), "share_status": shareStatus,
-		})
+	if replica.Share {
+		updates["share_url"] = out.ShareURL
+		updates["share_password"] = out.SharePassword
+		updates["share_expires_at"] = out.ShareExpiresAt
+		updates["share_status"] = out.ShareStatus
+		updates["error"] = redact(out.Note)
 	} else {
-		s.jobProgressWithMetrics(ctx, job, "副本已保存，分享链接已生成", 0, 0, map[string]any{
-			"provider": provider.Name, "duration_ms": shareDuration.Milliseconds(), "share_status": shareStatus,
-		})
+		updates["share_status"] = ""
+		updates["share_url"] = ""
+		updates["share_password"] = ""
+		updates["share_expires_at"] = nil
 	}
 	return s.completeReplicateInTx(job, replica, updates)
 }
 
-// replicaFileName follows the catalogue's current display name so a replica
-// created after AI renaming (or a manual rename) uses the polished filename.
-// Blob.FileName remains the fallback for legacy/shared blobs without materials.
-func (s *Service) replicaFileName(ctx context.Context, blobID, fallback string) string {
-	var name string
-	err := s.db.WithContext(ctx).Model(&model.Material{}).
-		Where("blob_id = ?", blobID).
-		Order("updated_at DESC").
-		Limit(1).
-		Pluck("file_name", &name).Error
-	if err == nil && strings.TrimSpace(name) != "" {
-		return name
-	}
-	return fallback
-}
-
 func (s *Service) completeReplicateInTx(job model.Job, replica model.Replica, replicaUpdates map[string]any) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockSyncTx(tx); err != nil {
+			return err
+		}
 		if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
 			return err
 		}
@@ -482,34 +175,21 @@ func (s *Service) completeReplicateInTx(job model.Job, replica model.Replica, re
 		if err := s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobSucceeded, ""); err != nil {
 			return err
 		}
-		pol, err := s.loadPolicy(tx)
-		if err != nil {
-			pol = model.Policy{Mode: model.ModeMirrorAll, MinimumReplicas: 1}
+		// Preserve a newer plan and schedule follow-up work after this lease ends.
+		var current model.Replica
+		if err := tx.Where("id = ?", replica.ID).First(&current).Error; err != nil {
+			return err
 		}
-		return s.refreshBlobStatus(tx, replica.BlobID, pol.MinimumReplicas)
+		changed := current.DesiredPath != replica.DesiredPath || current.RuleID != replica.RuleID || current.Share != replica.Share || current.Required != replica.Required
+		if changed || replicaUpdates == nil {
+			var m model.Material
+			if err := tx.Where("blob_id = ?", replica.BlobID).First(&m).Error; err == nil {
+				_, err = s.planMaterialTx(tx, m.ID, false)
+				return err
+			}
+		}
+		return s.refreshBlobStatus(tx, replica.BlobID)
 	})
-}
-
-// shareReplica asks the adapter for a share link and classifies the outcome.
-// An unsupported share is a normal outcome, not a failed replica.
-func (s *Service) shareReplica(ctx context.Context, adapter storage.Adapter, remoteID string) (url, password string, expires *time.Time, status, note string) {
-	if remoteID == "" {
-		return "", "", nil, model.ShareStatusFailed, "share_remote_id_missing"
-	}
-	share, err := adapter.Share(ctx, remoteID)
-	if err != nil {
-		if errors.Is(err, storage.ErrUnsupported) || storage.AsCloudError(err).Class == storage.ClassUnsupported {
-			return "", "", nil, model.ShareStatusUnsupported, ""
-		}
-		return "", "", nil, model.ShareStatusFailed, storageErrorText(err)
-	}
-	if share.Status == "unsupported" {
-		return "", "", nil, model.ShareStatusUnsupported, ""
-	}
-	if share.URL == "" {
-		return "", "", nil, model.ShareStatusFailed, "share_url_empty"
-	}
-	return share.URL, share.Password, share.ExpiresAt, model.ShareStatusReady, ""
 }
 
 // RefreshReplicaShare rebuilds or refreshes the share of one ready replica.
@@ -522,8 +202,8 @@ func (s *Service) RefreshReplicaShare(ctx context.Context, p auth.Principal, id 
 	if replica.Status != model.ReplicaReady {
 		return model.Replica{}, apperr.Conflict("副本尚未就绪，不能创建分享")
 	}
-	var provider model.StorageProvider
-	if err := db.Where("id = ?", replica.ProviderID).First(&provider).Error; err != nil {
+	var provider model.Drive
+	if err := db.Where("id = ?", replica.DriveID).First(&provider).Error; err != nil {
 		return model.Replica{}, apperr.NotFound("存储端点不存在")
 	}
 	adapter, err := s.adapterFor(provider)
@@ -532,9 +212,9 @@ func (s *Service) RefreshReplicaShare(ctx context.Context, p auth.Principal, id 
 	}
 	remote := replica.RemoteID
 	if remote == "" {
-		remote = replica.RemoteKey
+		remote = replica.RemotePath
 	}
-	url, password, expires, shareStatus, note := s.shareReplica(ctx, adapter, remote)
+	url, password, expires, shareStatus, note := jobexec.ShareReplica(ctx, adapter, remote)
 	updates := map[string]any{
 		"share_status":     shareStatus,
 		"share_url":        url,
@@ -570,27 +250,27 @@ type Download struct {
 
 type replicaSource struct {
 	replica  model.Replica
-	provider model.StorageProvider
+	provider model.Drive
 }
 
-// readyReplicaSources returns readable replicas in primary-first order. Disabled
-// providers are retained because existing replicas remain readable.
+// readyReplicaSources returns every replica written to a drive, ordered by the
+// drive's read_order. Disabled drives and orphaned copies stay readable.
 func (s *Service) readyReplicaSources(ctx context.Context, blobID string) ([]replicaSource, error) {
 	db := s.db.WithContext(ctx)
 	var replicas []model.Replica
-	if err := db.Where("blob_id = ? AND status = ?", blobID, model.ReplicaReady).
+	if err := db.Where("blob_id = ? AND remote_id <> ?", blobID, "").
 		Find(&replicas).Error; err != nil {
 		return nil, err
 	}
 	if len(replicas) == 0 {
 		return nil, nil
 	}
-	providers := map[string]model.StorageProvider{}
+	providers := map[string]model.Drive{}
 	ids := make([]string, 0, len(replicas))
 	for _, r := range replicas {
-		ids = append(ids, r.ProviderID)
+		ids = append(ids, r.DriveID)
 	}
-	var rows []model.StorageProvider
+	var rows []model.Drive
 	if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -599,21 +279,16 @@ func (s *Service) readyReplicaSources(ctx context.Context, blobID string) ([]rep
 	}
 	sources := make([]replicaSource, 0, len(replicas))
 	for _, r := range replicas {
-		if p, ok := providers[r.ProviderID]; ok {
+		if p, ok := providers[r.DriveID]; ok {
 			sources = append(sources, replicaSource{replica: r, provider: p})
 		}
 	}
 	sort.SliceStable(sources, func(i, j int) bool {
-		ri := providerReadRank(sources[i].provider.Role)
-		rj := providerReadRank(sources[j].provider.Role)
-		if ri != rj {
-			return ri < rj
+		if sources[i].provider.ReadOrder != sources[j].provider.ReadOrder {
+			return sources[i].provider.ReadOrder < sources[j].provider.ReadOrder
 		}
-		if sources[i].provider.Priority != sources[j].provider.Priority {
-			return sources[i].provider.Priority < sources[j].provider.Priority
-		}
-		if sources[i].replica.ProviderID != sources[j].replica.ProviderID {
-			return sources[i].replica.ProviderID < sources[j].replica.ProviderID
+		if sources[i].replica.DriveID != sources[j].replica.DriveID {
+			return sources[i].replica.DriveID < sources[j].replica.DriveID
 		}
 		return sources[i].replica.CreatedAt.Before(sources[j].replica.CreatedAt)
 	})
@@ -627,13 +302,13 @@ func (s *Service) openReplicaSource(ctx context.Context, source replicaSource) (
 	}
 	remote := source.replica.RemoteID
 	if remote == "" {
-		remote = source.replica.RemoteKey
+		remote = source.replica.RemotePath
 	}
 	return adapter.Open(ctx, remote)
 }
 
 // OpenMaterialDownload returns the local original when present; otherwise it falls
-// back to ready replicas ordered primary first, then backup, then priority.
+// back to drive replicas in read_order.
 func (s *Service) OpenMaterialDownload(ctx context.Context, id string) (Download, error) {
 	db := s.db.WithContext(ctx)
 	var m model.Material
@@ -671,13 +346,6 @@ func (s *Service) OpenMaterialDownload(ctx context.Context, id string) (Download
 	return Download{}, apperr.Unavailable("没有可用的副本可供下载")
 }
 
-func providerReadRank(role string) int {
-	if role == model.RolePrimary {
-		return 0
-	}
-	return 1
-}
-
 func (s *Service) failReplicaJob(jobID, owner, replicaID, message string) {
 	message = redact(message)
 	s.failJob(jobID, owner, message, func(tx *gorm.DB) error {
@@ -694,18 +362,17 @@ func (s *Service) failReplicaJob(jobID, owner, replicaID, message string) {
 		if err := tx.Where("id = ?", replicaID).First(&replica).Error; err != nil {
 			return err
 		}
-		pol, err := s.loadPolicy(tx)
-		if err != nil {
-			return err
-		}
-		return s.refreshBlobStatus(tx, replica.BlobID, pol.MinimumReplicas)
+		return s.refreshBlobStatus(tx, replica.BlobID)
 	})
 }
 
-// adapterFor builds a storage adapter from a provider row. Local roots are always
-// derived server-side; the API can never supply them.
-func (s *Service) adapterFor(p model.StorageProvider) (storage.Adapter, error) {
+// driveConfig decrypts a drive row into an executor configuration. Local roots
+// are always derived server-side; the API can never supply them.
+func (s *Service) driveConfig(p model.Drive) (jobexec.DriveConfig, error) {
 	settings := model.DecodeMap(p.ConfigJSON)
+	if p.Kind == model.KindLanzou {
+		settings["folder_id"] = p.RootPath
+	}
 	if p.Kind == model.KindLocal {
 		settings["root"] = s.localRoot(p.ID)
 	}
@@ -713,128 +380,51 @@ func (s *Service) adapterFor(p model.StorageProvider) (storage.Adapter, error) {
 	if p.SecretCipher != "" {
 		raw, err := s.box.Open(p.SecretCipher, []byte(p.ID))
 		if err != nil {
-			return nil, err
+			return jobexec.DriveConfig{}, err
 		}
 		secrets = model.DecodeMap(string(raw))
 	}
-	cfg := storage.Config{ID: p.ID, Kind: p.Kind, Settings: settings, Secrets: secrets}
-	if p.Kind == model.KindOneDrive {
-		cfg.SaveRefreshToken = func(ctx context.Context, previous, next string) error {
-			if previous == next || next == "" || secrets["refresh_token"] != previous {
-				return nil
-			}
-			updated := make(map[string]string, len(secrets))
-			for key, value := range secrets {
-				updated[key] = value
-			}
-			updated["refresh_token"] = next
-			cipher, err := s.sealSecret(p.ID, updated)
-			if err != nil {
-				return err
-			}
-			res := s.db.WithContext(ctx).Model(&model.StorageProvider{}).Where("id = ? AND secret_cipher = ?", p.ID, p.SecretCipher).
-				Updates(map[string]any{"secret_cipher": cipher, "updated_at": s.now()})
-			if res.Error != nil {
-				return res.Error
-			}
-			if res.RowsAffected == 1 {
-				p.SecretCipher = cipher
-				secrets["refresh_token"] = next
-			}
-			return nil
-		}
-	}
-	return s.factory(cfg)
+	return jobexec.DriveConfig{ID: p.ID, Kind: p.Kind, Settings: settings, Secrets: secrets}, nil
 }
 
-// objectKey is the stable content-addressed key used by local and WebDAV adapters.
-func objectKey(sha, name string) string {
-	if len(sha) < 2 {
-		return name
+// adapterFor builds a storage adapter for work the master performs itself.
+func (s *Service) adapterFor(p model.Drive) (storage.Adapter, error) {
+	cfg, err := s.driveConfig(p)
+	if err != nil {
+		return nil, err
 	}
-	return sha[:2] + "/" + sha + "/" + name
+	return jobexec.NewAdapter(s.masterEnv(), cfg)
 }
 
-// safeRemoteName keeps a readable single-segment file name for remote adapters.
-func safeRemoteName(raw string) string {
-	name := raw
-	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
-		name = name[i+1:]
-	}
-	name = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' {
-			return -1
-		}
-		return r
-	}, name)
-	name = strings.TrimSpace(name)
-	if name == "" || name == "." || name == ".." {
-		name = "blob"
-	}
-	ext := path.Ext(name)
-	base := strings.TrimSuffix(name, ext)
-	if utf8.RuneCountInString(base) > 100 {
-		base = string([]rune(base)[:100])
-	}
-	if utf8.RuneCountInString(ext) > 20 {
-		ext = ""
-	}
-	return base + ext
-}
-
-// weightedSample picks k distinct providers using weights, without replacement.
-func weightedSample(providers []model.StorageProvider, k int) []model.StorageProvider {
-	if k <= 0 || len(providers) == 0 {
+// SaveRefreshToken stores a rotated OneDrive refresh token. The write only
+// applies while the stored token is still the one that was rotated, so a
+// concurrent manual credential change is never overwritten.
+func (s *Service) SaveRefreshToken(ctx context.Context, driveID, previous, next string) error {
+	if previous == next || next == "" {
 		return nil
 	}
-	if k > len(providers) {
-		k = len(providers)
-	}
-	pool := append([]model.StorageProvider{}, providers...)
-	out := make([]model.StorageProvider, 0, k)
-	for len(out) < k {
-		total := 0
-		for _, p := range pool {
-			total += providerWeight(p)
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var d model.Drive
+		if err := tx.Where("id = ?", driveID).First(&d).Error; err != nil {
+			return err
 		}
-		if total <= 0 {
-			out = append(out, pool[0])
-			pool = pool[1:]
-			continue
+		if d.Kind != model.KindOneDrive || d.SecretCipher == "" {
+			return nil
 		}
-		draw := secureIntn(total)
-		acc := 0
-		idx := 0
-		for i, p := range pool {
-			acc += providerWeight(p)
-			if draw < acc {
-				idx = i
-				break
-			}
+		raw, err := s.box.Open(d.SecretCipher, []byte(d.ID))
+		if err != nil {
+			return err
 		}
-		out = append(out, pool[idx])
-		pool = append(pool[:idx], pool[idx+1:]...)
-	}
-	return out
-}
-
-func providerWeight(p model.StorageProvider) int {
-	if p.Weight < 1 {
-		return 1
-	}
-	if p.Weight > 1000 {
-		return 1000
-	}
-	return p.Weight
-}
-
-func secureIntn(n int) int {
-	if n <= 1 {
-		return 0
-	}
-	var buf [8]byte
-	if _, err := crand.Read(buf[:]); err != nil {
-		return 0
-	}
-	return int(binary.BigEndian.Uint64(buf[:]) % uint64(n))
+		secrets := model.DecodeMap(string(raw))
+		if secrets["refresh_token"] != previous {
+			return nil
+		}
+		secrets["refresh_token"] = next
+		cipher, err := s.sealSecret(d.ID, secrets)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&model.Drive{}).Where("id = ? AND secret_cipher = ?", d.ID, d.SecretCipher).
+			Updates(map[string]any{"secret_cipher": cipher, "updated_at": s.now()}).Error
+	})
 }

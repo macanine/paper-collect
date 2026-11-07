@@ -16,7 +16,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useJobsList, useRetryJob } from './queries';
 import { progressText } from './JobProgress';
 
-const FILTER_KEYS = ['status', 'kind', 'material_id', 'upload_id', 'replica_id'] as const;
+const FILTER_KEYS = ['status', 'kind', 'material_id', 'upload_id', 'replica_id', 'node_id'] as const;
 type FilterKey = (typeof FILTER_KEYS)[number];
 
 export function JobsListPage() {
@@ -34,6 +34,7 @@ export function JobsListPage() {
     material_id: list.filters.material_id || undefined,
     upload_id: list.filters.upload_id || undefined,
     replica_id: list.filters.replica_id || undefined,
+    node_id: list.filters.node_id || undefined,
   });
   const retry = useRetryJob();
   const canRetry = can('jobs:write');
@@ -90,6 +91,13 @@ export function JobsListPage() {
           {job.attempts > 1 ? <span className="table-subtext">第 {job.attempts} 次尝试</span> : null}
         </div>
       ),
+    },
+    {
+      title: '节点',
+      key: 'node',
+      width: 110,
+      render: (_: unknown, job) =>
+        job.node_id ? <Link to={`/jobs?node_id=${job.node_id}`}>{job.node_name || '节点'}</Link> : '—',
     },
     {
       title: '耗时',
@@ -173,6 +181,7 @@ export function JobsListPage() {
             <span>{formatDateTime(job.updated_at)}</span>
             <span>耗时 {formatDuration(job.duration_ms)}</span>
             <span>尝试 {job.attempts} 次</span>
+            {job.node_name ? <span>节点 {job.node_name}</span> : null}
           </div>
           <div className="compact-entity__links">
             {job.upload_id && can('uploads:write') ? <Link to={`/uploads/${job.upload_id}`}>上传清单</Link> : null}

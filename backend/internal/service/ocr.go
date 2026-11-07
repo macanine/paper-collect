@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/ai"
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -212,7 +214,11 @@ func (s *Service) TestOCRProvider(ctx context.Context, id string) (OCRTestResult
 	if err != nil {
 		return OCRTestResult{}, err
 	}
-	client, err := s.ocrClient(ctx, row)
+	cfg, err := s.ocrProviderConfig(row)
+	if err != nil {
+		return OCRTestResult{Healthy: false, Message: redact(ai.Sanitize(err.Error()))}, nil
+	}
+	client, err := jobexec.NewOCRClient(cfg)
 	if err != nil {
 		return OCRTestResult{Healthy: false, Message: redact(ai.Sanitize(err.Error()))}, nil
 	}
@@ -282,62 +288,64 @@ func (s *Service) selectedOCRProvider(ctx context.Context, settings model.AISett
 	return model.OCRProvider{}, apperr.Validation("没有可用的 OCR 服务商，请先在 AI 解析中配置并选择")
 }
 
-type ocrClient interface {
-	Health(context.Context) error
-	Extract(context.Context, string, []byte) (ai.Result, error)
-}
-
-func (s *Service) ocrClient(ctx context.Context, row model.OCRProvider) (ocrClient, error) {
+// ocrProviderConfig decrypts one provider for an executor.
+func (s *Service) ocrProviderConfig(row model.OCRProvider) (jobexec.OCRConfig, error) {
 	if !row.Enabled {
-		return nil, errors.New(ocrProviderLabel(row.Kind) + " 服务商已停用")
+		return jobexec.OCRConfig{}, errors.New(ocrProviderLabel(row.Kind) + " 服务商已停用")
 	}
 	token, err := s.openAISecret(row.TokenCipher, row.ID)
 	if err != nil && row.Kind != model.OCRKindRapidOCR {
-		return nil, err
+		return jobexec.OCRConfig{}, err
 	}
 	if row.Kind != model.OCRKindRapidOCR && strings.TrimSpace(token) == "" {
-		return nil, errors.New("未配置 " + ocrProviderLabel(row.Kind) + " 令牌")
+		return jobexec.OCRConfig{}, errors.New("未配置 " + ocrProviderLabel(row.Kind) + " 令牌")
 	}
-	switch row.Kind {
-	case model.OCRKindPaddleOCR:
-		client, err := ai.NewPaddleOCR(row.BaseURL, token, row.Model, nil)
-		if err != nil {
-			return nil, err
-		}
-		client.Timeout = 15 * time.Minute
-		return client, nil
-	case model.OCRKindMinerU:
-		client, err := ai.NewMinerU(row.BaseURL, token, nil)
-		if err != nil {
-			return nil, err
-		}
-		client.Timeout = 15 * time.Minute
-		return client, nil
-	case model.OCRKindRapidOCR:
-		client, err := ai.NewRapidOCR(row.BaseURL, row.Model, nil)
-		if err != nil {
-			return nil, err
-		}
-		client.Timeout = 15 * time.Minute
-		return client, nil
-	default:
-		return nil, errors.New("不支持的 OCR 服务商类型")
-	}
+	return jobexec.OCRConfig{Name: row.Name, Kind: row.Kind, BaseURL: row.BaseURL, Model: row.Model, Token: token}, nil
 }
 
-func (s *Service) parseWithOCR(ctx context.Context, settings model.AISettings, material model.Material) (ai.Result, model.OCRProvider, error) {
+// ocrConfig resolves the selected provider and the cache key of its output.
+func (s *Service) ocrConfig(ctx context.Context, settings model.AISettings, mediaType string) (*jobexec.OCRConfig, string, error) {
 	row, err := s.selectedOCRProvider(ctx, settings)
 	if err != nil {
-		return ai.Result{}, model.OCRProvider{}, err
+		return nil, "", err
 	}
-	client, err := s.ocrClient(ctx, row)
+	cfg, err := s.ocrProviderConfig(row)
 	if err != nil {
-		return ai.Result{}, row, err
+		return nil, "", err
 	}
-	parseCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
-	defer cancel()
-	result, err := s.parseMaterial(parseCtx, client, row, material)
-	return result, row, err
+	return &cfg, textParseKey(row, mediaType), nil
+}
+
+// cachedText returns parser output stored for the current file content and
+// parser, or nil when it must be parsed again.
+func (s *Service) cachedText(ctx context.Context, m model.Material, key string) *jobexec.ParsedText {
+	var cached model.MaterialText
+	if err := s.db.WithContext(ctx).Where("material_id = ?", m.ID).First(&cached).Error; err != nil {
+		return nil
+	}
+	if cached.SourceHash != m.SHA256 || cached.ParseKey != key {
+		return nil
+	}
+	out := &jobexec.ParsedText{ParseKey: key, Markdown: cached.Markdown, PageCount: cached.PageCount}
+	_ = json.Unmarshal([]byte(cached.PagesJSON), &out.Pages)
+	return out
+}
+
+// saveParsedText caches parser output reported by a node. A failed write only
+// means the next job parses again.
+func (s *Service) saveParsedText(ctx context.Context, materialID string, p *jobexec.ParsedText) {
+	var m model.Material
+	if err := s.db.WithContext(ctx).Select("id", "sha256").Where("id = ?", materialID).First(&m).Error; err != nil {
+		return
+	}
+	pages, _ := json.Marshal(p.Pages)
+	now := s.now()
+	if err := s.db.WithContext(ctx).Save(&model.MaterialText{
+		MaterialID: m.ID, SourceHash: m.SHA256, ParseKey: p.ParseKey,
+		PageCount: p.PageCount, PagesJSON: string(pages), Markdown: p.Markdown, CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		s.logf("parsed text cache unavailable")
+	}
 }
 
 // migrateLegacyOCRProvider creates one MinerU provider from the legacy

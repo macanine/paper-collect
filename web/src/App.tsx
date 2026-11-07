@@ -24,6 +24,8 @@ const JobsListPage = page(() => import('./features/jobs/JobsListPage'), 'JobsLis
 const LibraryPage = page(() => import('./features/packs/LibraryPage'), 'LibraryPage');
 const PackDetailPage = page(() => import('./features/packs/PackDetailPage'), 'PackDetailPage');
 const MaterialDetailPage = page(() => import('./features/materials/MaterialDetailPage'), 'MaterialDetailPage');
+const NodesPage = page(() => import('./features/nodes/NodesPage'), 'NodesPage');
+const NodeDetailPage = page(() => import('./features/nodes/NodeDetailPage'), 'NodeDetailPage');
 const StoragePage = page(() => import('./features/storage/StoragePage'), 'StoragePage');
 const TrashPage = page(() => import('./features/trash/TrashPage'), 'TrashPage');
 const UploadsListPage = page(() => import('./features/uploads/UploadsListPage'), 'UploadsListPage');
@@ -52,6 +54,8 @@ const ROUTES: { path: string; scope: Scope; element: ReactNode }[] = [
   { path: 'jobs', scope: 'jobs:read', element: <JobsListPage /> },
   { path: 'jobs/:jobId', scope: 'jobs:read', element: <JobDetailPage /> },
   { path: 'storage', scope: 'storage:read', element: <StoragePage /> },
+  { path: 'admin/nodes', scope: 'nodes:manage', element: <NodesPage /> },
+  { path: 'admin/nodes/:nodeId', scope: 'nodes:manage', element: <NodeDetailPage /> },
   { path: 'admin/ai-models', scope: 'ai:read', element: <AiModelsPage /> },
   { path: 'admin/ai-settings', scope: 'ai:read', element: <AiSettingsPage /> },
   { path: 'admin/api-keys', scope: 'keys:manage', element: <ApiKeysPage /> },

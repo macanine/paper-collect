@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -20,6 +23,7 @@ type JobFilter struct {
 	MaterialID string
 	UploadID   string
 	ReplicaID  string
+	NodeID     string
 }
 
 // ListJobs returns jobs newest first.
@@ -47,6 +51,9 @@ func (s *Service) ListJobs(ctx context.Context, f JobFilter, pg PageQuery) (Page
 		}
 		if f.ReplicaID != "" {
 			tx = tx.Where("replica_id = ?", f.ReplicaID)
+		}
+		if f.NodeID != "" {
+			tx = tx.Where("node_id = ?", f.NodeID)
 		}
 		return tx
 	}
@@ -167,8 +174,10 @@ var errNoJob = errors.New("no pending job")
 
 const claimAttempts = 64
 
-// StartWorker launches one bounded runner per job kind. Each runner claims
-// jobs atomically, so multiple processes can safely share PostgreSQL.
+// StartWorker launches bounded local runners. Ingest, group and replicas on a
+// local drive only ever run on the master. Other replicate, analyze and index
+// jobs run here for the kinds the master keeps for itself; worker nodes claim
+// them over HTTP.
 func (s *Service) StartWorker(ctx context.Context) {
 	go s.reaperLoop(ctx)
 	limits := map[string]int{
@@ -178,7 +187,13 @@ func (s *Service) StartWorker(ctx context.Context) {
 		model.JobIndex:     s.worker.IndexConcurrency,
 		model.JobGroup:     s.worker.AnalyzeConcurrency,
 	}
-	for _, kind := range []string{model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex, model.JobGroup} {
+	kinds := []string{model.JobIngest, model.JobGroup, model.JobReplicate}
+	for _, kind := range s.worker.Kinds {
+		if kind != model.JobReplicate {
+			kinds = append(kinds, kind)
+		}
+	}
+	for _, kind := range kinds {
 		for i := 0; i < limits[kind]; i++ {
 			go s.workerLoop(ctx, kind)
 		}
@@ -238,7 +253,11 @@ func (s *Service) workerLoop(ctx context.Context, kind string) {
 // ProcessNext claims and runs at most one pending job of any kind. It is kept
 // for operational smoke checks and tests.
 func (s *Service) ProcessNext(ctx context.Context) bool {
-	job, err := s.claimJob(ctx, "")
+	kinds := append([]string{model.JobIngest, model.JobGroup}, s.worker.Kinds...)
+	job, err := s.claimJobFor(ctx, claimer{ID: s.worker.InstanceID, Name: s.worker.NodeName}, kinds)
+	if errors.Is(err, errNoJob) && !slices.Contains(s.worker.Kinds, model.JobReplicate) {
+		job, err = s.claimJob(ctx, model.JobReplicate)
+	}
 	if err != nil {
 		if errors.Is(err, errNoJob) || ctx.Err() != nil {
 			return false
@@ -279,14 +298,70 @@ func (s *Service) ProcessAvailable(ctx context.Context, limit int) int {
 	return done
 }
 
+// claimJob leases a job to the master's own runners. A draining master, or one
+// that leaves a kind to worker nodes, still runs what no node can: ingest, group
+// and replicas on a local drive.
 func (s *Service) claimJob(ctx context.Context, kind string) (model.Job, error) {
+	owner := claimer{ID: s.worker.InstanceID, Name: s.worker.NodeName}
+	var kinds []string
+	if kind != "" {
+		kinds = []string{kind}
+	}
+	if jobexec.IsRemoteKind(kind) {
+		draining, err := s.masterDraining(ctx)
+		if err != nil {
+			return model.Job{}, err
+		}
+		if draining || !slices.Contains(s.worker.Kinds, kind) {
+			if kind != model.JobReplicate {
+				return model.Job{}, errNoJob
+			}
+			owner.LocalDriveOnly = true
+		}
+	}
+	return s.claimJobFor(ctx, owner, kinds)
+}
+
+func (s *Service) masterDraining(ctx context.Context) (bool, error) {
+	var rows []model.Node
+	if err := s.db.WithContext(ctx).Select("draining").Where("is_master = ?", true).Limit(1).Find(&rows).Error; err != nil {
+		return false, err
+	}
+	return len(rows) == 1 && rows[0].Draining, nil
+}
+
+// claimer is the node a claimed job is leased to.
+type claimer struct {
+	ID, Name string
+	// RemoteOnly skips replicas on a local drive: its root is inside the master's
+	// DATA_DIR, so a worker would write to its own disk and report success.
+	RemoteOnly bool
+	// LocalDriveOnly keeps only those replicas.
+	LocalDriveOnly bool
+}
+
+const localDriveJobSQL = "EXISTS (SELECT 1 FROM replicas JOIN storage_drives ON storage_drives.id = replicas.drive_id WHERE replicas.id = jobs.replica_id AND storage_drives.kind = ?)"
+
+func (c claimer) scope(query *gorm.DB) *gorm.DB {
+	if c.RemoteOnly {
+		return query.Where("NOT "+localDriveJobSQL, model.KindLocal)
+	}
+	if c.LocalDriveOnly {
+		return query.Where(localDriveJobSQL, model.KindLocal)
+	}
+	return query
+}
+
+// claimJobFor leases the oldest pending job of the given kinds (any kind when
+// empty) to one node.
+func (s *Service) claimJobFor(ctx context.Context, owner claimer, kinds []string) (model.Job, error) {
 	db := s.db.WithContext(ctx)
 	var claimed model.Job
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if s.db.Dialector.Name() == "sqlite" {
-			return s.claimJobSQLite(tx, kind, &claimed)
+			return s.claimJobSQLite(tx, owner, kinds, &claimed)
 		}
-		return s.claimJobPostgres(tx, kind, &claimed)
+		return s.claimJobPostgres(tx, owner, kinds, &claimed)
 	})
 	if err != nil {
 		return model.Job{}, err
@@ -294,13 +369,13 @@ func (s *Service) claimJob(ctx context.Context, kind string) (model.Job, error) 
 	return claimed, nil
 }
 
-func (s *Service) claimJobPostgres(tx *gorm.DB, kind string, claimed *model.Job) error {
+func (s *Service) claimJobPostgres(tx *gorm.DB, owner claimer, kinds []string, claimed *model.Job) error {
 	tried := make([]string, 0, claimAttempts)
 	for attempts := 0; attempts < claimAttempts; attempts++ {
 		var job model.Job
-		query := tx.Where("status = ?", model.JobPending)
-		if kind != "" {
-			query = query.Where("kind = ?", kind)
+		query := owner.scope(tx.Where("status = ?", model.JobPending))
+		if len(kinds) > 0 {
+			query = query.Where("kind IN ?", kinds)
 		}
 		if len(tried) > 0 {
 			query = query.Where("id NOT IN ?", tried)
@@ -314,7 +389,7 @@ func (s *Service) claimJobPostgres(tx *gorm.DB, kind string, claimed *model.Job)
 			return err
 		}
 		tried = append(tried, job.ID)
-		if err := s.tryClaim(tx, job, claimed); err != nil {
+		if err := s.tryClaim(tx, owner, job, claimed); err != nil {
 			if errors.Is(err, errJobLocked) {
 				continue
 			}
@@ -331,13 +406,13 @@ func (s *Service) claimJobPostgres(tx *gorm.DB, kind string, claimed *model.Job)
 // claimJobSQLite uses the database write lock from BEGIN IMMEDIATE as the
 // cross-process exclusion primitive. A read-then-update would otherwise race
 // between separate server processes.
-func (s *Service) claimJobSQLite(tx *gorm.DB, kind string, claimed *model.Job) error {
+func (s *Service) claimJobSQLite(tx *gorm.DB, owner claimer, kinds []string, claimed *model.Job) error {
 	tried := make([]string, 0, claimAttempts)
 	for attempts := 0; attempts < claimAttempts; attempts++ {
 		var job model.Job
-		query := tx.Where("status = ?", model.JobPending)
-		if kind != "" {
-			query = query.Where("kind = ?", kind)
+		query := owner.scope(tx.Where("status = ?", model.JobPending))
+		if len(kinds) > 0 {
+			query = query.Where("kind IN ?", kinds)
 		}
 		if len(tried) > 0 {
 			query = query.Where("id NOT IN ?", tried)
@@ -349,7 +424,7 @@ func (s *Service) claimJobSQLite(tx *gorm.DB, kind string, claimed *model.Job) e
 			return err
 		}
 		tried = append(tried, job.ID)
-		if err := s.tryClaim(tx, job, claimed); err != nil {
+		if err := s.tryClaim(tx, owner, job, claimed); err != nil {
 			if errors.Is(err, errJobLocked) {
 				continue
 			}
@@ -363,7 +438,7 @@ func (s *Service) claimJobSQLite(tx *gorm.DB, kind string, claimed *model.Job) e
 	return errNoJob
 }
 
-func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error {
+func (s *Service) tryClaim(tx *gorm.DB, owner claimer, job model.Job, claimed *model.Job) error {
 	now := s.now()
 	until := now.Add(s.worker.LeaseDuration)
 	if key := jobLockKey(job); key != "" {
@@ -384,7 +459,9 @@ func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error
 			"progress_current": 0,
 			"progress_total":   0,
 			"log_json":         appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: "info", Message: "任务已开始，正在准备处理"}),
-			"lease_owner":      s.worker.InstanceID,
+			"lease_owner":      owner.ID,
+			"node_id":          owner.ID,
+			"node_name":        owner.Name,
 			"lease_until":      until,
 			"heartbeat_at":     now,
 			"started_at":       now,
@@ -400,7 +477,8 @@ func (s *Service) tryClaim(tx *gorm.DB, job model.Job, claimed *model.Job) error
 	}
 	job.Status = model.JobRunning
 	job.Attempts++
-	job.LeaseOwner = s.worker.InstanceID
+	job.LeaseOwner = owner.ID
+	job.NodeID, job.NodeName = owner.ID, owner.Name
 	job.LeaseUntil = &until
 	job.HeartbeatAt = &now
 	job.StartedAt = &now
@@ -442,6 +520,8 @@ func acquireJobLock(tx *gorm.DB, key, jobID string, now, until time.Time) (bool,
 }
 
 func (s *Service) executeJob(ctx context.Context, job model.Job) {
+	s.running.Add(1)
+	defer s.running.Add(-1)
 	runCtx, cancel := context.WithCancelCause(ctx)
 	stopHeartbeat := s.heartbeat(runCtx, cancel, job)
 	defer func() {
@@ -463,17 +543,105 @@ func (s *Service) executeJob(ctx context.Context, job model.Job) {
 	switch job.Kind {
 	case model.JobIngest:
 		s.RunIngest(runCtx, job.ID)
-	case model.JobReplicate:
-		s.RunReplicate(runCtx, job.ID)
-	case model.JobAnalyze:
-		s.RunAnalyze(runCtx, job.ID)
-	case model.JobIndex:
-		s.RunIndex(runCtx, job.ID)
+	case model.JobReplicate, model.JobAnalyze, model.JobIndex:
+		s.runLocal(runCtx, job)
 	case model.JobGroup:
 		s.RunGroup(runCtx, job.ID)
 	default:
 		s.failJob(job.ID, job.LeaseOwner, "未知任务类型")
 	}
+}
+
+// runLocal executes a prepared job on the master with the same executor that
+// worker nodes use, then commits or records the outcome.
+func (s *Service) runLocal(ctx context.Context, job model.Job) {
+	in, err := s.PrepareJob(ctx, job)
+	if err != nil {
+		s.handlePrepareError(ctx, job, err)
+		return
+	}
+	out, err := jobexec.Run(ctx, s.localEnv(job), in)
+	if err != nil {
+		if ctx.Err() != nil {
+			if !errors.Is(context.Cause(ctx), errLeaseLost) {
+				s.interruptJob(job)
+			}
+			return
+		}
+		message, extra := jobexec.Failure(job.Kind, err)
+		s.logf("%s job failed: %s", job.Kind, message)
+		s.recordFailure(job, message, extra)
+		return
+	}
+	if err := s.CommitJob(ctx, job, out); err != nil && !errors.Is(err, errLeaseLost) {
+		s.logf("commit %s job: %v", job.Kind, err)
+		s.recordFailure(job, "写入任务结果失败", nil)
+	}
+}
+
+// PrepareJob builds the executor input for a leased job. The input contains
+// decrypted credentials and must only travel over an authenticated channel.
+func (s *Service) PrepareJob(ctx context.Context, job model.Job) (jobexec.Input, error) {
+	in := jobexec.Input{JobID: job.ID, Kind: job.Kind}
+	if job.StartedAt != nil {
+		in.StartedAt = *job.StartedAt
+	}
+	var err error
+	switch job.Kind {
+	case model.JobReplicate:
+		in.Replicate, err = s.prepareReplicate(ctx, job)
+		if err == nil && in.Replicate == nil {
+			// Nothing to transfer: the drive is disabled or the target was withdrawn.
+			if err := s.commitReplicate(job, nil); err != nil {
+				return in, err
+			}
+			return in, errJobDone
+		}
+	case model.JobAnalyze:
+		in.Analyze, err = s.prepareAnalyze(ctx, job)
+	case model.JobIndex:
+		in.Index, err = s.prepareIndex(ctx, job)
+	default:
+		err = fmt.Errorf("任务类型 %s 不能交给节点执行", job.Kind)
+	}
+	return in, err
+}
+
+// CommitJob stores a node's result under the job's lease.
+func (s *Service) CommitJob(ctx context.Context, job model.Job, out jobexec.Result) error {
+	switch job.Kind {
+	case model.JobReplicate:
+		return s.commitReplicate(job, out.Replicate)
+	case model.JobAnalyze:
+		return s.commitAnalyze(ctx, job, out.Analyze)
+	case model.JobIndex:
+		return s.commitIndex(ctx, job, out.Index)
+	}
+	return fmt.Errorf("未知任务类型 %s", job.Kind)
+}
+
+// recordFailure marks a job failed together with its kind's projection.
+func (s *Service) recordFailure(job model.Job, message string, extra map[string]int) {
+	message = redact(message)
+	switch job.Kind {
+	case model.JobReplicate:
+		s.failReplicaJob(job.ID, job.LeaseOwner, job.ReplicaID, message)
+	case model.JobAnalyze:
+		s.failJob(job.ID, job.LeaseOwner, message, func(tx *gorm.DB) error { return s.failAnalyzeTx(tx, job, message) })
+	case model.JobIndex:
+		values := map[string]any{}
+		for k, v := range extra {
+			values[k] = v
+		}
+		s.failIndex(job.ID, job.LeaseOwner, job.MaterialID, message, values)
+	default:
+		s.failJob(job.ID, job.LeaseOwner, message)
+	}
+}
+
+// interruptJob returns a job whose executor stopped early to the queue.
+func (s *Service) interruptJob(job model.Job) {
+	s.requeueJob(job.ID, job.LeaseOwner, func(tx *gorm.DB) error { return s.resetProjectionTx(tx, []string{job.ID}, s.now()) })
 }
 
 func (s *Service) heartbeat(parent context.Context, cancel context.CancelCauseFunc, job model.Job) func() {

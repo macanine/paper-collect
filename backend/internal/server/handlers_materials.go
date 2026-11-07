@@ -45,11 +45,18 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 		filter.Part = part
 	}
 	if status := c.Query("status"); status != "" {
-		if !isOneOf(status, model.StatusPendingStorage, model.StatusArchived, model.StatusDegraded) {
+		if !isOneOf(status, model.StatusArchived, model.StatusMissing) {
 			respondError(c, apperr.Validation("status 不在允许范围内"))
 			return
 		}
 		filter.Status = status
+	}
+	if status := c.Query("sync_status"); status != "" {
+		if !isOneOf(status, model.SyncStatuses...) {
+			respondError(c, apperr.Validation("sync_status 无效"))
+			return
+		}
+		filter.SyncStatus = status
 	}
 	if reason := c.Query("reason"); reason != "" {
 		if !isOneOf(reason, model.ReviewLowConfidence, model.ReviewPackSuggestion, model.ReviewDuplicate, model.ReviewAnalysisFailed, model.ReviewManual) {
@@ -84,7 +91,7 @@ func (s *Server) handleLibraryStats(c *gin.Context) {
 	s.respondData(c, http.StatusOK, libraryStatsDTO{
 		Packs: counts.Packs, Files: counts.Files, Processing: counts.Processing, Review: counts.Review,
 		Ready: counts.Ready, Failed: counts.Failed, MissingAnswers: counts.MissingAnswers, Trashed: counts.Trashed,
-		PendingStorage: counts.PendingStorage, Archived: counts.Archived, Degraded: counts.Degraded,
+		Archived: counts.Archived, Missing: counts.Missing, WaitingCatalog: counts.WaitingCatalog, Syncing: counts.Syncing, Synced: counts.Synced, Attention: counts.Attention, NotRequired: counts.NotRequired,
 	})
 }
 

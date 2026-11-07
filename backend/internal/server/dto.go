@@ -44,9 +44,13 @@ type libraryStatsDTO struct {
 	Failed         int64 `json:"failed"`
 	MissingAnswers int64 `json:"missing_answers"`
 	Trashed        int64 `json:"trashed"`
-	PendingStorage int64 `json:"pending_storage"`
+	WaitingCatalog int64 `json:"waiting_catalog"`
+	Syncing        int64 `json:"syncing"`
+	Synced         int64 `json:"synced"`
+	Attention      int64 `json:"attention"`
+	NotRequired    int64 `json:"not_required"`
 	Archived       int64 `json:"archived"`
-	Degraded       int64 `json:"degraded"`
+	Missing        int64 `json:"missing"`
 }
 
 type jobStatsDTO struct {
@@ -70,6 +74,8 @@ type materialDTO struct {
 	ReviewReasons   []string      `json:"review_reasons"`
 	SuggestedPack   *packBriefDTO `json:"suggested_pack"`
 	Status          string        `json:"status"`
+	SyncStatus      string        `json:"sync_status"`
+	SyncPlannedAt   *time.Time    `json:"sync_planned_at"`
 	MediaType       string        `json:"media_type"`
 	SizeBytes       int64         `json:"size_bytes"`
 	SHA256          string        `json:"sha256"`
@@ -105,6 +111,7 @@ type packMemberDTO struct {
 	AnswerStartPage int    `json:"answer_start_page"`
 	Stage           string `json:"stage"`
 	Status          string `json:"status"`
+	SyncStatus      string `json:"sync_status"`
 	MediaType       string `json:"media_type"`
 	SizeBytes       int64  `json:"size_bytes"`
 	Position        int    `json:"position"`
@@ -167,7 +174,13 @@ type pullCacheDTO struct {
 type replicaDTO struct {
 	ID             string     `json:"id"`
 	BlobID         string     `json:"blob_id"`
-	ProviderID     string     `json:"provider_id"`
+	DriveID        string     `json:"drive_id"`
+	RuleID         string     `json:"rule_id"`
+	DesiredPath    string     `json:"desired_path"`
+	RemotePath     string     `json:"remote_path"`
+	SkipReason     string     `json:"skip_reason"`
+	Share          bool       `json:"share"`
+	Required       bool       `json:"required"`
 	Status         string     `json:"status"`
 	SizeBytes      int64      `json:"size_bytes"`
 	Verification   string     `json:"verification"`
@@ -243,6 +256,8 @@ type jobDTO struct {
 	UploadID        string         `json:"upload_id"`
 	ReplicaID       string         `json:"replica_id"`
 	MaterialID      string         `json:"material_id"`
+	NodeID          string         `json:"node_id"`
+	NodeName        string         `json:"node_name"`
 	Attempts        int            `json:"attempts"`
 	Error           string         `json:"error"`
 	ProgressMessage string         `json:"progress_message"`
@@ -256,23 +271,22 @@ type jobDTO struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
-type providerDTO struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Kind             string            `json:"kind"`
-	Role             string            `json:"role"`
-	Enabled          bool              `json:"enabled"`
-	Priority         int               `json:"priority"`
-	Weight           int               `json:"weight"`
-	Config           map[string]string `json:"config"`
-	SecretConfigured bool              `json:"secret_configured"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-}
-
-type policyDTO struct {
-	Mode            string `json:"mode"`
-	MinimumReplicas int    `json:"minimum_replicas"`
+type driveDTO struct {
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	Kind             string               `json:"kind"`
+	Enabled          bool                 `json:"enabled"`
+	RootPath         string               `json:"root_path"`
+	MaxFileBytes     int64                `json:"max_file_bytes"`
+	AllowedExts      []string             `json:"allowed_exts"`
+	ReadOrder        int                  `json:"read_order"`
+	OnPathChange     string               `json:"on_path_change"`
+	Config           map[string]string    `json:"config"`
+	SecretConfigured bool                 `json:"secret_configured"`
+	Capabilities     storage.Capabilities `json:"capabilities"`
+	Stats            map[string]int64     `json:"stats"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
 }
 
 type loginDTO struct {
@@ -287,7 +301,7 @@ type createKeyDTO struct {
 	Secret string    `json:"secret"`
 }
 
-type providerTestDTO struct {
+type driveTestDTO struct {
 	Healthy      bool                 `json:"healthy"`
 	Message      string               `json:"message"`
 	Capabilities storage.Capabilities `json:"capabilities"`
@@ -338,7 +352,7 @@ func toMaterial(v service.MaterialView) materialDTO {
 	out := materialDTO{
 		ID: m.ID, PackID: m.PackID, Position: m.Position, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
 		Title: m.Title, FileName: m.FileName, OriginalName: m.OriginalName, Stage: m.Stage, ReviewReasons: reasons,
-		Status: m.Status, MediaType: m.MediaType, SizeBytes: m.SizeBytes, SHA256: m.SHA256,
+		Status: m.Status, SyncStatus: m.SyncStatus, SyncPlannedAt: m.SyncPlannedAt, MediaType: m.MediaType, SizeBytes: m.SizeBytes, SHA256: m.SHA256,
 		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
 	}
 	if v.Suggested != nil {
@@ -369,7 +383,7 @@ func toPack(v service.PackView) packDTO {
 	for _, m := range v.Members {
 		members = append(members, packMemberDTO{
 			ID: m.ID, Title: m.Title, FileName: m.FileName, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
-			Stage: m.Stage, Status: m.Status, MediaType: m.MediaType, SizeBytes: m.SizeBytes, Position: m.Position,
+			Stage: m.Stage, Status: m.Status, SyncStatus: m.SyncStatus, MediaType: m.MediaType, SizeBytes: m.SizeBytes, Position: m.Position,
 		})
 	}
 	subjects, tags := v.Subjects, v.Tags
@@ -417,9 +431,9 @@ func toFacets(f service.PackFacets) packFacetsDTO {
 
 func toReplica(r model.Replica) replicaDTO {
 	return replicaDTO{
-		ID:             r.ID,
-		BlobID:         r.BlobID,
-		ProviderID:     r.ProviderID,
+		ID:      r.ID,
+		BlobID:  r.BlobID,
+		DriveID: r.DriveID, RuleID: r.RuleID, DesiredPath: r.DesiredPath, RemotePath: r.RemotePath, SkipReason: r.SkipReason, Share: r.Share, Required: r.Required,
 		Status:         r.Status,
 		SizeBytes:      r.SizeBytes,
 		Verification:   r.Verification,
@@ -503,6 +517,8 @@ func toJob(j model.Job) jobDTO {
 		UploadID:        j.UploadID,
 		ReplicaID:       j.ReplicaID,
 		MaterialID:      j.MaterialID,
+		NodeID:          j.NodeID,
+		NodeName:        j.NodeName,
 		Attempts:        j.Attempts,
 		Error:           j.Error,
 		ProgressMessage: j.ProgressMessage,
@@ -517,25 +533,8 @@ func toJob(j model.Job) jobDTO {
 	}
 }
 
-func toProvider(p model.StorageProvider) providerDTO {
-	cfg := model.DecodeMap(p.ConfigJSON)
-	return providerDTO{
-		ID:               p.ID,
-		Name:             p.Name,
-		Kind:             p.Kind,
-		Role:             p.Role,
-		Enabled:          p.Enabled,
-		Priority:         p.Priority,
-		Weight:           p.Weight,
-		Config:           cfg,
-		SecretConfigured: p.SecretCipher != "",
-		CreatedAt:        p.CreatedAt,
-		UpdatedAt:        p.UpdatedAt,
-	}
-}
-
-func toPolicy(p model.Policy) policyDTO {
-	return policyDTO{Mode: p.Mode, MinimumReplicas: p.MinimumReplicas}
+func toDrive(p model.Drive) driveDTO {
+	return driveDTO{ID: p.ID, Name: p.Name, Kind: p.Kind, Enabled: p.Enabled, RootPath: p.RootPath, MaxFileBytes: p.MaxFileBytes, AllowedExts: model.DecodeStrings(p.AllowedExtsJSON), ReadOrder: p.ReadOrder, OnPathChange: p.OnPathChange, Config: model.DecodeMap(p.ConfigJSON), SecretConfigured: p.SecretCipher != "", CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func toPage[T any, U any](src service.Page[T], convert func(T) U) pageDTO[U] {
@@ -743,5 +742,56 @@ func toQuestion(row model.QuestionBlock) questionDTO {
 	return questionDTO{
 		ID: row.ID, MaterialID: row.MaterialID, PageNo: row.PageNo, Seq: row.Seq,
 		QuestionNo: row.QuestionNo, Text: row.Text, Confidence: row.Confidence, CreatedAt: row.CreatedAt,
+	}
+}
+
+type nodeDTO struct {
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	IsMaster     bool           `json:"is_master"`
+	Enabled      bool           `json:"enabled"`
+	Draining     bool           `json:"draining"`
+	Status       string         `json:"status"`
+	Kinds        []string       `json:"kinds"`
+	Slots        map[string]int `json:"slots"`
+	Running      int            `json:"running"`
+	RunningKinds map[string]int `json:"running_kinds"`
+	Succeeded    int            `json:"succeeded_1h"`
+	Failed       int            `json:"failed_1h"`
+	Version      string         `json:"version"`
+	Protocol     int            `json:"protocol"`
+	LastIP       string         `json:"last_ip"`
+	LastSeenAt   *time.Time     `json:"last_seen_at"`
+	StartedAt    *time.Time     `json:"started_at"`
+	CPUPercent   float64        `json:"cpu_percent"`
+	CPUCores     int            `json:"cpu_cores"`
+	ProcCPU      float64        `json:"proc_cpu_percent"`
+	MemUsed      int64          `json:"mem_used"`
+	MemTotal     int64          `json:"mem_total"`
+	ProcRSS      int64          `json:"proc_rss"`
+	NetRxBps     int64          `json:"net_rx_bps"`
+	NetTxBps     int64          `json:"net_tx_bps"`
+	CacheUsed    int64          `json:"cache_used"`
+	CacheMax     int64          `json:"cache_max"`
+	CreatedAt    time.Time      `json:"created_at"`
+}
+
+// nodeCreatedDTO is the only response that contains a node token.
+type nodeCreatedDTO struct {
+	nodeDTO
+	Token string `json:"token"`
+}
+
+func toNode(v service.NodeView) nodeDTO {
+	n := v.Node
+	return nodeDTO{
+		ID: n.ID, Name: n.Name, IsMaster: n.IsMaster, Enabled: n.Enabled, Draining: n.Draining,
+		Status: v.Status, Kinds: v.Kinds, Slots: v.Slots, Running: n.Running, RunningKinds: v.RunningKinds,
+		Succeeded: v.Succeeded, Failed: v.Failed, Version: n.Version, Protocol: n.Protocol,
+		LastIP: n.LastIP, LastSeenAt: n.LastSeenAt, StartedAt: n.StartedAt,
+		CPUPercent: n.CPUPercent, CPUCores: n.CPUCores, ProcCPU: n.ProcCPU,
+		MemUsed: n.MemUsed, MemTotal: n.MemTotal, ProcRSS: n.ProcRSS,
+		NetRxBps: n.NetRxBps, NetTxBps: n.NetTxBps, CacheUsed: n.CacheUsed, CacheMax: n.CacheMax,
+		CreatedAt: n.CreatedAt,
 	}
 }

@@ -1,4 +1,6 @@
-import type { SubjectCode, Part, DocType, Term, Stage, ReviewReason, Grade, MaterialStatus, UserRole, ProviderRole, StorageMode, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus } from '../api/types';
+import type { SubjectCode, Part, DocType, Term, Stage, ReviewReason, Grade, MaterialStatus, SyncStatus, UserRole, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus,
+  NodeStatus,
+} from '../api/types';
 
 export const SUBJECT_LABELS: Record<SubjectCode, string> = {
   chinese: '语文',
@@ -94,9 +96,16 @@ export const FIELD_LABELS: Record<string, string> = {
 };
 
 export const MATERIAL_STATUS_LABELS: Record<MaterialStatus, string> = {
-  pending_storage: '待存储',
   archived: '已归档',
-  degraded: '降级',
+  missing: '原件缺失',
+};
+
+export const SYNC_STATUS_LABELS: Record<SyncStatus, string> = {
+  waiting_catalog: '等待编目',
+  not_required: '无需同步',
+  syncing: '同步中',
+  synced: '已同步',
+  attention: '需处理',
 };
 
 export const USER_ROLE_LABELS: Record<UserRole, string> = {
@@ -105,22 +114,14 @@ export const USER_ROLE_LABELS: Record<UserRole, string> = {
   viewer: '查看者',
 };
 
-export const PROVIDER_ROLE_LABELS: Record<ProviderRole, string> = {
-  primary: '主端',
-  backup: '备端',
-};
-
-export const STORAGE_MODE_LABELS: Record<StorageMode, string> = {
-  mirror_all: '全量镜像',
-  primary_backup: '主备读写',
-  balanced: '均衡分配',
-};
-
 export const REPLICA_STATUS_LABELS: Record<ReplicaStatus, string> = {
-  pending: '待复制',
+  pending: '待处理',
   uploading: '上传中',
+  moving: '移动中',
   ready: '已就绪',
   failed: '失败',
+  skipped: '已跳过',
+  orphaned: '规则外',
 };
 
 export const VERIFICATION_LABELS: Record<Verification, string> = {
@@ -182,6 +183,7 @@ export const SCOPE_LABELS: Record<Scope, string> = {
   'ai:write': 'AI 配置管理',
   'search:read': '搜索配置查看',
   'search:write': '搜索配置管理',
+  'nodes:manage': '节点管理',
 };
 
 export const INDEX_STATUS_LABELS: Record<IndexStatus, string> = {
@@ -195,3 +197,11 @@ export const INDEX_STATUS_LABELS: Record<IndexStatus, string> = {
 export function optionsFromLabels<T extends string>(labels: Record<T, string>, keys: readonly T[]): { value: T; label: string }[] {
   return keys.map((value) => ({ value, label: labels[value] }));
 }
+
+export const NODE_STATUS_LABELS: Record<NodeStatus, string> = {
+  online: '在线',
+  stale: '失联',
+  offline: '离线',
+  draining: '排空中',
+  disabled: '已停用',
+};

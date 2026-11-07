@@ -7,17 +7,8 @@ services:
       - default
       - new-api
 
-  app-1:
+  app:
     depends_on:
       app-network-proxy:
         condition: service_started
 
-  app-2:
-    depends_on:
-      app-network-proxy:
-        condition: service_started
-
-networks:
-  new-api:
-    external: true
-    name: ${NEW_API_NETWORK:-new-api_new-api-network}

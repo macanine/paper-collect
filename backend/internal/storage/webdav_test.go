@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,7 +29,7 @@ type davStore struct {
 	objects map[string][]byte // 解码后的路径 -> 内容
 	dirs    map[string]bool
 	mkcol   []string
-	// 可选覆盖：用于构造失败场景。
+	// 可选覆盖：用于构造失败场景。getBody 只在对象写入后替换 HEAD/GET 的内容。
 	putStatus  int
 	headStatus int
 	getBody    map[string][]byte
@@ -78,8 +79,8 @@ func (s *davStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, exists := s.objects[path]
-		if override, ok := s.getBody[path]; ok {
-			body, exists = override, true
+		if override, ok := s.getBody[path]; ok && exists {
+			body = override
 		}
 		if s.headStatus != 0 {
 			w.WriteHeader(s.headStatus)
@@ -93,14 +94,36 @@ func (s *davStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case "GET":
 		body, exists := s.objects[path]
-		if override, ok := s.getBody[path]; ok {
-			body, exists = override, true
+		if override, ok := s.getBody[path]; ok && exists {
+			body = override
 		}
 		if !exists {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		_, _ = w.Write(body)
+	case "MOVE":
+		dest, err := url.Parse(r.Header.Get("Destination"))
+		body, exists := s.objects[path]
+		switch {
+		case err != nil:
+			w.WriteHeader(http.StatusBadRequest)
+		case !exists:
+			w.WriteHeader(http.StatusNotFound)
+		case s.objects[dest.Path] != nil && r.Header.Get("Overwrite") == "F":
+			w.WriteHeader(http.StatusPreconditionFailed)
+		default:
+			s.objects[dest.Path] = body
+			delete(s.objects, path)
+			w.WriteHeader(http.StatusCreated)
+		}
+	case "DELETE":
+		if _, exists := s.objects[path]; !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		delete(s.objects, path)
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -144,7 +167,7 @@ func TestWebDAVPutCreatesCollectionsAndVerifiesSHA256(t *testing.T) {
 	src, digest := writeTempSource(t, data)
 	key := "ab/" + digest + "/paper.pdf"
 
-	stored, err := adapter.Put(context.Background(), Object{Key: key, Name: "paper.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
+	stored, err := adapter.Put(context.Background(), Object{Key: key, Path: src, SHA256: digest, Size: int64(len(data))})
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -487,5 +510,57 @@ func TestWebDAVCapabilitiesDefault(t *testing.T) {
 	caps := adapter.Capabilities()
 	if !caps.Upload || !caps.Download || caps.Share {
 		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestWebDAVPutAdoptsSameObjectAndRefusesDifferentOne(t *testing.T) {
+	store := newDavStore()
+	srv := httptest.NewServer(store)
+	defer srv.Close()
+	adapter := davAdapter(t, srv.URL, nil)
+	data := []byte("same bytes")
+	src, digest := writeTempSource(t, data)
+	store.objects["/dav/a/same.pdf"] = data
+	store.objects["/dav/a/other.pdf"] = []byte("other byte")
+
+	stored, err := adapter.Put(context.Background(), Object{Key: "a/same.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
+	if err != nil || stored.RemoteID != "a/same.pdf" || stored.Verification != "sha256" {
+		t.Fatalf("adopt = %+v, %v", stored, err)
+	}
+	_, err = adapter.Put(context.Background(), Object{Key: "a/other.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
+	requireClass(t, err, ClassConflict)
+	if string(store.objects["/dav/a/other.pdf"]) != "other byte" {
+		t.Fatal("existing object was overwritten")
+	}
+}
+
+func TestWebDAVMoveAndDelete(t *testing.T) {
+	store := newDavStore()
+	srv := httptest.NewServer(store)
+	defer srv.Close()
+	adapter := davAdapter(t, srv.URL, map[string]string{"path_prefix": "root"})
+	store.objects["/dav/root/old/a.pdf"] = []byte("a")
+	store.objects["/dav/root/taken/b.pdf"] = []byte("b")
+	mover := adapter.(Mover)
+
+	stored, err := mover.Move(context.Background(), "old/a.pdf", "数学/新.pdf")
+	if err != nil || stored.RemoteID != "数学/新.pdf" {
+		t.Fatalf("move = %+v, %v", stored, err)
+	}
+	if string(store.objects["/dav/root/数学/新.pdf"]) != "a" || store.objects["/dav/root/old/a.pdf"] != nil {
+		t.Fatalf("objects after move: %v", store.objects)
+	}
+	_, err = mover.Move(context.Background(), "数学/新.pdf", "taken/b.pdf")
+	requireClass(t, err, ClassConflict)
+
+	deleter := adapter.(Deleter)
+	if err := deleter.Delete(context.Background(), "数学/新.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleter.Delete(context.Background(), "数学/新.pdf"); err != nil {
+		t.Fatalf("deleting a missing object: %v", err)
+	}
+	if len(store.objects) != 1 {
+		t.Fatalf("objects after delete: %v", store.objects)
 	}
 }

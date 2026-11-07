@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -16,13 +14,14 @@ import (
 
 // MaterialFilter holds optional file-list filters. Empty fields are ignored.
 type MaterialFilter struct {
-	Q      string
-	Stage  string
-	Part   string
-	PackID string
-	Status string
-	SHA256 string
-	Reason string
+	Q          string
+	Stage      string
+	Part       string
+	PackID     string
+	Status     string
+	SyncStatus string
+	SHA256     string
+	Reason     string
 }
 
 // MaterialView is one file with its pack and, for detail views, sources and replicas.
@@ -65,6 +64,9 @@ func (s *Service) materialQuery(db *gorm.DB, f MaterialFilter) *gorm.DB {
 	}
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)
+	}
+	if f.SyncStatus != "" {
+		q = q.Where("sync_status = ?", f.SyncStatus)
 	}
 	if f.SHA256 != "" {
 		q = q.Where("sha256 = ?", strings.ToLower(f.SHA256))
@@ -316,9 +318,16 @@ func (s *Service) setStageTx(tx *gorm.DB, id, stage string, reasons []string, su
 		reasons = nil
 		suggestedPackID = ""
 	}
-	return wrap("set stage", tx.Model(&model.Material{}).Where("id = ?", id).Updates(map[string]any{
+	err := wrap("set stage", tx.Model(&model.Material{}).Where("id = ?", id).Updates(map[string]any{
 		"stage": stage, "review_reasons_json": model.EncodeStrings(reasons), "suggested_pack_id": suggestedPackID,
 	}).Error)
+	if err != nil {
+		return err
+	}
+	if stage == model.StageReady {
+		_, err = s.planMaterialTx(tx, id, true)
+	}
+	return err
 }
 
 // AcceptMaterials confirms files in the review inbox as they are now.
@@ -361,46 +370,6 @@ func (s *Service) AcceptMaterials(ctx context.Context, p auth.Principal, ids []s
 	}
 	s.renameMaterialFiles(ctx, renamed)
 	return count, nil
-}
-
-// renameLocalReplicaFiles keeps local provider copies in sync with the
-// canonical file name. Remote adapters have no rename capability, so their
-// objects keep the name used at upload time.
-func (s *Service) renameLocalReplicaFiles(ctx context.Context, materialID string) {
-	db := s.db.WithContext(ctx)
-	var material model.Material
-	if err := db.Where("id = ?", materialID).First(&material).Error; err != nil {
-		return
-	}
-	var replicas []model.Replica
-	if err := db.Where("blob_id = ?", material.BlobID).Find(&replicas).Error; err != nil {
-		return
-	}
-	for _, replica := range replicas {
-		var provider model.StorageProvider
-		if err := db.Where("id = ?", replica.ProviderID).First(&provider).Error; err != nil || provider.Kind != model.KindLocal {
-			continue
-		}
-		if replica.Status != model.ReplicaReady || replica.RemoteKey == "" {
-			continue
-		}
-		root := filepath.Join(s.blobs.DataDir(), "providers", provider.ID)
-		oldPath := filepath.Join(root, filepath.FromSlash(replica.RemoteKey))
-		newKey := objectKey(material.SHA256, safeRemoteName(material.FileName))
-		newPath := filepath.Join(root, filepath.FromSlash(newKey))
-		if oldPath == newPath {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
-			continue
-		}
-		if err := os.Rename(oldPath, newPath); err != nil {
-			continue
-		}
-		_ = db.Model(&model.Replica{}).Where("id = ?", replica.ID).Updates(map[string]any{
-			"remote_key": newKey, "remote_name": safeRemoteName(material.FileName), "updated_at": s.now(),
-		}).Error
-	}
 }
 
 func insertPackSubjects(tx *gorm.DB, packID string, codes []string) error {
