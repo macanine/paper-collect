@@ -14,9 +14,6 @@ services:
       MASTER_URL: "${MASTER_URL:?请设置主端地址，非本机地址必须是 https}"
       NODE_TOKEN: "${NODE_TOKEN:?请设置在主端「节点」页面创建的令牌}"
       CACHE_DIR: /app/cache
-      CACHE_MAX_BYTES: "${CACHE_MAX_BYTES:-21474836480}"
-      WORKER_SLOTS: "${WORKER_SLOTS:-replicate=2,analyze=1,index=1}"
-      RAPIDOCR_URL: "${RAPIDOCR_URL:-}"
       TZ: "${TZ:-Asia/Shanghai}"
     volumes:
       - worker-cache:/app/cache

@@ -165,6 +165,7 @@ web/src/
 | Drive | `storage_drives` | kind 不可改；secret 只写不读；local 根目录由服务端固定；只描述连接，不含策略 |
 | Rule / RuleTarget | `sync_rules`、`sync_rule_targets` | 有序、命中第一条；唯一兜底规则 `is_default`；`(rule_id, drive_id)` 唯一 |
 | Replica | `replicas` | `(blob_id, drive_id)` 唯一；`desired_path` 与 `remote_path` 分开；上传与分享状态分离；规则外副本保留 |
+| ClusterSettings / Node | `cluster_settings`、`nodes` | 主端保存调度策略；从端保存主端期望的槽位、缓存上限、OCR 服务和配置修订号，心跳回报实际运行状态与已应用修订 |
 | AIProvider / OCRProvider / AISettings | `ai_providers`、`ocr_providers`、`ai_settings` | API Key/OCR 令牌加密；端点没有物理删除，只能停用；设置保存当前 OCR provider |
 | MaterialAnalysis | `material_analyses` | 每资料一行；`applied_at` 记录自动/手动应用时间；图片不落盘 |
 | SearchSettings | `search_settings` | 单例；默认启用、500 页、10 页/批、12000 字/批 |
@@ -632,7 +633,15 @@ make test-all                   # 全量：go test、go vet、前端测试与构
 
 一个主端、任意多个从端。主端持有数据库、CAS 和凭据，负责鉴权和调度；从端只领取任务、执行、回报，互不通信，并且只需要能主动连到主端。部署步骤见 [DEPLOYMENT.md](DEPLOYMENT.md#6-主从节点)，接口见 [API.md](API.md#节点)。
 
-### 18.1 任务三段化
+### 18.1 主端管理的运行配置
+
+`cluster_settings` 单例保存主端可执行的 `replicate`/`analyze`/`index` 类型、主端归档/复制/分析/索引并发、租约、心跳、领取等待和空闲轮询。管理台保存后更新全局修订号并递增所有从端的 `config_revision`，同时取消并重建主端本地 runner；正在执行的任务使用根上下文继续完成，不会被配置重载打断。
+
+每个从端节点的期望槽位、缓存上限和可用 OCRProvider ID 保存在 `nodes`。首次同步心跳在领取任务前取得完整配置，之后根据修订号重配 claim loops。`applied_config_revision` 由心跳回报，管理台据此区分“已应用”和“等待应用”。`ROLE=worker`、`MASTER_URL`、`NODE_TOKEN` 和本机 `CACHE_DIR` 是从端断网或首次启动前必须具备的接入信息；其余运行参数不读环境变量。
+
+OCR 配置不使用按引擎写死的从端地址。节点只声明自己能访问哪些已注册的 RapidOCR/PaddleOCR/MinerU 服务；选择多个时按全局 `OCRProvider.priority` 调度。任务输入仍使用统一的 OCR 配置结构，分析、索引和解析缓存不需要识别引擎专用分支。
+
+### 18.2 任务三段化
 
 `replicate`、`analyze`、`index` 分成三段，单机和集群走同一条代码路径：
 
@@ -644,30 +653,30 @@ make test-all                   # 全量：go test、go vet、前端测试与构
 
 `ingest`、`group` 和 `local` 网盘的复制只在主端运行。`local` 网盘的目录在主端 `DATA_DIR` 内，如果交给从端，从端会写到自己的磁盘，主端却记录副本就绪，所以领取时用 `claimer.RemoteOnly` 按网盘类型过滤。
 
-### 18.2 租约
+### 18.3 租约
 
-- `lease_owner` 是节点 ID。从端每 10 秒心跳一次，主端在同一事务内为上报的任务续租，并返回已失去租约的任务。
+- `lease_owner` 是节点 ID。从端按主端下发的间隔心跳（默认 10 秒），主端在同一事务内为上报的任务续租，并返回已失去租约的任务。
 - 从端断线超过租约时长后，reaper 回收任务；旧执行者的提交因 `lease_owner` 不符被拒绝。
 - 同一节点可能在断线后重新领回同一任务，此时租约归属无法区分两次执行，所以由从端进程取消旧的执行。
 - 领取请求长轮询，排空中或没有可执行类型的节点也会等满超时，从端不会空转；排空和停用状态在等待期间重新读取。
 - 主端重启不会重置从端的任务，只恢复 `lease_owner` 为主端自身的任务。
 
-### 18.3 从端的原件与凭据
+### 18.4 从端的原件与凭据
 
-- 原件缓存在 `CACHE_DIR/blobs/<sha>`，读取和下载后都校验 SHA-256；断线时用 Range 续传，同一原件只下载一份。淘汰按 LRU，运行中任务用到的文件不会被淘汰。
+- 原件缓存在从端本机 `CACHE_DIR/blobs/<sha>`，读取和下载后都校验 SHA-256；断线时用 Range 续传，同一原件只下载一份。淘汰按 LRU，运行中任务用到的文件不会被淘汰；上限由主端节点配置下发。
 - 主端缺少原件时从已就绪的云端副本读取并校验，再转发给从端。
 - 凭据只在任务输入里，从端不落盘，不写日志和进度。节点令牌只保存哈希。
 - 结果内联在 `complete` 请求里（gzip，上限 32 MiB）；主端拒绝的结果会报告为任务失败，避免反复重排。
 
-### 18.4 监控
+### 18.5 监控
 
-每个节点每 10 秒采样 CPU、内存和网络。`nodes` 表只保存最新快照，历史在主端内存里，每节点 360 个点，重启后清空。状态由心跳时间推导：30 秒内在线，到租约时长为失联，超过为离线。
+每个节点按当前心跳周期采样 CPU、内存和网络。`nodes` 表只保存最新快照，历史在主端内存里，每节点 360 个点，重启后清空。状态由心跳时间推导：30 秒内在线，到租约时长为失联，超过为离线。
 
-### 18.5 上传路由
+### 18.6 上传路由
 
 每个远程网盘可以在管理台配置 `pool`、`preferred` 或 `exclusive` 路由，并为主端/从端设置不重复的优先级。领取复制任务时，主端会在数据库事务内根据网盘、节点状态和路由优先级过滤候选任务：首选节点在线时只有它领取；节点停用、排空或租约时间内未心跳时切换到下一级；`preferred` 在全部配置节点不可用时回退到普通节点池，`exclusive` 则保持 pending。上传完成后的副本提交和资料级 `sync_status` 汇总仍由主端事务完成。
 
-### 18.6 尚未实现
+### 18.7 尚未实现
 
 - 从端直接从云端副本取原件以减少主端出口流量（目前由主端转发）；
 - `ingest` 下放、按节点标签批量分配任务；

@@ -260,9 +260,9 @@ func TestReachableKindsSkipsMasterInternalServices(t *testing.T) {
 	svc, conn := newWorkerTestService(t, t.TempDir(), "master")
 	ctx := context.Background()
 	all := []string{model.JobReplicate, model.JobAnalyze, model.JobIndex}
-	check := func(label string, rapidOCR bool, want ...string) {
+	check := func(label string, providerIDs []string, want ...string) {
 		t.Helper()
-		got, err := svc.reachableKinds(ctx, all, rapidOCR)
+		got, _, err := svc.reachableKinds(ctx, all, providerIDs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -285,8 +285,8 @@ func TestReachableKindsSkipsMasterInternalServices(t *testing.T) {
 	if err := conn.Model(&model.AISettings{}).Where("1 = 1").Update("ocr_provider_id", ocr.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	check("compose OCR, no override", false, model.JobReplicate)
-	check("compose OCR, own RapidOCR", true, model.JobReplicate, model.JobAnalyze, model.JobIndex)
+	check("compose OCR, no node provider", nil, model.JobReplicate)
+	check("compose OCR selected by node but no model", []string{ocr.ID}, model.JobReplicate)
 
 	addModel := func(id, baseURL string, priority int) {
 		t.Helper()
@@ -295,10 +295,10 @@ func TestReachableKindsSkipsMasterInternalServices(t *testing.T) {
 		}
 	}
 	addModel("gateway", "http://new-api:3000/v1", 1)
-	check("internal gateway only", true, model.JobReplicate)
+	check("internal gateway only", []string{ocr.ID}, model.JobReplicate)
 	addModel("hosted", "https://api.example.com/v1", 2)
 	// Analysis fails over to the hosted endpoint; indexing uses only the first.
-	check("internal gateway first", true, model.JobReplicate, model.JobAnalyze)
+	check("internal gateway first", []string{ocr.ID}, model.JobReplicate, model.JobAnalyze)
 }
 
 func TestIsMasterInternalURL(t *testing.T) {

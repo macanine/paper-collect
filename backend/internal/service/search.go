@@ -166,7 +166,7 @@ func (s *Service) EnqueueMaterialIndex(ctx context.Context, p auth.Principal, ma
 var errJobDone = errors.New("job already complete")
 
 // prepareIndex marks the index state running and builds the executor input.
-func (s *Service) prepareIndex(ctx context.Context, job model.Job) (*jobexec.IndexInput, error) {
+func (s *Service) prepareIndex(ctx context.Context, job model.Job, ocrProviderID string) (*jobexec.IndexInput, error) {
 	db := s.db.WithContext(ctx)
 	var material model.Material
 	if err := db.Where("id = ?", job.MaterialID).First(&material).Error; err != nil {
@@ -194,7 +194,7 @@ func (s *Service) prepareIndex(ctx context.Context, job model.Job) (*jobexec.Ind
 	if err != nil {
 		return nil, err
 	}
-	ocr, key, err := s.ocrConfig(ctx, aiSettings, material.MediaType)
+	ocr, key, err := s.ocrConfigForProvider(ctx, aiSettings, ocrProviderID, material.MediaType)
 	if err != nil {
 		return nil, err
 	}

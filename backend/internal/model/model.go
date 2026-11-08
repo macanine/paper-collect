@@ -449,22 +449,49 @@ type JobLog struct {
 	Metrics    map[string]any `json:"metrics,omitempty"`
 }
 
+// ClusterSettings is the singleton scheduling policy controlled by the master.
+// Workers receive the relevant parts with every heartbeat.
+type ClusterSettings struct {
+	ID                         string `gorm:"primaryKey;size:36"`
+	MasterKindsJSON            string `gorm:"type:text;not null;default:'[]'"`
+	MasterIngestConcurrency    int    `gorm:"not null;default:1"`
+	MasterReplicateConcurrency int    `gorm:"not null;default:2"`
+	MasterAnalyzeConcurrency   int    `gorm:"not null;default:2"`
+	MasterIndexConcurrency     int    `gorm:"not null;default:2"`
+	LeaseSeconds               int    `gorm:"not null;default:120"`
+	HeartbeatSeconds           int    `gorm:"not null;default:10"`
+	ClaimWaitSeconds           int    `gorm:"not null;default:25"`
+	PollSeconds                int    `gorm:"not null;default:2"`
+	Revision                   int64  `gorm:"not null;default:1"`
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+}
+
+// TableName pins the singleton cluster policy table.
+func (ClusterSettings) TableName() string { return "cluster_settings" }
+
 // Node is one job executor. The master registers itself; workers authenticate
-// with a token whose hash is stored here. Only the latest metrics are kept.
+// with a token whose hash is stored here. Configured fields are desired state
+// controlled from the master; the reported fields are the latest heartbeat.
 type Node struct {
-	ID         string `gorm:"primaryKey;size:36"`
-	Name       string `gorm:"size:64;not null"`
-	TokenHash  string `gorm:"size:64;uniqueIndex"`
-	IsMaster   bool   `gorm:"not null;default:false"`
-	Enabled    bool   `gorm:"not null;default:true"`
-	Draining   bool   `gorm:"not null;default:false"`
-	KindsJSON  string `gorm:"type:text;not null;default:'[]'"`
-	SlotsJSON  string `gorm:"type:text;not null;default:'{}'"`
-	Version    string `gorm:"size:64"`
-	Protocol   int    `gorm:"not null;default:0"`
-	LastIP     string `gorm:"size:64"`
-	LastSeenAt *time.Time
-	StartedAt  *time.Time
+	ID                    string `gorm:"primaryKey;size:36"`
+	Name                  string `gorm:"size:64;not null"`
+	TokenHash             string `gorm:"size:64;uniqueIndex"`
+	IsMaster              bool   `gorm:"not null;default:false"`
+	Enabled               bool   `gorm:"not null;default:true"`
+	Draining              bool   `gorm:"not null;default:false"`
+	KindsJSON             string `gorm:"type:text;not null;default:'[]'"`
+	SlotsJSON             string `gorm:"type:text;not null;default:'{}'"`
+	ConfiguredSlotsJSON   string `gorm:"type:text;not null;default:'{}'"`
+	ConfiguredCacheMax    int64  `gorm:"not null;default:0"`
+	OCRProviderIDsJSON    string `gorm:"type:text;not null;default:'[]'"`
+	ConfigRevision        int64  `gorm:"not null;default:1"`
+	AppliedConfigRevision int64  `gorm:"not null;default:0"`
+	Version               string `gorm:"size:64"`
+	Protocol              int    `gorm:"not null;default:0"`
+	LastIP                string `gorm:"size:64"`
+	LastSeenAt            *time.Time
+	StartedAt             *time.Time
 	// The most recent heartbeat sample.
 	CPUPercent float64
 	CPUCores   int
@@ -763,7 +790,7 @@ func Models() []any {
 		&DriveNodeRoute{},
 		&AIProvider{}, &OCRProvider{}, &AISettings{}, &MaterialAnalysis{},
 		&SearchSettings{}, &MaterialText{}, &QuestionBlock{}, &QuestionTerm{}, &MaterialIndexState{},
-		&Node{},
+		&ClusterSettings{}, &Node{},
 	}
 }
 

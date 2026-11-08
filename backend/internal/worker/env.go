@@ -244,7 +244,8 @@ func restart(tmp *os.File) error {
 // evict removes least recently used originals until the cache fits, never
 // removing a file a running job may still use.
 func (w *Worker) evict() {
-	if w.cfg.CacheMax <= 0 {
+	cacheMax := w.cacheMaxValue()
+	if cacheMax <= 0 {
 		return
 	}
 	w.cacheMu.Lock()
@@ -252,7 +253,7 @@ func (w *Worker) evict() {
 	entries, total := w.cacheEntries()
 	sort.Slice(entries, func(i, j int) bool { return entries[i].mod.Before(entries[j].mod) })
 	for _, e := range entries {
-		if total <= w.cfg.CacheMax {
+		if total <= cacheMax {
 			return
 		}
 		if w.pins[e.path] > 0 {

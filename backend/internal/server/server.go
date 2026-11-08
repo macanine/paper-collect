@@ -160,6 +160,8 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.POST("/nodes", s.requireScope(model.ScopeNodesManage), s.handleCreateNode)
 	authGroup.PATCH("/nodes/:id", s.requireScope(model.ScopeNodesManage), s.handlePatchNode)
 	authGroup.GET("/nodes/:id/metrics", s.requireScope(model.ScopeNodesManage), s.handleNodeMetrics)
+	authGroup.GET("/cluster/settings", s.requireScope(model.ScopeNodesManage), s.handleGetClusterSettings)
+	authGroup.PATCH("/cluster/settings", s.requireScope(model.ScopeNodesManage), s.handlePatchClusterSettings)
 
 	// Worker nodes only; not part of the public API or MCP.
 	node := r.Group("/internal/v1", s.nodeAuth())

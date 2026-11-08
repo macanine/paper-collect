@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -32,15 +33,15 @@ type Config struct {
 	Token     string
 	Version   string
 	CacheDir  string
+	// CacheMax, Slots, Heartbeat and ClaimWait are optional programmatic
+	// fallbacks. The production process receives them from the master.
 	CacheMax  int64
 	Slots     map[string]int // job kind → concurrent executions
-	// RapidOCRURL replaces a self-hosted OCR address this node cannot reach.
-	RapidOCRURL string
-	Heartbeat   time.Duration
-	ClaimWait   time.Duration
-	HTTP        *http.Client
-	Factory     func(storage.Config) (storage.Adapter, error)
-	Logf        func(format string, args ...any)
+	Heartbeat time.Duration
+	ClaimWait time.Duration
+	HTTP      *http.Client
+	Factory   func(storage.Config) (storage.Adapter, error)
+	Logf      func(format string, args ...any)
 }
 
 // Worker is a running node.
@@ -52,6 +53,20 @@ type Worker struct {
 
 	mu      sync.Mutex
 	running map[string]*execution
+
+	runtimeMu      sync.RWMutex
+	slots          map[string]int
+	cacheMax       int64
+	ocrProviderIDs []string
+	heartbeatEvery time.Duration
+	claimWait      time.Duration
+	revision       int64
+	configured     bool
+
+	loopMu     sync.Mutex
+	loopCancel context.CancelFunc
+	loopWG     sync.WaitGroup
+	parent     context.Context
 
 	cacheMu   sync.Mutex
 	pins      map[string]int           // cached files in use by a job
@@ -79,9 +94,6 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("缺少节点令牌")
 	}
-	if len(cfg.Slots) == 0 {
-		return nil, errors.New("至少需要一种任务类型")
-	}
 	if cfg.Heartbeat <= 0 {
 		cfg.Heartbeat = 10 * time.Second
 	}
@@ -108,69 +120,87 @@ func New(cfg Config) (*Worker, error) {
 			_ = os.Remove(name)
 		}
 	}
-	return &Worker{
+	initialSlots := cleanSlots(cfg.Slots)
+	w := &Worker{
 		cfg: cfg, base: base, started: time.Now().UTC(), sampler: sysstat.New(),
 		running: map[string]*execution{}, pins: map[string]int{}, downloads: map[string]chan struct{}{},
-	}, nil
+		slots: initialSlots, cacheMax: cfg.CacheMax, heartbeatEvery: cfg.Heartbeat, claimWait: cfg.ClaimWait,
+		ocrProviderIDs: []string{}, configured: cfg.Slots != nil,
+	}
+	if cfg.ClaimWait <= 0 {
+		w.claimWait = 25 * time.Second
+	}
+	return w, nil
 }
 
-// Run blocks until ctx ends. Running jobs are cancelled and reported as
-// interrupted so the master can requeue them immediately.
+type remoteConfig struct {
+	Slots          map[string]int `json:"slots"`
+	CacheMaxBytes  int64          `json:"cache_max_bytes"`
+	OCRProviderIDs []string       `json:"ocr_provider_ids"`
+	HeartbeatMS    int64          `json:"heartbeat_ms"`
+	ClaimWaitMS    int64          `json:"claim_wait_ms"`
+	Revision       int64          `json:"revision"`
+}
+
+type heartbeatReply struct {
+	LostJobIDs []string      `json:"lost_job_ids"`
+	Config     *remoteConfig `json:"config"`
+}
+
+// Run blocks until ctx ends. The first heartbeat is synchronous so a production
+// worker receives its slots from the master before claiming any work.
 func (w *Worker) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+	w.heartbeat(ctx)
+	w.loopMu.Lock()
+	w.parent = ctx
+	w.loopMu.Unlock()
+	w.reconcileClaimLoops()
+
+	heartbeatDone := make(chan struct{})
 	go func() {
-		defer wg.Done()
+		defer close(heartbeatDone)
 		w.heartbeatLoop(ctx)
 	}()
-	for kind, n := range w.cfg.Slots {
-		for i := 0; i < n; i++ {
-			wg.Add(1)
-			go func(kind string) {
-				defer wg.Done()
-				w.claimLoop(ctx, kind)
-			}(kind)
-		}
-	}
-	wg.Wait()
-}
-
-func (w *Worker) kinds() []string {
-	out := make([]string, 0, len(w.cfg.Slots))
-	for k := range w.cfg.Slots {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	<-ctx.Done()
+	w.stopClaimLoops()
+	<-heartbeatDone
+	w.stopClaimLoops()
+	w.stopAll()
+	w.loopWG.Wait()
 }
 
 func (w *Worker) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(w.cfg.Heartbeat)
-	defer ticker.Stop()
 	for {
-		w.heartbeat(ctx)
+		wait := w.heartbeatInterval()
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
+			if !w.heartbeat(ctx) && ctx.Err() != nil {
+				return
+			}
 		}
 	}
 }
 
-func (w *Worker) heartbeat(ctx context.Context) {
+func (w *Worker) heartbeat(ctx context.Context) bool {
+	slots, _, cacheMax, _ := w.runtimeSnapshot()
 	w.mu.Lock()
 	ids := make([]string, 0, len(w.running))
 	for id := range w.running {
 		ids = append(ids, id)
 	}
 	w.mu.Unlock()
+	revision := w.configRevision()
 	body := map[string]any{
-		"version": w.cfg.Version, "protocol": jobexec.Protocol, "started_at": w.started, "kinds": w.kinds(), "slots": w.cfg.Slots,
-		"running_job_ids": ids, "sample": w.sampler.Sample(ctx), "cache_used": w.cacheUsed(), "cache_max": w.cfg.CacheMax,
+		"version": w.cfg.Version, "protocol": jobexec.Protocol, "started_at": w.started,
+		"kinds": slotKinds(slots), "slots": slots, "running_job_ids": ids,
+		"sample": w.sampler.Sample(ctx), "cache_used": w.cacheUsed(), "cache_max": cacheMax,
+		"config_revision": revision,
 	}
-	var reply struct {
-		LostJobIDs []string `json:"lost_job_ids"`
-	}
+	var reply heartbeatReply
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	status, err := w.callStatus(callCtx, http.MethodPost, "/internal/v1/heartbeat", body, &reply)
@@ -180,9 +210,13 @@ func (w *Worker) heartbeat(ctx context.Context) {
 		}
 		if status == http.StatusUnauthorized {
 			// Disabled by an administrator: stop using the credentials this node holds.
+			w.stopClaimLoops()
 			w.stopAll()
 		}
-		return
+		return false
+	}
+	if reply.Config != nil {
+		w.applyRemoteConfig(*reply.Config)
 	}
 	for _, id := range reply.LostJobIDs {
 		w.mu.Lock()
@@ -193,6 +227,67 @@ func (w *Worker) heartbeat(ctx context.Context) {
 			run.cancel(errLost)
 		}
 	}
+	return true
+}
+
+func (w *Worker) applyRemoteConfig(config remoteConfig) {
+	slots := cleanSlots(config.Slots)
+	heartbeat := time.Duration(config.HeartbeatMS) * time.Millisecond
+	if heartbeat <= 0 {
+		heartbeat = w.heartbeatInterval()
+	}
+	claimWait := time.Duration(config.ClaimWaitMS) * time.Millisecond
+	if claimWait <= 0 {
+		claimWait = w.claimInterval()
+	}
+
+	w.runtimeMu.Lock()
+	changed := !w.configured || w.revision != config.Revision ||
+		!sameSlots(w.slots, slots) || w.cacheMax != config.CacheMaxBytes ||
+		!slices.Equal(w.ocrProviderIDs, config.OCRProviderIDs)
+	w.slots, w.cacheMax = slots, config.CacheMaxBytes
+	w.ocrProviderIDs = append([]string{}, config.OCRProviderIDs...)
+	w.heartbeatEvery, w.claimWait = heartbeat, claimWait
+	w.revision, w.configured = config.Revision, true
+	w.runtimeMu.Unlock()
+	if changed {
+		w.reconcileClaimLoops()
+	}
+}
+
+func (w *Worker) reconcileClaimLoops() {
+	w.loopMu.Lock()
+	defer w.loopMu.Unlock()
+	if w.parent == nil {
+		return
+	}
+	if w.loopCancel != nil {
+		w.loopCancel()
+	}
+	if !w.isConfigured() {
+		return
+	}
+	loopCtx, cancel := context.WithCancel(w.parent)
+	w.loopCancel = cancel
+	slots := w.slotsSnapshot()
+	for kind, count := range slots {
+		for range count {
+			w.loopWG.Add(1)
+			go func(kind string) {
+				defer w.loopWG.Done()
+				w.claimLoop(loopCtx, w.parent, kind)
+			}(kind)
+		}
+	}
+}
+
+func (w *Worker) stopClaimLoops() {
+	w.loopMu.Lock()
+	if w.loopCancel != nil {
+		w.loopCancel()
+		w.loopCancel = nil
+	}
+	w.loopMu.Unlock()
 }
 
 func (w *Worker) stopAll() {
@@ -203,23 +298,114 @@ func (w *Worker) stopAll() {
 	}
 }
 
-func (w *Worker) claimLoop(ctx context.Context, kind string) {
+func cleanSlots(in map[string]int) map[string]int {
+	out := map[string]int{}
+	for kind, count := range in {
+		if jobexec.IsRemoteKind(kind) && count > 0 {
+			if count > 64 {
+				count = 64
+			}
+			out[kind] = count
+		}
+	}
+	return out
+}
+
+func slotKinds(slots map[string]int) []string {
+	out := make([]string, 0, len(slots))
+	for kind, count := range slots {
+		if count > 0 {
+			out = append(out, kind)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sameSlots(a, b map[string]int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for kind, count := range a {
+		if b[kind] != count {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *Worker) runtimeSnapshot() (map[string]int, []string, int64, int64) {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	return cleanSlots(w.slots), append([]string{}, w.ocrProviderIDs...), w.cacheMax, w.revision
+}
+
+func (w *Worker) slotsSnapshot() map[string]int {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	return cleanSlots(w.slots)
+}
+
+func (w *Worker) ocrProviderIDsSnapshot() []string {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	return append([]string{}, w.ocrProviderIDs...)
+}
+
+func (w *Worker) cacheMaxValue() int64 {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	return w.cacheMax
+}
+
+func (w *Worker) heartbeatInterval() time.Duration {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	if w.heartbeatEvery <= 0 {
+		return 10 * time.Second
+	}
+	return w.heartbeatEvery
+}
+
+func (w *Worker) claimInterval() time.Duration {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	if w.claimWait <= 0 {
+		return 25 * time.Second
+	}
+	return w.claimWait
+}
+
+func (w *Worker) configRevision() int64 {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	return w.revision
+}
+
+func (w *Worker) isConfigured() bool {
+	w.runtimeMu.RLock()
+	defer w.runtimeMu.RUnlock()
+	return w.configured
+}
+
+func (w *Worker) claimLoop(loopCtx, jobCtx context.Context, kind string) {
 	backoff := time.Second
-	for ctx.Err() == nil {
+	for loopCtx.Err() == nil {
 		started := time.Now()
 		var in jobexec.Input
-		callCtx, cancel := context.WithTimeout(ctx, w.cfg.ClaimWait+claimGrace)
+		claimWait := w.claimInterval()
+		callCtx, cancel := context.WithTimeout(loopCtx, claimWait+claimGrace)
 		status, err := w.callStatus(callCtx, http.MethodPost, "/internal/v1/jobs/claim", map[string]any{
-			"kinds": []string{kind}, "wait_ms": w.cfg.ClaimWait.Milliseconds(),
-			"protocol": jobexec.Protocol, "rapidocr": w.cfg.RapidOCRURL != "",
+			"kinds": []string{kind}, "wait_ms": claimWait.Milliseconds(),
+			"protocol": jobexec.Protocol, "ocr_provider_ids": w.ocrProviderIDsSnapshot(),
 		}, &in)
 		cancel()
 		if err != nil {
-			if ctx.Err() != nil {
+			if loopCtx.Err() != nil {
 				return
 			}
 			w.cfg.Logf("claim %s failed: %s", kind, jobexec.Redact(err.Error()))
-			sleep(ctx, backoff)
+			sleep(loopCtx, backoff)
 			if backoff < time.Minute {
 				backoff *= 2
 			}
@@ -228,11 +414,13 @@ func (w *Worker) claimLoop(ctx context.Context, kind string) {
 		backoff = time.Second
 		if status == http.StatusNoContent {
 			if elapsed := time.Since(started); elapsed < minClaimPeriod {
-				sleep(ctx, minClaimPeriod-elapsed)
+				sleep(loopCtx, minClaimPeriod-elapsed)
 			}
 			continue
 		}
-		w.execute(ctx, in)
+		// A configuration revision may cancel the claim loop after the master
+		// has leased this job. Finish that job with the root worker context.
+		w.execute(jobCtx, in)
 	}
 }
 
@@ -257,7 +445,6 @@ func (w *Worker) execute(parent context.Context, in jobexec.Input) {
 		cancel(nil)
 		env.release()
 	}()
-	in.OverrideRapidOCR(w.cfg.RapidOCRURL)
 	out, err := jobexec.Run(ctx, env, in)
 	// Reports outlive a shutdown so the master can requeue at once.
 	report, done := context.WithTimeout(context.WithoutCancel(parent), reportTimeout)

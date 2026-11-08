@@ -1,4 +1,4 @@
-import type { ClusterNode, NodeKind, NodePoint } from '../../shared/api/types';
+import type { ClusterNode, NodeKind, NodePoint, OCRProvider } from '../../shared/api/types';
 
 export const NODE_POLL_MS = 10_000;
 
@@ -12,9 +12,58 @@ export function totalSlots(slots: ClusterNode['slots']): number {
 }
 
 const KIND_ORDER: NodeKind[] = ['replicate', 'analyze', 'index'];
+const GIB = 1024 ** 3;
+
+export const DEFAULT_NODE_SLOTS: Record<NodeKind, number> = {
+  replicate: 2,
+  analyze: 1,
+  index: 1,
+};
+
+export const DEFAULT_NODE_CACHE_GIB = 20;
+
+export interface NodeRuntimeFormValues {
+  slots: Partial<Record<NodeKind, number>>;
+  cache_max_gib: number;
+  ocr_provider_ids: string[];
+}
+
+export interface NodeRuntimeBody {
+  slots: Partial<Record<NodeKind, number>>;
+  cache_max_bytes: number;
+  ocr_provider_ids: string[];
+}
 
 export function orderedKinds(kinds: NodeKind[]): NodeKind[] {
   return KIND_ORDER.filter((kind) => kinds.includes(kind));
+}
+
+export function runtimeFormValues(node?: ClusterNode): NodeRuntimeFormValues {
+  return {
+    slots: Object.fromEntries(
+      KIND_ORDER.map((kind) => [kind, node ? node.configured_slots[kind] ?? 0 : DEFAULT_NODE_SLOTS[kind]]),
+    ),
+    cache_max_gib: node ? Math.round(node.cache_max_bytes / GIB) : DEFAULT_NODE_CACHE_GIB,
+    ocr_provider_ids: node ? [...node.ocr_provider_ids] : [],
+  };
+}
+
+export function runtimeBody(values: NodeRuntimeFormValues): NodeRuntimeBody {
+  return {
+    slots: Object.fromEntries(
+      KIND_ORDER.flatMap((kind) => {
+        const count = Math.max(0, Math.min(64, Math.trunc(values.slots?.[kind] ?? 0)));
+        return count > 0 ? [[kind, count]] : [];
+      }),
+    ),
+    cache_max_bytes: Math.max(0, Math.round((values.cache_max_gib ?? 0) * GIB)),
+    ocr_provider_ids: values.ocr_provider_ids ?? [],
+  };
+}
+
+export function ocrProviderLabel(provider: OCRProvider): string {
+  const kind = provider.kind === 'paddleocr' ? 'PaddleOCR' : provider.kind === 'rapidocr' ? 'RapidOCR' : 'MinerU';
+  return `${provider.name} · ${kind}${provider.model ? ` · ${provider.model}` : ''} · 优先级 ${provider.priority}`;
 }
 
 export function formatAgo(value: string | null, now: number): string {
@@ -28,7 +77,7 @@ export function formatAgo(value: string | null, now: number): string {
 
 /** 给从端使用的环境变量。令牌只在创建时可见。 */
 export function workerEnv(origin: string, token: string): string {
-  return [`ROLE=worker`, `MASTER_URL=${origin}`, `NODE_TOKEN=${token}`, `CACHE_DIR=/app/cache`, `WORKER_SLOTS=replicate=2,analyze=1,index=1`].join('\n');
+  return [`ROLE=worker`, `MASTER_URL=${origin}`, `NODE_TOKEN=${token}`, `CACHE_DIR=/app/cache`].join('\n');
 }
 
 /** 主端要求非本机地址使用 HTTPS，否则从端拒绝启动。 */

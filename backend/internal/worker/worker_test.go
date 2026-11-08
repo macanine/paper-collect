@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -209,6 +210,7 @@ type fakeMaster struct {
 	fails      []map[string]any
 	completes  int
 	lost       []string
+	config     map[string]any
 	interrupts int
 }
 
@@ -224,7 +226,7 @@ func (m *fakeMaster) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			rw.WriteHeader(m.heartbeat)
 			return
 		}
-		writeData(map[string]any{"lost_job_ids": m.lost})
+		writeData(map[string]any{"lost_job_ids": m.lost, "config": m.config})
 	case strings.HasSuffix(r.URL.Path, "/claim"):
 		m.claims.Add(1)
 		if m.job == nil {
@@ -295,7 +297,7 @@ func runFor(w *Worker, d time.Duration) {
 func TestEmptyClaimRepliesDoNotSpin(t *testing.T) {
 	master := &fakeMaster{}
 	w := newWorker(t, master, nil)
-	w.cfg.ClaimWait = time.Millisecond
+	w.claimWait = time.Millisecond
 	runFor(w, 250*time.Millisecond)
 	if n := master.claims.Load(); n > 2 {
 		t.Fatalf("%d claims in 250ms, want at most one per second", n)
@@ -413,20 +415,21 @@ func TestConflictOnCompleteDoesNotFailTheJob(t *testing.T) {
 	}
 }
 
-func TestOverrideRapidOCROnlyTouchesSelfHostedOCR(t *testing.T) {
-	var seen string
-	master := &fakeMaster{}
-	w := newWorker(t, master, func(c *Config) { c.RapidOCRURL = "http://10.0.0.5:9003" })
-	in := jobexec.Input{Kind: jobexec.KindAnalyze, Analyze: &jobexec.AnalyzeInput{OCR: &jobexec.OCRConfig{Kind: "rapidocr", BaseURL: "http://rapidocr:9003"}}}
-	in.OverrideRapidOCR(w.cfg.RapidOCRURL)
-	seen = in.Analyze.OCR.BaseURL
-	if seen != "http://10.0.0.5:9003" {
-		t.Fatalf("rapidocr base = %q", seen)
+func TestHeartbeatAppliesMasterRuntimeConfig(t *testing.T) {
+	master := &fakeMaster{config: map[string]any{
+		"slots": map[string]int{"index": 2}, "cache_max_bytes": 1234,
+		"ocr_provider_ids": []string{"paddle", "mineru"}, "heartbeat_ms": 250, "claim_wait_ms": 50, "revision": 7,
+	}}
+	w := newWorker(t, master, nil)
+	if !w.heartbeat(context.Background()) {
+		t.Fatal("heartbeat failed")
 	}
-	hosted := jobexec.Input{Kind: jobexec.KindIndex, Index: &jobexec.IndexInput{OCR: &jobexec.OCRConfig{Kind: "mineru", BaseURL: "https://mineru.net"}}}
-	hosted.OverrideRapidOCR(w.cfg.RapidOCRURL)
-	if hosted.Index.OCR.BaseURL != "https://mineru.net" {
-		t.Fatalf("hosted OCR must keep its address: %q", hosted.Index.OCR.BaseURL)
+	slots, providers, cacheMax, revision := w.runtimeSnapshot()
+	if slots["index"] != 2 || len(slots) != 1 || cacheMax != 1234 || revision != 7 {
+		t.Fatalf("runtime config = slots %v cache %d revision %d", slots, cacheMax, revision)
+	}
+	if !slices.Equal(providers, []string{"paddle", "mineru"}) || w.heartbeatInterval() != 250*time.Millisecond || w.claimInterval() != 50*time.Millisecond {
+		t.Fatalf("providers=%v heartbeat=%s claim=%s", providers, w.heartbeatInterval(), w.claimInterval())
 	}
 }
 

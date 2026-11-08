@@ -128,6 +128,9 @@ var mcpOperations = func() []mcpOperation {
 		}}},
 	}}}
 	str := map[string]any{"type": "string"}
+	nodeSlots := map[string]any{
+		"type": "object", "additionalProperties": map[string]any{"type": "integer", "minimum": 0, "maximum": 64},
+	}
 	entries := map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"relative_path", "size_bytes"}, "properties": map[string]any{"relative_path": str, "size_bytes": map[string]any{"type": "integer"}, "sha256": str}}}
 	return []mcpOperation{
 		op("account_me", "读取当前用户。", "GET", "/auth/me", ""),
@@ -213,9 +216,11 @@ var mcpOperations = func() []mcpOperation {
 		op("storage_reconcile", "按当前规则重新计划所有已编目文件。", "POST", "/storage/reconcile", model.ScopeStorageWrite),
 		op("storage_replica_share", "创建或刷新副本分享。", "POST", "/storage/replicas/:id/share", model.ScopeStorageWrite, id),
 		op("nodes_list", "读取主端和从端节点的状态、心跳、CPU、内存、网络与任务数。", "GET", "/nodes", model.ScopeNodesManage),
-		op("nodes_create", "登记一个从端节点，返回只显示一次的节点令牌。", "POST", "/nodes", model.ScopeNodesManage, mustFields(bodyS("name"), "name")),
-		op("nodes_update", "重命名、停用或排空节点；排空后不再领取新任务。", "PATCH", "/nodes/:id", model.ScopeNodesManage, id, bodyS("name"), bodyB("enabled draining")),
+		op("nodes_create", "登记一个从端节点；槽位、缓存和 OCR 服务由主端配置，返回只显示一次的接入令牌。", "POST", "/nodes", model.ScopeNodesManage, mustFields(joined(bodyS("name"), bodyI("cache_max_bytes"), bodyA("ocr_provider_ids"), customField("slots", "object", nodeSlots)), "name")),
+		op("nodes_update", "更新节点名称、启停、排空状态或主端下发的运行配置。", "PATCH", "/nodes/:id", model.ScopeNodesManage, id, joined(bodyS("name"), bodyB("enabled draining"), bodyI("cache_max_bytes"), bodyA("ocr_provider_ids"), customField("slots", "object", nodeSlots))),
 		op("nodes_metrics", "读取节点最近 1 小时的资源指标。", "GET", "/nodes/:id/metrics", model.ScopeNodesManage, id),
+		op("cluster_settings_get", "读取主端控制的集群调度及默认运行参数。", "GET", "/cluster/settings", model.ScopeNodesManage),
+		op("cluster_settings_update", "更新主端并发、可执行任务类型、租约、心跳、领取等待和轮询参数；从端在下一次心跳应用。", "PATCH", "/cluster/settings", model.ScopeNodesManage, bodyA("master_kinds"), bodyI("master_ingest_concurrency master_replicate_concurrency master_analyze_concurrency master_index_concurrency lease_seconds heartbeat_seconds claim_wait_seconds poll_seconds")),
 	}
 }()
 

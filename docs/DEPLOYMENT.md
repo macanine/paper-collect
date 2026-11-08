@@ -151,18 +151,9 @@ cp .env.example /opt/paper-collect/.env
 | `JWT_SECRET` | 必填 | 至少 32 个字符 |
 | `MASTER_KEY` | 必填 | base64 解码后恰好 32 字节，用于 AES-256-GCM |
 | `ROLE` | `master` | `master` 或 `worker`；从端变量见下表 |
-| `NODE_NAME` | `主端` | 主端在节点列表中的名称 |
-| `WORKER_KINDS` | `replicate,analyze,index` | 主端自己执行的可下放任务；`none` 表示全部交给从端。归档、配套和 `local` 网盘的复制始终由主端执行 |
-| `WORKER_INGEST_CONCURRENCY` | `1` | 主端归档任务并发数 |
-| `WORKER_REPLICATE_CONCURRENCY` | `2` | 主端副本上传并发数 |
-| `WORKER_ANALYZE_CONCURRENCY` | `2` | 主端 AI 识别并发数 |
-| `WORKER_INDEX_CONCURRENCY` | `2` | 主端搜题索引并发数 |
-| `WORKER_LEASE_DURATION` | `2m` | 任务租约时长，也是从端失联后任务被收回的时间；不能小于 `30s` |
-| `WORKER_HEARTBEAT_INTERVAL` | `20s` | 租约续期间隔，必须小于租约时长 |
-| `WORKER_POLL_INTERVAL` | `2s` | 没有进程内唤醒时的轮询间隔 |
 | `PULL_CACHE_TTL` | `15m` | 云端副本拉回临时目录后的下载有效期 |
 
-并发变量必须是 1 到 64 的整数。配置缺失或非法时进程会拒绝启动，错误只报告变量名，不回显值。
+主端执行的任务类型与并发、任务租约、心跳、领取等待和空闲轮询都由管理台「系统 → 节点」保存到主端数据库。环境变量不再配置这些运行参数；保存后主端立即重配，从端在下一次心跳应用。
 
 ### 从端
 
@@ -174,9 +165,8 @@ cp .env.example /opt/paper-collect/.env
 | `MASTER_URL` | 必填 | 主端地址；非回环地址必须是 `https://`，否则拒绝启动 |
 | `NODE_TOKEN` | 必填 | 在主端「节点」页面创建，只显示一次 |
 | `CACHE_DIR` | `./cache` | 原件缓存目录，一个目录只能给一个从端使用 |
-| `CACHE_MAX_BYTES` | `21474836480`（20 GiB） | 缓存上限，`0` 表示不限；删除缓存不影响正确性 |
-| `WORKER_SLOTS` | `replicate=2,analyze=1,index=1` | 各类任务的并发数，每项 0 到 64 |
-| `RAPIDOCR_URL` | 空 | 从端可访问的 RapidOCR 地址，覆盖主端配置的自建 OCR 地址 |
+
+`ROLE`、`MASTER_URL`、`NODE_TOKEN` 是首次连接所需的接入信息，必须存在于本机；`CACHE_DIR` 是每台机器的本机路径。除此之外，任务槽位、缓存上限、可访问的 OCR 服务、心跳和领取参数都由主端数据库下发，不写入从端 env。
 
 ### Compose
 
@@ -195,7 +185,7 @@ cp .env.example /opt/paper-collect/.env
 ### 添加从端
 
 1. 确认主端可通过 HTTPS 访问。任务会携带解密后的网盘和模型密钥，所以从端拒绝通过明文连接非本机主端。Compose 的网关只监听 HTTP，需要在它前面放一层 TLS 反向代理：放行 `/internal/v1/`（不要只放行 `/api`），读取超时不小于 60 秒，请求体上限不小于 32 MiB。
-2. 以管理员登录，进入「系统 → 节点 → 添加节点」，保存只显示一次的配置。
+2. 以管理员登录，进入「系统 → 节点」。先在页面顶部配置主端可执行任务、四类并发、租约和心跳，再点「添加节点」；在同一个表单中设置复制/分析/索引槽位、缓存上限和该节点可访问的 OCR 服务。
 3. 在从端机器上启动（镜像与主端相同）：
 
 ```bash
@@ -211,6 +201,8 @@ ROLE=worker MASTER_URL=https://paper.example.com NODE_TOKEN=nd-... CACHE_DIR=/va
 
 节点会在几秒内显示为「在线」。主从版本应一起升级：协议版本不一致的从端仍会上报心跳，但领不到任务，节点页会标记「协议不一致」。
 
+创建或编辑节点后，节点详情会显示“已应用修订”与“最新修订”。两者不一致表示主端已经保存配置、从端还未完成下一次心跳；长时间不一致时应检查节点是否在线。
+
 ### 哪些任务会交给从端
 
 | 任务 | 从端能否执行 | 说明 |
@@ -220,11 +212,13 @@ ROLE=worker MASTER_URL=https://paper.example.com NODE_TOKEN=nd-... CACHE_DIR=/va
 | AI 识别、题目索引 | 能 | 从端直连 OCR 和模型服务，见下 |
 | 归档、配套 | 否 | 始终由主端执行 |
 
-从端解析不了主端内网的服务。地址是回环地址或单段主机名（例如 Compose 的 `http://rapidocr:9003`）时，主端不会把依赖它的任务交给该从端，任务留给主端或其他合适的从端。如果 `WORKER_KINDS=none` 且没有合适的从端，这些任务会一直排队。解决办法：
+从端解析不了主端内网的服务。OCR 地址是回环地址或单段主机名（例如 Compose 的 `http://rapidocr:9003`）时，该端不能靠默认全局 OCR 执行分析或索引。解决办法：
 
-- 自建 OCR：在从端运行 RapidOCR，并设置 `RAPIDOCR_URL`；
-- 或者把 OCR 与模型地址配置成从端可访问的地址；
-- 或者不在 `WORKER_SLOTS` 中启用 `analyze`、`index`，从端只负责上传。
+- 在「AI 解析」中新增从端可访问的 RapidOCR、PaddleOCR 或 MinerU 服务，再在节点配置里只勾选该节点可访问的服务；
+- 或者在从端所在网络提供 RapidOCR，并以从端可访问的地址注册到「AI 解析」；
+- 或者把该节点的分析、索引槽位设为 0，让它只负责上传。
+
+节点勾选多个 OCR 服务时，主端按「AI 解析」中的服务优先级选择。若主端任务类型和节点槽位都没有启用某项任务，该任务会保持排队。
 
 ### 网盘上传节点
 
@@ -234,7 +228,7 @@ ROLE=worker MASTER_URL=https://paper.example.com NODE_TOKEN=nd-... CACHE_DIR=/va
 
 - **排空**：不再领取新任务，正在执行的任务继续跑完，适合升级或维护前使用。主端排空时仍处理只能在主端运行的任务。
 - **停用**：令牌立即失效，从端在下一次心跳时停止正在执行的任务，这些任务在租约到期后交给其他节点。
-- **从端崩溃或断网**：任务在 `WORKER_LEASE_DURATION`（默认 2 分钟）内被收回。旧执行者之后的提交会被拒绝。
+- **从端崩溃或断网**：任务在管理台当前配置的租约时长（默认 2 分钟）后收回。旧执行者之后的提交会被拒绝。
 - **从端正常退出**（`SIGTERM`）：任务立即回到队列。
 - **主端重启**：从端继续执行并重试上报，重连后无需人工处理。
 

@@ -59,17 +59,18 @@ func (s *Server) handleNodeHeartbeat(c *gin.Context) {
 
 func (s *Server) handleNodeClaim(c *gin.Context) {
 	var req struct {
-		Kinds    []string `json:"kinds"`
-		WaitMS   int      `json:"wait_ms"`
-		Protocol int      `json:"protocol"`
-		RapidOCR bool     `json:"rapidocr"`
+		Kinds          []string `json:"kinds"`
+		OCRProviderIDs []string `json:"ocr_provider_ids"`
+		WaitMS         int      `json:"wait_ms"`
+		Protocol       int      `json:"protocol"`
 	}
 	if ae := decodeJSON(c, &req); ae != nil {
 		respondError(c, ae)
 		return
 	}
 	in, err := s.svc.ClaimForNode(c.Request.Context(), currentNode(c), service.NodeClaim{
-		Kinds: req.Kinds, Wait: time.Duration(req.WaitMS) * time.Millisecond, Protocol: req.Protocol, RapidOCR: req.RapidOCR,
+		Kinds: req.Kinds, OCRProviderIDs: req.OCRProviderIDs,
+		Wait: time.Duration(req.WaitMS) * time.Millisecond, Protocol: req.Protocol,
 	})
 	if err != nil {
 		respondError(c, err)
@@ -201,13 +202,18 @@ func (s *Server) handleListNodes(c *gin.Context) {
 
 func (s *Server) handleCreateNode(c *gin.Context) {
 	var req struct {
-		Name string `json:"name"`
+		Name           string          `json:"name"`
+		Slots          *map[string]int `json:"slots"`
+		CacheMaxBytes  *int64          `json:"cache_max_bytes"`
+		OCRProviderIDs *[]string       `json:"ocr_provider_ids"`
 	}
 	if ae := decodeJSON(c, &req); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	n, token, err := s.svc.CreateNode(c.Request.Context(), principal(c), service.NodeInput{Name: req.Name})
+	n, token, err := s.svc.CreateNode(c.Request.Context(), principal(c), service.NodeInput{
+		Name: req.Name, Slots: req.Slots, CacheMaxBytes: req.CacheMaxBytes, OCRProviderIDs: req.OCRProviderIDs,
+	})
 	if err != nil {
 		respondError(c, err)
 		return
@@ -217,20 +223,66 @@ func (s *Server) handleCreateNode(c *gin.Context) {
 
 func (s *Server) handlePatchNode(c *gin.Context) {
 	var req struct {
-		Name     *string `json:"name"`
-		Enabled  *bool   `json:"enabled"`
-		Draining *bool   `json:"draining"`
+		Name           *string         `json:"name"`
+		Enabled        *bool           `json:"enabled"`
+		Draining       *bool           `json:"draining"`
+		Slots          *map[string]int `json:"slots"`
+		CacheMaxBytes  *int64          `json:"cache_max_bytes"`
+		OCRProviderIDs *[]string       `json:"ocr_provider_ids"`
 	}
 	if ae := decodeJSON(c, &req); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	n, err := s.svc.UpdateNode(c.Request.Context(), principal(c), c.Param("id"), service.NodePatch{Name: req.Name, Enabled: req.Enabled, Draining: req.Draining})
+	n, err := s.svc.UpdateNode(c.Request.Context(), principal(c), c.Param("id"), service.NodePatch{
+		Name: req.Name, Enabled: req.Enabled, Draining: req.Draining,
+		Slots: req.Slots, CacheMaxBytes: req.CacheMaxBytes, OCRProviderIDs: req.OCRProviderIDs,
+	})
 	if err != nil {
 		respondError(c, err)
 		return
 	}
 	s.respondData(c, http.StatusOK, toNode(n))
+}
+
+func (s *Server) handleGetClusterSettings(c *gin.Context) {
+	settings, err := s.svc.GetClusterSettings(c.Request.Context())
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toClusterSettings(settings))
+}
+
+func (s *Server) handlePatchClusterSettings(c *gin.Context) {
+	var req struct {
+		MasterKinds                *[]string `json:"master_kinds"`
+		MasterIngestConcurrency    *int      `json:"master_ingest_concurrency"`
+		MasterReplicateConcurrency *int      `json:"master_replicate_concurrency"`
+		MasterAnalyzeConcurrency   *int      `json:"master_analyze_concurrency"`
+		MasterIndexConcurrency     *int      `json:"master_index_concurrency"`
+		LeaseSeconds               *int      `json:"lease_seconds"`
+		HeartbeatSeconds           *int      `json:"heartbeat_seconds"`
+		ClaimWaitSeconds           *int      `json:"claim_wait_seconds"`
+		PollSeconds                *int      `json:"poll_seconds"`
+	}
+	if ae := decodeJSON(c, &req); ae != nil {
+		respondError(c, ae)
+		return
+	}
+	settings, err := s.svc.UpdateClusterSettings(c.Request.Context(), principal(c), service.ClusterSettingsPatch{
+		MasterKinds: req.MasterKinds, MasterIngestConcurrency: req.MasterIngestConcurrency,
+		MasterReplicateConcurrency: req.MasterReplicateConcurrency,
+		MasterAnalyzeConcurrency:   req.MasterAnalyzeConcurrency,
+		MasterIndexConcurrency:     req.MasterIndexConcurrency,
+		LeaseSeconds:               req.LeaseSeconds, HeartbeatSeconds: req.HeartbeatSeconds,
+		ClaimWaitSeconds: req.ClaimWaitSeconds, PollSeconds: req.PollSeconds,
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toClusterSettings(settings))
 }
 
 func (s *Server) handleNodeMetrics(c *gin.Context) {

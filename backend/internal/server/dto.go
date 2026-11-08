@@ -761,34 +761,39 @@ func toQuestion(row model.QuestionBlock) questionDTO {
 }
 
 type nodeDTO struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	IsMaster     bool           `json:"is_master"`
-	Enabled      bool           `json:"enabled"`
-	Draining     bool           `json:"draining"`
-	Status       string         `json:"status"`
-	Kinds        []string       `json:"kinds"`
-	Slots        map[string]int `json:"slots"`
-	Running      int            `json:"running"`
-	RunningKinds map[string]int `json:"running_kinds"`
-	Succeeded    int            `json:"succeeded_1h"`
-	Failed       int            `json:"failed_1h"`
-	Version      string         `json:"version"`
-	Protocol     int            `json:"protocol"`
-	LastIP       string         `json:"last_ip"`
-	LastSeenAt   *time.Time     `json:"last_seen_at"`
-	StartedAt    *time.Time     `json:"started_at"`
-	CPUPercent   float64        `json:"cpu_percent"`
-	CPUCores     int            `json:"cpu_cores"`
-	ProcCPU      float64        `json:"proc_cpu_percent"`
-	MemUsed      int64          `json:"mem_used"`
-	MemTotal     int64          `json:"mem_total"`
-	ProcRSS      int64          `json:"proc_rss"`
-	NetRxBps     int64          `json:"net_rx_bps"`
-	NetTxBps     int64          `json:"net_tx_bps"`
-	CacheUsed    int64          `json:"cache_used"`
-	CacheMax     int64          `json:"cache_max"`
-	CreatedAt    time.Time      `json:"created_at"`
+	ID                    string         `json:"id"`
+	Name                  string         `json:"name"`
+	IsMaster              bool           `json:"is_master"`
+	Enabled               bool           `json:"enabled"`
+	Draining              bool           `json:"draining"`
+	Status                string         `json:"status"`
+	Kinds                 []string       `json:"kinds"`
+	Slots                 map[string]int `json:"slots"`
+	ConfiguredSlots       map[string]int `json:"configured_slots"`
+	CacheMaxBytes         int64          `json:"cache_max_bytes"`
+	OCRProviderIDs        []string       `json:"ocr_provider_ids"`
+	ConfigRevision        int64          `json:"config_revision"`
+	AppliedConfigRevision int64          `json:"applied_config_revision"`
+	Running               int            `json:"running"`
+	RunningKinds          map[string]int `json:"running_kinds"`
+	Succeeded             int            `json:"succeeded_1h"`
+	Failed                int            `json:"failed_1h"`
+	Version               string         `json:"version"`
+	Protocol              int            `json:"protocol"`
+	LastIP                string         `json:"last_ip"`
+	LastSeenAt            *time.Time     `json:"last_seen_at"`
+	StartedAt             *time.Time     `json:"started_at"`
+	CPUPercent            float64        `json:"cpu_percent"`
+	CPUCores              int            `json:"cpu_cores"`
+	ProcCPU               float64        `json:"proc_cpu_percent"`
+	MemUsed               int64          `json:"mem_used"`
+	MemTotal              int64          `json:"mem_total"`
+	ProcRSS               int64          `json:"proc_rss"`
+	NetRxBps              int64          `json:"net_rx_bps"`
+	NetTxBps              int64          `json:"net_tx_bps"`
+	CacheUsed             int64          `json:"cache_used"`
+	CacheMax              int64          `json:"cache_max"`
+	CreatedAt             time.Time      `json:"created_at"`
 }
 
 // nodeCreatedDTO is the only response that contains a node token.
@@ -801,12 +806,41 @@ func toNode(v service.NodeView) nodeDTO {
 	n := v.Node
 	return nodeDTO{
 		ID: n.ID, Name: n.Name, IsMaster: n.IsMaster, Enabled: n.Enabled, Draining: n.Draining,
-		Status: v.Status, Kinds: v.Kinds, Slots: v.Slots, Running: n.Running, RunningKinds: v.RunningKinds,
+		Status: v.Status, Kinds: v.Kinds, Slots: v.Slots, ConfiguredSlots: v.ConfiguredSlots,
+		CacheMaxBytes: n.ConfiguredCacheMax, OCRProviderIDs: v.OCRProviderIDs,
+		ConfigRevision: n.ConfigRevision, AppliedConfigRevision: n.AppliedConfigRevision,
+		Running: n.Running, RunningKinds: v.RunningKinds,
 		Succeeded: v.Succeeded, Failed: v.Failed, Version: n.Version, Protocol: n.Protocol,
 		LastIP: n.LastIP, LastSeenAt: n.LastSeenAt, StartedAt: n.StartedAt,
 		CPUPercent: n.CPUPercent, CPUCores: n.CPUCores, ProcCPU: n.ProcCPU,
 		MemUsed: n.MemUsed, MemTotal: n.MemTotal, ProcRSS: n.ProcRSS,
 		NetRxBps: n.NetRxBps, NetTxBps: n.NetTxBps, CacheUsed: n.CacheUsed, CacheMax: n.CacheMax,
 		CreatedAt: n.CreatedAt,
+	}
+}
+
+type clusterSettingsDTO struct {
+	MasterKinds                []string  `json:"master_kinds"`
+	MasterIngestConcurrency    int       `json:"master_ingest_concurrency"`
+	MasterReplicateConcurrency int       `json:"master_replicate_concurrency"`
+	MasterAnalyzeConcurrency   int       `json:"master_analyze_concurrency"`
+	MasterIndexConcurrency     int       `json:"master_index_concurrency"`
+	LeaseSeconds               int       `json:"lease_seconds"`
+	HeartbeatSeconds           int       `json:"heartbeat_seconds"`
+	ClaimWaitSeconds           int       `json:"claim_wait_seconds"`
+	PollSeconds                int       `json:"poll_seconds"`
+	Revision                   int64     `json:"revision"`
+	UpdatedAt                  time.Time `json:"updated_at"`
+}
+
+func toClusterSettings(v service.ClusterSettingsView) clusterSettingsDTO {
+	return clusterSettingsDTO{
+		MasterKinds: v.Kinds, MasterIngestConcurrency: v.Settings.MasterIngestConcurrency,
+		MasterReplicateConcurrency: v.Settings.MasterReplicateConcurrency,
+		MasterAnalyzeConcurrency:   v.Settings.MasterAnalyzeConcurrency,
+		MasterIndexConcurrency:     v.Settings.MasterIndexConcurrency,
+		LeaseSeconds:               v.Settings.LeaseSeconds, HeartbeatSeconds: v.Settings.HeartbeatSeconds,
+		ClaimWaitSeconds: v.Settings.ClaimWaitSeconds, PollSeconds: v.Settings.PollSeconds,
+		Revision: v.Settings.Revision, UpdatedAt: v.Settings.UpdatedAt,
 	}
 }

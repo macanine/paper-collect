@@ -96,8 +96,9 @@ func (s *Service) manageReplica(ctx context.Context, p auth.Principal, id, actio
 			return err
 		}
 		now := s.now()
-		until := now.Add(s.worker.LeaseDuration)
-		deletionJob = model.Job{ID: newID(), Kind: model.JobReplicate, Status: model.JobRunning, ReplicaID: r.ID, LeaseOwner: s.worker.InstanceID, LeaseUntil: &until, HeartbeatAt: &now, StartedAt: &now, CreatedAt: now, UpdatedAt: now}
+		settings := s.workerSettings()
+		until := now.Add(settings.LeaseDuration)
+		deletionJob = model.Job{ID: newID(), Kind: model.JobReplicate, Status: model.JobRunning, ReplicaID: r.ID, LeaseOwner: settings.InstanceID, LeaseUntil: &until, HeartbeatAt: &now, StartedAt: &now, CreatedAt: now, UpdatedAt: now}
 		return tx.Create(&deletionJob).Error
 	})
 	if err != nil || action != "delete_remote" {

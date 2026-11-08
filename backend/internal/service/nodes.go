@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -39,21 +40,23 @@ const (
 
 // NodeView is a node with its derived status.
 type NodeView struct {
-	Node         model.Node
-	Status       string
-	Kinds        []string
-	Slots        map[string]int
-	RunningKinds map[string]int // jobs currently leased, by kind
-	Succeeded    int            // finished within nodeStatsWindow
-	Failed       int
+	Node            model.Node
+	Status          string
+	Kinds           []string
+	Slots           map[string]int
+	ConfiguredSlots map[string]int
+	OCRProviderIDs  []string
+	RunningKinds    map[string]int // jobs currently leased, by kind
+	Succeeded       int            // finished within nodeStatsWindow
+	Failed          int
 }
 
 // NodeClaim is one worker request for work.
 type NodeClaim struct {
-	Kinds    []string
-	Wait     time.Duration
-	Protocol int
-	RapidOCR bool // the worker has its own RapidOCR address
+	Kinds          []string
+	OCRProviderIDs []string
+	Wait           time.Duration
+	Protocol       int
 }
 
 // NodePoint is one in-memory metrics sample.
@@ -67,14 +70,22 @@ type NodePoint struct {
 	Running  int       `json:"running"`
 }
 
-// NodeInput creates a worker node.
-type NodeInput struct{ Name string }
+// NodeInput creates a worker node with master-controlled runtime settings.
+type NodeInput struct {
+	Name           string
+	Slots          *map[string]int
+	CacheMaxBytes  *int64
+	OCRProviderIDs *[]string
+}
 
 // NodePatch updates a node. Nil fields are unchanged.
 type NodePatch struct {
-	Name     *string
-	Enabled  *bool
-	Draining *bool
+	Name           *string
+	Enabled        *bool
+	Draining       *bool
+	Slots          *map[string]int
+	CacheMaxBytes  *int64
+	OCRProviderIDs *[]string
 }
 
 // Heartbeat is what a node reports every NodeHeartbeat.
@@ -88,12 +99,25 @@ type Heartbeat struct {
 	Sample    sysstat.Sample `json:"sample"`
 	CacheUsed int64          `json:"cache_used"`
 	CacheMax  int64          `json:"cache_max"`
+	Revision  int64          `json:"config_revision"`
 }
 
-// HeartbeatReply tells a node which of its jobs it no longer owns.
+// NodeRuntimeConfig is desired worker state delivered by the master.
+type NodeRuntimeConfig struct {
+	Slots          map[string]int `json:"slots"`
+	CacheMaxBytes  int64          `json:"cache_max_bytes"`
+	OCRProviderIDs []string       `json:"ocr_provider_ids"`
+	HeartbeatMS    int64          `json:"heartbeat_ms"`
+	ClaimWaitMS    int64          `json:"claim_wait_ms"`
+	Revision       int64          `json:"revision"`
+}
+
+// HeartbeatReply tells a node which jobs it no longer owns and delivers the
+// current master-controlled runtime configuration.
 type HeartbeatReply struct {
-	LostJobIDs []string `json:"lost_job_ids"`
-	Draining   bool     `json:"draining"`
+	LostJobIDs []string           `json:"lost_job_ids"`
+	Draining   bool               `json:"draining"`
+	Config     *NodeRuntimeConfig `json:"config,omitempty"`
 }
 
 // nodeMetrics keeps the last hour of samples per node in memory. A restart
@@ -123,12 +147,13 @@ func (m *nodeMetrics) get(id string) []NodePoint {
 }
 
 func (s *Service) nodeStatus(n model.Node) string {
+	lease := s.workerSettings().LeaseDuration
 	switch {
 	case !n.Enabled:
 		return NodeDisabled
-	case n.LastSeenAt == nil || s.now().Sub(*n.LastSeenAt) > s.worker.LeaseDuration:
+	case n.LastSeenAt == nil || s.now().Sub(*n.LastSeenAt) > lease:
 		return NodeOffline
-	case s.now().Sub(*n.LastSeenAt) > nodeStaleAfter:
+	case s.now().Sub(*n.LastSeenAt) > max(nodeStaleAfter, 3*s.workerSettings().HeartbeatInterval):
 		return NodeStale
 	case n.Draining:
 		return NodeDraining
@@ -136,8 +161,38 @@ func (s *Service) nodeStatus(n model.Node) string {
 	return NodeOnline
 }
 
+func defaultNodeSlots() map[string]int {
+	return map[string]int{
+		model.JobReplicate: 2,
+		model.JobAnalyze:   1,
+		model.JobIndex:     1,
+	}
+}
+
+func (s *Service) validateNodeOCRProviders(tx *gorm.DB, ids []string) ([]string, error) {
+	out := uniqueStrings(ids)
+	if len(out) > 32 {
+		return nil, apperr.Validation("每个节点最多配置 32 个 OCR 服务")
+	}
+	if len(out) == 0 {
+		return []string{}, nil
+	}
+	var count int64
+	if err := tx.Model(&model.OCRProvider{}).Where("id IN ? AND enabled = ?", out, true).Count(&count).Error; err != nil {
+		return nil, err
+	}
+	if count != int64(len(out)) {
+		return nil, apperr.Validation("ocr_provider_ids 包含不存在或已停用的服务")
+	}
+	return out, nil
+}
+
 func (s *Service) nodeView(n model.Node) NodeView {
-	v := NodeView{Node: n, Status: s.nodeStatus(n), Kinds: model.DecodeStrings(n.KindsJSON), Slots: map[string]int{}, RunningKinds: map[string]int{}}
+	v := NodeView{
+		Node: n, Status: s.nodeStatus(n), Kinds: model.DecodeStrings(n.KindsJSON),
+		Slots: map[string]int{}, ConfiguredSlots: decodeSlots(n.ConfiguredSlotsJSON),
+		OCRProviderIDs: model.DecodeStrings(n.OCRProviderIDsJSON), RunningKinds: map[string]int{},
+	}
 	_ = json.Unmarshal([]byte(n.SlotsJSON), &v.Slots)
 	return v
 }
@@ -211,20 +266,53 @@ func (s *Service) CreateNode(ctx context.Context, p auth.Principal, in NodeInput
 	if err != nil {
 		return NodeView{}, "", err
 	}
+	slots := defaultNodeSlots()
+	if in.Slots != nil {
+		slots = *in.Slots
+	}
+	rawSlots, _, err := encodeSlots(slots)
+	if err != nil {
+		return NodeView{}, "", err
+	}
+	cacheMax := int64(20 << 30)
+	if in.CacheMaxBytes != nil {
+		cacheMax = *in.CacheMaxBytes
+	}
+	if cacheMax < 0 {
+		return NodeView{}, "", apperr.Validation("cache_max_bytes 不能为负数")
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return NodeView{}, "", apperr.Internal(err)
 	}
 	token := NodeTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	now := s.now()
-	n := model.Node{ID: newID(), Name: name, TokenHash: auth.HashToken(token), Enabled: true, KindsJSON: "[]", SlotsJSON: "{}", CreatedAt: now, UpdatedAt: now}
+	n := model.Node{
+		ID: newID(), Name: name, TokenHash: auth.HashToken(token), Enabled: true,
+		KindsJSON: "[]", SlotsJSON: "{}", ConfiguredSlotsJSON: rawSlots,
+		ConfiguredCacheMax: cacheMax, OCRProviderIDsJSON: "[]", ConfigRevision: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	ocrIDs := []string{}
+	if in.OCRProviderIDs != nil {
+		ocrIDs = *in.OCRProviderIDs
+	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		ocrIDs, err := s.validateNodeOCRProviders(tx, ocrIDs)
+		if err != nil {
+			return err
+		}
+		n.OCRProviderIDsJSON = model.EncodeStrings(ocrIDs)
 		if err := tx.Create(&n).Error; err != nil {
 			return err
 		}
 		return s.audit(tx, p, "node.create", n.ID)
 	})
 	if err != nil {
+		var ae *apperr.Error
+		if errors.As(err, &ae) {
+			return NodeView{}, "", err
+		}
 		return NodeView{}, "", apperr.Internal(err)
 	}
 	return s.nodeView(n), token, nil
@@ -254,6 +342,33 @@ func (s *Service) UpdateNode(ctx context.Context, p auth.Principal, id string, i
 		}
 		if in.Draining != nil {
 			updates["draining"] = *in.Draining
+		}
+		configChanged := in.Slots != nil || in.CacheMaxBytes != nil || in.OCRProviderIDs != nil
+		if configChanged && n.IsMaster {
+			return apperr.Validation("主端运行配置请在集群调度设置中修改")
+		}
+		if in.Slots != nil {
+			raw, _, err := encodeSlots(*in.Slots)
+			if err != nil {
+				return err
+			}
+			updates["configured_slots_json"] = raw
+		}
+		if in.CacheMaxBytes != nil {
+			if *in.CacheMaxBytes < 0 {
+				return apperr.Validation("cache_max_bytes 不能为负数")
+			}
+			updates["configured_cache_max"] = *in.CacheMaxBytes
+		}
+		if in.OCRProviderIDs != nil {
+			ids, err := s.validateNodeOCRProviders(tx, *in.OCRProviderIDs)
+			if err != nil {
+				return err
+			}
+			updates["ocr_provider_ids_json"] = model.EncodeStrings(ids)
+		}
+		if configChanged {
+			updates["config_revision"] = n.ConfigRevision + 1
 		}
 		if err := tx.Model(&n).Updates(updates).Error; err != nil {
 			return err
@@ -292,41 +407,47 @@ func (s *Service) AuthenticateNode(ctx context.Context, token string) (model.Nod
 // RegisterMaster creates or refreshes the master's own node row and leases
 // local jobs to it. It must run before RecoverInterrupted.
 func (s *Service) RegisterMaster(ctx context.Context, name, version string) (model.Node, error) {
+	settings := s.workerSettings()
 	var n model.Node
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
 		err := tx.Where("is_master = ?", true).First(&n).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			n = model.Node{ID: newID(), Name: name, IsMaster: true, Enabled: true, CreatedAt: now}
+			if strings.TrimSpace(name) == "" {
+				name = "主端"
+			}
+			n = model.Node{
+				ID: newID(), Name: name, IsMaster: true, Enabled: true,
+				ConfiguredSlotsJSON: "{}", OCRProviderIDsJSON: "[]", ConfigRevision: 1,
+				CreatedAt: now,
+			}
 		} else if err != nil {
 			return err
 		}
-		if strings.TrimSpace(name) != "" {
-			n.Name = name
-		}
 		n.Version, n.Protocol, n.StartedAt, n.LastSeenAt, n.UpdatedAt = version, jobexec.Protocol, &now, &now, now
-		n.KindsJSON = model.EncodeStrings(s.worker.Kinds)
-		slots, _ := json.Marshal(s.localSlots())
+		n.KindsJSON = model.EncodeStrings(settings.Kinds)
+		slots, _ := json.Marshal(localSlots(settings))
 		n.SlotsJSON = string(slots)
 		return tx.Save(&n).Error
 	})
 	if err != nil {
 		return model.Node{}, err
 	}
-	s.worker.InstanceID, s.worker.NodeName = n.ID, n.Name
+	settings.InstanceID, settings.NodeName = n.ID, n.Name
+	s.setWorkerSettings(settings)
 	return n, nil
 }
 
-func (s *Service) localSlots() map[string]int {
+func localSlots(worker WorkerSettings) map[string]int {
 	slots := map[string]int{}
-	for _, kind := range s.worker.Kinds {
+	for _, kind := range worker.Kinds {
 		switch kind {
 		case model.JobReplicate:
-			slots[kind] = s.worker.ReplicateConcurrency
+			slots[kind] = worker.ReplicateConcurrency
 		case model.JobAnalyze:
-			slots[kind] = s.worker.AnalyzeConcurrency
+			slots[kind] = worker.AnalyzeConcurrency
 		case model.JobIndex:
-			slots[kind] = s.worker.IndexConcurrency
+			slots[kind] = worker.IndexConcurrency
 		}
 	}
 	return slots
@@ -336,14 +457,15 @@ func (s *Service) localSlots() map[string]int {
 func (s *Service) StartMasterHeartbeat(ctx context.Context) {
 	sampler := sysstat.New()
 	go func() {
-		ticker := time.NewTicker(NodeHeartbeat)
-		defer ticker.Stop()
 		for {
-			s.recordSample(ctx, s.worker.InstanceID, Heartbeat{Sample: sampler.Sample(ctx)}, int(s.running.Load()), "")
+			settings := s.workerSettings()
+			s.recordSample(ctx, settings.InstanceID, Heartbeat{Sample: sampler.Sample(ctx)}, int(s.running.Load()), "")
+			timer := time.NewTimer(settings.HeartbeatInterval)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
 		}
 	}()
@@ -384,6 +506,9 @@ func (s *Service) recordSample(ctx context.Context, id string, hb Heartbeat, run
 		raw, _ := json.Marshal(hb.Slots)
 		updates["slots_json"] = string(raw)
 	}
+	if hb.Revision > 0 {
+		updates["applied_config_revision"] = hb.Revision
+	}
 	if err := s.db.WithContext(ctx).Model(&model.Node{}).Where("id = ?", id).Updates(updates).Error; err != nil && ctx.Err() == nil {
 		s.logf("record node heartbeat failed")
 	}
@@ -396,14 +521,15 @@ func (s *Service) recordSample(ctx context.Context, id string, hb Heartbeat, run
 // NodeHeartbeat records a worker sample and renews the leases of the jobs it
 // still owns. Jobs it reports but no longer owns are returned as lost.
 func (s *Service) NodeHeartbeat(ctx context.Context, n model.Node, hb Heartbeat, ip string) (HeartbeatReply, error) {
-	reply := HeartbeatReply{LostJobIDs: []string{}, Draining: n.Draining}
+	config := s.clusterRuntimeConfig(n)
+	reply := HeartbeatReply{LostJobIDs: []string{}, Draining: n.Draining, Config: &config}
 	running := uniqueStrings(hb.Running)
 	if len(running) > 64 {
 		return reply, apperr.Validation("running_job_ids 过多")
 	}
 	if len(running) > 0 {
 		now := s.now()
-		until := now.Add(s.worker.LeaseDuration)
+		until := now.Add(s.workerSettings().LeaseDuration)
 		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			var owned []string
 			if err := tx.Model(&model.Job{}).
@@ -457,7 +583,7 @@ func (s *Service) ClaimForNode(ctx context.Context, n model.Node, req NodeClaim)
 	if len(kinds) == 0 {
 		return nil, apperr.Validation("kinds 至少包含 replicate、analyze、index 中的一项")
 	}
-	kinds, err := s.reachableKinds(ctx, kinds, req.RapidOCR)
+	kinds, ocrProviderID, err := s.reachableKinds(ctx, kinds, req.OCRProviderIDs)
 	if err != nil {
 		return nil, apperr.Internal(err)
 	}
@@ -482,7 +608,7 @@ func (s *Service) ClaimForNode(ctx context.Context, n model.Node, req NodeClaim)
 		if !current.Draining && len(kinds) > 0 {
 			job, err := s.claimJobFor(ctx, owner, kinds)
 			if err == nil {
-				in, err := s.PrepareJob(ctx, job)
+				in, err := s.prepareJob(ctx, job, ocrProviderID)
 				if err != nil {
 					s.handlePrepareError(ctx, job, err)
 					continue
@@ -518,35 +644,44 @@ func (s *Service) ClaimForNode(ctx context.Context, n model.Node, req NodeClaim)
 	return nil, nil
 }
 
-// reachableKinds drops kinds whose required service only resolves inside the
-// master's network, such as the Compose address http://rapidocr:9003. Those
-// jobs would otherwise fail on the worker that claimed them; leaving them
-// pending lets the master or a suitably configured worker run them.
-func (s *Service) reachableKinds(ctx context.Context, kinds []string, rapidOCR bool) ([]string, error) {
+// reachableKinds drops kinds whose required services are unavailable to this
+// node. Provider IDs selected in the master UI are an explicit reachability
+// declaration; without an explicit list, only a non-internal selected OCR URL
+// is assumed reachable.
+func (s *Service) reachableKinds(ctx context.Context, kinds, ocrProviderIDs []string) ([]string, string, error) {
+	needsOCR := slices.Contains(kinds, model.JobAnalyze) || slices.Contains(kinds, model.JobIndex)
+	if !needsOCR {
+		return kinds, "", nil
+	}
 	settings, err := s.ensureAISettings(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	ocrBlocked := false
-	if provider, err := s.selectedOCRProvider(ctx, settings); err == nil {
-		ocrBlocked = isMasterInternalURL(provider.BaseURL) && !(provider.Kind == model.OCRKindRapidOCR && rapidOCR)
+	ocrProvider, ocrAvailable, err := s.nodeOCRProvider(ctx, settings, ocrProviderIDs)
+	if err != nil {
+		return nil, "", err
 	}
 	var providers []model.AIProvider
 	if err := s.db.WithContext(ctx).Select("base_url").Where("enabled = ?", true).Find(&providers).Error; err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Analysis fails over between endpoints, so one reachable endpoint is enough.
-	analyzeBlocked := ocrBlocked || len(providers) > 0
+	analyzeBlocked := !ocrAvailable || len(providers) == 0
+	allModelsInternal := true
 	for _, p := range providers {
-		analyzeBlocked = analyzeBlocked && (ocrBlocked || isMasterInternalURL(p.BaseURL))
+		allModelsInternal = allModelsInternal && isMasterInternalURL(p.BaseURL)
 	}
+	analyzeBlocked = analyzeBlocked || allModelsInternal
 	// Indexing uses exactly one segmentation endpoint.
-	indexBlocked := ocrBlocked
+	indexBlocked := !ocrAvailable
+	segmentationResolved := false
 	if search, err := s.ensureSearchSettings(ctx); err == nil {
 		if provider, _, err := s.segmentationTarget(ctx, search); err == nil {
+			segmentationResolved = true
 			indexBlocked = indexBlocked || isMasterInternalURL(provider.BaseURL)
 		}
 	}
+	indexBlocked = indexBlocked || !segmentationResolved
 	out := make([]string, 0, len(kinds))
 	for _, kind := range kinds {
 		if (kind == model.JobAnalyze && analyzeBlocked) || (kind == model.JobIndex && indexBlocked) {
@@ -554,7 +689,11 @@ func (s *Service) reachableKinds(ctx context.Context, kinds []string, rapidOCR b
 		}
 		out = append(out, kind)
 	}
-	return out, nil
+	providerID := ""
+	if ocrAvailable {
+		providerID = ocrProvider.ID
+	}
+	return out, providerID, nil
 }
 
 // isMasterInternalURL recognises loopback addresses and single-label names,

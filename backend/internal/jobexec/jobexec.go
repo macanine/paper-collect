@@ -24,7 +24,7 @@ const (
 
 // Protocol is the master/worker wire version. A worker with another version may
 // heartbeat, so it stays visible, but cannot claim jobs.
-const Protocol = 1
+const Protocol = 2
 
 // RemoteKinds lists the kinds that can leave the master.
 var RemoteKinds = []string{KindReplicate, KindAnalyze, KindIndex}
@@ -48,33 +48,6 @@ type Input struct {
 	Replicate *ReplicateInput `json:"replicate,omitempty"`
 	Analyze   *AnalyzeInput   `json:"analyze,omitempty"`
 	Index     *IndexInput     `json:"index,omitempty"`
-}
-
-// OverrideRapidOCR points a self-hosted OCR step at the address this node can
-// reach. Hosted providers keep the address the master configured.
-func (in *Input) OverrideRapidOCR(baseURL string) {
-	if baseURL == "" {
-		return
-	}
-	for _, ocr := range []*OCRConfig{in.analyzeOCR(), in.indexOCR()} {
-		if ocr != nil && ocr.Kind == ocrKindRapid {
-			ocr.BaseURL = baseURL
-		}
-	}
-}
-
-func (in *Input) analyzeOCR() *OCRConfig {
-	if in.Analyze == nil {
-		return nil
-	}
-	return in.Analyze.OCR
-}
-
-func (in *Input) indexOCR() *OCRConfig {
-	if in.Index == nil {
-		return nil
-	}
-	return in.Index.OCR
 }
 
 // HasResult reports whether a result carries the output of the given kind.

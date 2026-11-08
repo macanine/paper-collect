@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { NodePoint } from '../../shared/api/types';
-import { formatAgo, linePath, originNeedsTLS, totalSlots, workerEnv } from './nodeUtils';
+import type { ClusterNode, NodePoint } from '../../shared/api/types';
+import { formatAgo, linePath, originNeedsTLS, runtimeFormValues, totalSlots, workerEnv } from './nodeUtils';
 
 const point = (time: string, cpu: number): NodePoint => ({
   time, cpu_percent: cpu, mem_used: 0, mem_total: 0, net_rx_bps: 0, net_tx_bps: 0, running: 0,
@@ -31,7 +31,22 @@ describe('节点工具', () => {
     const env = workerEnv('https://paper.example.com', 'nd-abc');
     expect(env).toContain('MASTER_URL=https://paper.example.com');
     expect(env).toContain('NODE_TOKEN=nd-abc');
+    expect(env).toContain('CACHE_DIR=/app/cache');
+    expect(env).not.toContain('WORKER_SLOTS');
     expect(totalSlots({ replicate: 2, index: 1 })).toBe(3);
+  });
+
+  it('把未配置的节点任务显式显示为零槽', () => {
+    const node = {
+      configured_slots: { replicate: 1 },
+      cache_max_bytes: 8 * 1024 ** 3,
+      ocr_provider_ids: ['ocr'],
+    } as ClusterNode;
+    expect(runtimeFormValues(node)).toEqual({
+      slots: { replicate: 1, analyze: 0, index: 0 },
+      cache_max_gib: 8,
+      ocr_provider_ids: ['ocr'],
+    });
   });
 
   it('格式化心跳时间', () => {

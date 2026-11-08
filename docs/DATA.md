@@ -1,6 +1,6 @@
 # 数据结构、存储与备份
 
-版本 1.6.0 · 2026-11-05。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
+版本 1.7.0 · 2026-11-08。本文描述当前数据库表、文件目录、备份恢复和增长控制；文档索引见 [README.md](README.md)，运行方式见 [ARCHITECTURE.md](ARCHITECTURE.md)，接口字段见 [API.md](API.md)。
 
 ## 1. 数据库与运行形态
 
@@ -39,6 +39,8 @@
 | `replicas` | `Replica` | Blob×Drive 副本；唯一索引 `(blob_id, drive_id)`；`status`、`rule_id` 索引；`desired_path`/`remote_path`/`remote_id`、`skip_reason`、`share`/`required`、verification、分享字段 |
 | `ai_providers` | `AIProvider` | OpenAI 兼容端点；`enabled`、`priority` 索引；加密 API Key、`models_json`、默认/视觉模型 |
 | `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型字段（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 字段默认 `PP-OCRv5`，但自建服务固定使用 RapidOCR 3.10 默认 PP-OCRv6 small），启停与优先级 |
+| `cluster_settings` | `ClusterSettings` | 单例 `id=default`；主端任务类型与四类并发、租约/心跳/领取/轮询参数和调度修订号 |
+| `nodes` | `Node` | 主端与从端运行状态；从端另存主端期望槽位、缓存上限、OCRProvider ID、配置修订和已应用修订，节点令牌只存哈希 |
 | `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限；旧 MinerU 字段仅用于兼容迁移 |
 | `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、应用时间、Markdown 路径、脱敏错误 |
 | `search_settings` | `SearchSettings` | 单例 `id=1`；索引开关、页数/批次上限、指定 provider/model |
@@ -64,6 +66,7 @@ Material ──< MaterialIndexState
 Blob ──< Replica >── Drive
 Rule ──< RuleTarget >── Drive
 Drive ──< DriveNodeRoute >── Node
+ClusterSettings（单例）── 调度 ── Node
 Job ──< Upload / Replica / Material（按 kind 关联）
 ```
 

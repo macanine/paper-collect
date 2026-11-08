@@ -706,6 +706,11 @@ export interface ClusterNode {
   status: NodeStatus;
   kinds: NodeKind[];
   slots: Partial<Record<NodeKind, number>>;
+  configured_slots: Partial<Record<NodeKind, number>>;
+  cache_max_bytes: number;
+  ocr_provider_ids: string[];
+  config_revision: number;
+  applied_config_revision: number;
   running: number;
   running_kinds: Partial<Record<JobKind, number>>;
   succeeded_1h: number;
@@ -730,6 +735,20 @@ export interface ClusterNode {
 
 export interface CreatedNode extends ClusterNode {
   token: string;
+}
+
+export interface ClusterSettings {
+  master_kinds: NodeKind[];
+  master_ingest_concurrency: number;
+  master_replicate_concurrency: number;
+  master_analyze_concurrency: number;
+  master_index_concurrency: number;
+  lease_seconds: number;
+  heartbeat_seconds: number;
+  claim_wait_seconds: number;
+  poll_seconds: number;
+  revision: number;
+  updated_at: string;
 }
 
 export interface NodePoint {

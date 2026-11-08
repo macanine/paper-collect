@@ -158,7 +158,7 @@ func (s *Service) RecoverExpiredLeases(ctx context.Context) (int, error) {
 func (s *Service) recoverJobs(db *gorm.DB, now time.Time) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var ids []string
-		if err := tx.Model(&model.Job{}).Where("status = ? AND lease_owner = ?", model.JobRunning, s.worker.InstanceID).
+		if err := tx.Model(&model.Job{}).Where("status = ? AND lease_owner = ?", model.JobRunning, s.workerSettings().InstanceID).
 			Pluck("id", &ids).Error; err != nil {
 			return wrap("find recoverable jobs", err)
 		}
