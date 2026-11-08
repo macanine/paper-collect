@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestNormalizeAndTerms(t *testing.T) {
@@ -19,6 +20,34 @@ func TestNormalizeAndTerms(t *testing.T) {
 	}
 	if len(searchTerms("abc123")) != 1 {
 		t.Fatalf("latin/digit run should be one term: %v", searchTerms("abc123"))
+	}
+}
+
+func TestSearchTermsBoundsLongLatinRuns(t *testing.T) {
+	long := strings.Repeat("A1", 80)
+	got := searchTerms(normalizeSearchText(long))
+	if len(got) != 1 {
+		t.Fatalf("long Latin run should produce one bounded term: %v", got)
+	}
+	for term, count := range got {
+		if count != 1 {
+			t.Fatalf("term %q count = %d, want 1", term, count)
+		}
+		if utf8.RuneCountInString(term) > maxSearchTermRunes {
+			t.Fatalf("term has %d runes, want at most %d", utf8.RuneCountInString(term), maxSearchTermRunes)
+		}
+		if term != boundedSearchTerm(normalizeSearchText(long)) {
+			t.Fatalf("term %q is not deterministic", term)
+		}
+	}
+	other := searchTerms(normalizeSearchText(long + "B"))
+	if len(other) != 1 {
+		t.Fatalf("different long run should also produce one term: %v", other)
+	}
+	for term := range got {
+		if other[term] != 0 {
+			t.Fatalf("different long runs mapped to the same term %q", term)
+		}
 	}
 }
 
