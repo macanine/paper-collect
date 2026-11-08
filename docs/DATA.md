@@ -32,7 +32,8 @@
 | `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status`（pending/received/existing） |
 | `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
 | `job_locks` | `JobLock` | 同资料 analyze/index/group 互斥；资源键、任务 ID、租约到期时间 |
-| `storage_drives` | `Drive` | 网盘；`enabled`、`read_order` 索引；kind、`root_path`、`max_file_bytes`、`allowed_exts_json`、`on_path_change`、config JSON、加密 secret；kind 不可改 |
+| `storage_drives` | `Drive` | 网盘；`enabled`、`read_order`、`route_mode` 索引；kind、`root_path`、`max_file_bytes`、`allowed_exts_json`、`on_path_change`、上传路由策略、config JSON、加密 secret；kind 不可改 |
+| `drive_node_routes` | `DriveNodeRoute` | 网盘上传节点；唯一索引 `(drive_id,node_id)`；`priority`、`enabled`；优先级越小越先领取，主端也可作为路由节点 |
 | `sync_rules` | `Rule` | 有序同步规则；`position`、`enabled` 索引；`is_default` 标记兜底规则；`conditions_json` |
 | `sync_rule_targets` | `RuleTarget` | 规则目标；唯一索引 `(rule_id, drive_id)`；`path_template`、`share`、`required`、`position` |
 | `replicas` | `Replica` | Blob×Drive 副本；唯一索引 `(blob_id, drive_id)`；`status`、`rule_id` 索引；`desired_path`/`remote_path`/`remote_id`、`skip_reason`、`share`/`required`、verification、分享字段 |
@@ -62,6 +63,7 @@ Material ──< QuestionBlock ──< QuestionTerm
 Material ──< MaterialIndexState
 Blob ──< Replica >── Drive
 Rule ──< RuleTarget >── Drive
+Drive ──< DriveNodeRoute >── Node
 Job ──< Upload / Replica / Material（按 kind 关联）
 ```
 

@@ -73,7 +73,7 @@ export function StoragePage() {
         <Tabs
           className="px-6"
           items={[
-            { key: 'drives', label: '网盘', children: <div className="pb-6"><DrivesTab canWrite={canWrite} /></div> },
+            { key: 'drives', label: '网盘', children: <div className="pb-6"><DrivesTab canWrite={canWrite} canRoute={can('nodes:manage')} /></div> },
             { key: 'rules', label: '同步规则', children: <div className="pb-6"><RulesTab canWrite={canWrite} rules={ruleList} drives={driveList} /></div> },
             { key: 'replicas', label: '副本', children: <div className="pb-6"><ReplicasTab canWrite={canWrite} /></div> },
           ]}

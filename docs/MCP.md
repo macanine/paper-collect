@@ -174,6 +174,8 @@ curl -sS http://127.0.0.1:8080/mcp \
 
 网盘同步分三步：先用 `storage_drives_create` 添加网盘，再用 `storage_rules_list` 取得当前规则、修改后调用 `storage_rules_preview` 查看影响并拿到 `preview_token`，最后把同一份规则和令牌交给 `storage_rules_replace`。令牌 15 分钟有效，期间规则或网盘被修改需重新预览。`storage_rules_explain` 说明某个文件为什么去了哪个网盘；规则外副本用 `storage_replicas_list`（`status=orphaned`）查看，再用 `storage_replicas_bulk` 删除远端或只移除记录。
 
+`storage_drives_create` 与 `storage_drives_update` 可填写 `route_mode`（`pool`、`preferred`、`exclusive`）和 `routes:[{node_id,priority,enabled}]`，为每个网盘指定主端/从端上传顺序。
+
 OneDrive 使用现成 OpenList 应用时，`storage_drives_create` 的 `config` 可填写 `{"auth_mode":"openlist"}`，`secret` 填写在 OpenList Token 页面取得的 `refresh_token`。续期依赖 OpenList 第三方服务，令牌按其协议放在请求 URL 查询参数中；使用自有微软应用时填写 `auth_mode=direct` 和 `client_id`，并提供对应刷新令牌。变更授权方式时必须提交对应的新令牌。
 
 ### 文件上传与下载

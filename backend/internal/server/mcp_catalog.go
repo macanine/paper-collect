@@ -110,7 +110,10 @@ var mcpOperations = func() []mcpOperation {
 	ids := mustFields(bodyA("ids"), "ids")
 	ai := joined(bodyS("name base_url api_key default_model vision_model"), bodyA("models"), bodyB("enabled"), bodyI("priority"))
 	ocr := joined(bodyS("name base_url token model"), bodyB("enabled"), bodyI("priority"))
-	drive := joined(bodyS("name root_path on_path_change"), bodyB("enabled"), bodyI("max_file_bytes read_order"), bodyA("allowed_exts"), bodyO("config secret"))
+	driveRoutes := map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"node_id", "priority"}, "properties": map[string]any{
+		"node_id": map[string]any{"type": "string"}, "priority": map[string]any{"type": "integer", "minimum": 1, "maximum": 1000}, "enabled": map[string]any{"type": "boolean"},
+	}}}
+	drive := joined(bodyS("name root_path on_path_change"), bodyB("enabled"), bodyI("max_file_bytes read_order"), bodyA("allowed_exts"), customField("route_mode", "string", map[string]any{"enum": []string{"pool", "preferred", "exclusive"}}), customField("routes", "array", driveRoutes), bodyO("config secret"))
 	strs := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	integer := map[string]any{"type": "integer"}
 	boolean := map[string]any{"type": "boolean"}

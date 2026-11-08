@@ -415,6 +415,30 @@ type Job struct {
 	UpdatedAt       time.Time
 }
 
+// Drive route policies control which node may upload a replica. Pool preserves
+// the legacy behaviour where any eligible node may claim the job. Preferred
+// follows the configured priority list while falling back to the pool when no
+// configured node is available. Exclusive only uses configured nodes.
+const (
+	DriveRoutePool      = "pool"
+	DriveRoutePreferred = "preferred"
+	DriveRouteExclusive = "exclusive"
+)
+
+var DriveRouteModes = []string{DriveRoutePool, DriveRoutePreferred, DriveRouteExclusive}
+
+// DriveNodeRoute assigns one upload node to a drive. Lower priority numbers
+// win when more than one configured node is available.
+type DriveNodeRoute struct {
+	ID        string `gorm:"primaryKey;size:36"`
+	DriveID   string `gorm:"size:36;not null;uniqueIndex:uq_drive_node_route,priority:1;index"`
+	NodeID    string `gorm:"size:36;not null;uniqueIndex:uq_drive_node_route,priority:2;index"`
+	Priority  int    `gorm:"not null;index"`
+	Enabled   bool   `gorm:"not null;default:true;index"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // JobLog contains only application-generated, non-secret progress information.
 type JobLog struct {
 	Time       time.Time      `json:"time"`
@@ -466,9 +490,10 @@ type JobLock struct {
 	UpdatedAt  time.Time
 }
 
-// Drive is one network storage destination. It only describes where and how
-// to connect; which files go there and under what path is decided entirely by
-// Rules. Secrets are stored encrypted.
+// Drive is one network storage destination. It describes where and how to
+// connect, plus which execution nodes may upload its replicas. Which files go
+// there and under what path is decided entirely by Rules. Secrets are stored
+// encrypted.
 type Drive struct {
 	ID              string `gorm:"primaryKey;size:36"`
 	Name            string `gorm:"size:128;not null"`
@@ -479,6 +504,7 @@ type Drive struct {
 	AllowedExtsJSON string `gorm:"type:text;not null"`
 	ReadOrder       int    `gorm:"not null;index"`
 	OnPathChange    string `gorm:"size:8;not null"`
+	RouteMode       string `gorm:"size:16;not null;default:'pool';index"`
 	ConfigJSON      string `gorm:"type:text;not null"`
 	SecretCipher    string `gorm:"type:text"`
 	CreatedAt       time.Time
@@ -488,6 +514,9 @@ type Drive struct {
 // TableName names the drives table (kept plural per convention; "storage_drives"
 // avoids colliding with a future generic "drives" concept).
 func (Drive) TableName() string { return "storage_drives" }
+
+// TableName names the per-drive upload routing table.
+func (DriveNodeRoute) TableName() string { return "drive_node_routes" }
 
 // Rule is one ordered sync rule. Rules are matched top to bottom; the first
 // whose Conditions match a material governs it. A disabled rule is skipped as
@@ -731,6 +760,7 @@ func Models() []any {
 		&Collection{}, &CollectionItem{},
 		&Upload{}, &UploadEntry{}, &Job{}, &JobLock{},
 		&Drive{}, &Rule{}, &RuleTarget{}, &Replica{},
+		&DriveNodeRoute{},
 		&AIProvider{}, &OCRProvider{}, &AISettings{}, &MaterialAnalysis{},
 		&SearchSettings{}, &MaterialText{}, &QuestionBlock{}, &QuestionTerm{}, &MaterialIndexState{},
 		&Node{},

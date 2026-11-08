@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormInstance } from 'antd';
-import { Alert, App, Checkbox, Form, Input, InputNumber, Modal, Select, Switch } from 'antd';
-import type { Drive, OnPathChange, ProviderKind } from '../../shared/api/types';
+import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Switch } from 'antd';
+import type { ClusterNode, Drive, DriveRouteMode, OnPathChange, ProviderKind } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import {
   PROVIDER_FIELD_SPECS,
@@ -15,6 +15,7 @@ import {
   visibleConfigFields,
   visibleSecretFields,
   type FieldSpec,
+  type DriveRouteDraft,
   type ProviderFormValues,
 } from './providerFields';
 import { useCreateDrive, useUpdateDrive } from './queries';
@@ -24,6 +25,8 @@ interface ProviderFormModalProps {
   drive?: Drive;
   onClose: () => void;
   onSaved?: (drive: Drive) => void;
+  nodes?: ClusterNode[];
+  canRoute?: boolean;
 }
 
 const ON_PATH_CHANGE_OPTIONS: { value: OnPathChange; label: string }[] = [
@@ -46,7 +49,7 @@ function applyFieldErrors(form: FormInstance<ProviderFormValues>, errors: Record
   );
 }
 
-export function ProviderFormModal({ open, drive, onClose, onSaved }: ProviderFormModalProps) {
+export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], canRoute = false }: ProviderFormModalProps) {
   const [form] = Form.useForm<ProviderFormValues>();
   const { message } = App.useApp();
   const create = useCreateDrive();
@@ -60,8 +63,10 @@ export function ProviderFormModal({ open, drive, onClose, onSaved }: ProviderFor
   const clearSecret = Boolean(Form.useWatch('clearSecret', form));
   const watchedConfig = Form.useWatch('config', form) as Record<string, string> | undefined;
   const config = watchedConfig ?? (drive?.kind === kind ? initialProviderValues(drive).config : configDefaultsForKind(kind));
+  const watchedRoutes = Form.useWatch('routes', form) as DriveRouteDraft[] | undefined;
   const oneDriveMode = oneDriveAuthMode(config);
   const canMove = kind !== 'lanzou' && kind !== '123pan';
+  const routes = watchedRoutes ?? [];
 
   useEffect(() => {
     if (!open) return;
@@ -174,6 +179,64 @@ export function ProviderFormModal({ open, drive, onClose, onSaved }: ProviderFor
             <Select options={ON_PATH_CHANGE_OPTIONS.filter((option) => canMove || option.value === 'keep')} />
           </Form.Item>
         </div>
+
+        {canRoute && kind !== 'local' ? (
+          <div className="mb-5 rounded-md border border-solid border-[#D9D9D9] bg-[#FAFAFA] p-4">
+            <div className="mb-3 text-sm font-semibold">上传节点路由</div>
+            <div className="mb-3 text-xs text-[#595959]">优先级数字越小越先上传。首选节点不可用时，优先策略会自动切换到下一个节点；独占策略会保持等待。</div>
+            <Form.Item name="route_mode" label="分配策略">
+              <Select<DriveRouteMode>
+                options={[
+                  { value: 'pool', label: '自动分配（所有可用节点）' },
+                  { value: 'preferred', label: '按优先级，故障时自动切换' },
+                  { value: 'exclusive', label: '仅使用指定节点' },
+                ]}
+              />
+            </Form.Item>
+            <Form.List name="routes">
+              {(fields, { add, remove }) => (
+                <div className="flex flex-col gap-2">
+                  {fields.map((field) => {
+                    const selected = routes[field.name]?.node_id;
+                    return (
+                      <Space key={field.key} align="start" className="w-full">
+                        <Form.Item
+                          {...field}
+                          name={[field.name, 'node_id']}
+                          rules={[{ required: true, message: '请选择节点' }]}
+                          className="mb-0 min-w-0 flex-1"
+                        >
+                          <Select
+                            placeholder="选择主端或从端"
+                            options={nodes.map((node) => ({
+                              value: node.id,
+                              label: `${node.name}${node.is_master ? '（主端）' : ''}`,
+                              disabled: !node.enabled,
+                            }))}
+                            optionFilterProp="label"
+                            showSearch
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          {...field}
+                          name={[field.name, 'priority']}
+                          rules={[{ required: true, type: 'number', min: 1, max: 1000, message: '1-1000' }]}
+                          className="mb-0 w-28"
+                        >
+                          <InputNumber min={1} max={1000} precision={0} className="w-full" placeholder="优先级" />
+                        </Form.Item>
+                        <Button type="text" danger onClick={() => remove(field.name)} aria-label={`移除 ${selected || '节点'}路由`}>移除</Button>
+                      </Space>
+                    );
+                  })}
+                  <Button type="dashed" onClick={() => add({ node_id: '', priority: fields.length + 1, enabled: true })} disabled={fields.length >= nodes.length}>
+                    添加节点
+                  </Button>
+                </div>
+              )}
+            </Form.List>
+          </div>
+        ) : null}
 
         {spec.config.length > 0 ? (
           <>

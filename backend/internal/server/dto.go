@@ -281,12 +281,23 @@ type driveDTO struct {
 	AllowedExts      []string             `json:"allowed_exts"`
 	ReadOrder        int                  `json:"read_order"`
 	OnPathChange     string               `json:"on_path_change"`
+	RouteMode        string               `json:"route_mode"`
+	Routes           []driveRouteDTO      `json:"routes"`
 	Config           map[string]string    `json:"config"`
 	SecretConfigured bool                 `json:"secret_configured"`
 	Capabilities     storage.Capabilities `json:"capabilities"`
 	Stats            map[string]int64     `json:"stats"`
 	CreatedAt        time.Time            `json:"created_at"`
 	UpdatedAt        time.Time            `json:"updated_at"`
+}
+
+type driveRouteDTO struct {
+	NodeID   string `json:"node_id"`
+	NodeName string `json:"node_name"`
+	IsMaster bool   `json:"is_master"`
+	Priority int    `json:"priority"`
+	Enabled  bool   `json:"enabled"`
+	Status   string `json:"status"`
 }
 
 type loginDTO struct {
@@ -534,7 +545,11 @@ func toJob(j model.Job) jobDTO {
 }
 
 func toDrive(p model.Drive) driveDTO {
-	return driveDTO{ID: p.ID, Name: p.Name, Kind: p.Kind, Enabled: p.Enabled, RootPath: p.RootPath, MaxFileBytes: p.MaxFileBytes, AllowedExts: model.DecodeStrings(p.AllowedExtsJSON), ReadOrder: p.ReadOrder, OnPathChange: p.OnPathChange, Config: model.DecodeMap(p.ConfigJSON), SecretConfigured: p.SecretCipher != "", CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+	routeMode := p.RouteMode
+	if routeMode == "" {
+		routeMode = model.DriveRoutePool
+	}
+	return driveDTO{ID: p.ID, Name: p.Name, Kind: p.Kind, Enabled: p.Enabled, RootPath: p.RootPath, MaxFileBytes: p.MaxFileBytes, AllowedExts: model.DecodeStrings(p.AllowedExtsJSON), ReadOrder: p.ReadOrder, OnPathChange: p.OnPathChange, RouteMode: routeMode, Routes: []driveRouteDTO{}, Config: model.DecodeMap(p.ConfigJSON), SecretConfigured: p.SecretCipher != "", CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
 func toPage[T any, U any](src service.Page[T], convert func(T) U) pageDTO[U] {
