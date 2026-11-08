@@ -315,6 +315,9 @@ func paddlePageTexts(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return "", &APIError{Class: "invalid_response", Detail: "PaddleOCR 页结果不是对象"}
 	}
+	if texts := paddleLayoutMarkdown(raw); len(texts) > 0 {
+		return strings.Join(texts, "\n\n"), nil
+	}
 	for _, key := range []string{"ocrResults", "res", "result"} {
 		if nested, ok := result[key]; ok {
 			if texts := extractPaddleTexts(nested); len(texts) > 0 {
@@ -326,6 +329,54 @@ func paddlePageTexts(raw json.RawMessage) (string, error) {
 		return strings.Join(texts, "\n"), nil
 	}
 	return "", nil
+}
+
+// paddleLayoutMarkdown extracts text from the document pipelines returned by
+// PP-StructureV3 and the PaddleOCR-VL family. Their JSONL result uses
+// layoutParsingResults[].markdown.text instead of PP-OCR's rec_texts.
+func paddleLayoutMarkdown(raw json.RawMessage) []string {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	var out []string
+	var walk func(any) bool
+	walk = func(node any) bool {
+		switch v := node.(type) {
+		case map[string]any:
+			if layouts, ok := v["layoutParsingResults"].([]any); ok {
+				for _, layout := range layouts {
+					item, ok := layout.(map[string]any)
+					if !ok {
+						continue
+					}
+					markdown, ok := item["markdown"].(map[string]any)
+					if !ok {
+						continue
+					}
+					text, ok := markdown["text"].(string)
+					if ok && strings.TrimSpace(text) != "" {
+						out = append(out, strings.TrimSpace(text))
+					}
+				}
+				return true
+			}
+			for _, key := range []string{"result", "res"} {
+				if child, ok := v[key]; ok && walk(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if walk(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	walk(value)
+	return out
 }
 
 // extractPaddleTexts recursively finds rec_texts arrays. It intentionally
