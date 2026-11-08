@@ -43,6 +43,26 @@ func TestParsePaddleOCRJSONLAcceptsBareAndNestedResults(t *testing.T) {
 	}
 }
 
+func TestParsePaddleOCRJSONLLayoutMarkdown(t *testing.T) {
+	raw := []byte(`{"result":{"layoutParsingResults":[` +
+		`{"markdown":{"text":"# 第一段\n\n公式 $x^2$"}},` +
+		`{"markdown":{"text":"第二段","images":{}}}` +
+		`]}}`)
+	result, err := ParsePaddleOCRJSONL(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if result.PageCount != 1 || len(result.Pages) != 1 {
+		t.Fatalf("pages=%d texts=%d", result.PageCount, len(result.Pages))
+	}
+	if got := result.Pages[0].Text; got != "# 第一段\n\n公式 $x^2$\n\n第二段" {
+		t.Fatalf("page text=%q", got)
+	}
+	if !strings.Contains(result.Markdown, "## 第 1 页") {
+		t.Fatalf("markdown: %q", result.Markdown)
+	}
+}
+
 func TestParsePaddleOCRJSONLRejectsEmptyText(t *testing.T) {
 	if _, err := ParsePaddleOCRJSONL([]byte(`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":[]}}]}}`)); err == nil {
 		t.Fatal("expected empty result error")
