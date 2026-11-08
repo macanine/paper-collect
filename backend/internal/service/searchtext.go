@@ -1,9 +1,14 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
+
+const maxSearchTermRunes = 64
 
 // normalizeSearchText folds width/case and strips punctuation so queries and
 // indexed text share one representation.
@@ -46,7 +51,7 @@ func searchTerms(normalized string) map[string]int {
 	var latin strings.Builder
 	flushLatin := func() {
 		if latin.Len() > 0 {
-			terms[latin.String()]++
+			terms[boundedSearchTerm(latin.String())]++
 			latin.Reset()
 		}
 	}
@@ -66,6 +71,17 @@ func searchTerms(normalized string) map[string]int {
 	flushCJK()
 	flushLatin()
 	return terms
+}
+
+// boundedSearchTerm keeps an unbounded Latin/digit run within the posting-key
+// column. Hashing preserves exact whole-run matching without making PostgreSQL
+// reject the entire index transaction.
+func boundedSearchTerm(term string) string {
+	if utf8.RuneCountInString(term) <= maxSearchTermRunes {
+		return term
+	}
+	sum := sha256.Sum256([]byte(term))
+	return "h:" + hex.EncodeToString(sum[:])[:maxSearchTermRunes-2]
 }
 
 // A suffix automaton locates the longest continuous match without repeatedly
