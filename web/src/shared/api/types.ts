@@ -411,6 +411,16 @@ export interface DriveCapabilities {
 }
 
 export type OnPathChange = 'move' | 'keep';
+export type DriveRouteMode = 'pool' | 'preferred' | 'exclusive';
+
+export interface DriveNodeRoute {
+  node_id: string;
+  node_name: string;
+  is_master: boolean;
+  priority: number;
+  enabled: boolean;
+  status: NodeStatus;
+}
 
 export interface Drive {
   id: string;
@@ -422,6 +432,8 @@ export interface Drive {
   allowed_exts: string[];
   read_order: number;
   on_path_change: OnPathChange;
+  route_mode?: DriveRouteMode;
+  routes?: DriveNodeRoute[];
   config: Record<string, string>;
   secret_configured: boolean;
   capabilities: DriveCapabilities;

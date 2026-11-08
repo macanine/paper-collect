@@ -29,7 +29,7 @@
 
 `Job`：`id,kind:ingest|replicate|analyze|index|group,status:pending|running|succeeded|failed,upload_id:string,replica_id:string,material_id:string,attempts:integer,error:string,progress_message:string,progress_current:integer,progress_total:integer,logs?:[{time,level:info|error,message,elapsed_ms?:integer,duration_ms?:integer,metrics?:object}],started_at:date-time|null,finished_at:date-time|null,duration_ms:integer,created_at,updated_at`。详情包含最多 200 条带时间的处理记录；列表省略 `logs`。`duration_ms` 是最近一次执行从领取到终态的耗时；运行中可按 `started_at` 计算当前耗时。日志的 `elapsed_ms` 是相对本次执行开始的偏移，`duration_ms` 表示当前记录覆盖步骤的耗时，`metrics` 只保存应用可控的非敏感事实（端点名、字节数、吞吐、页数、模型名、校验级别、分享状态等）。进度数量只表示当前阶段（文件数、批次数或传输字节数），`progress_total=0` 表示当前阶段没有可计算的总数，不代表整个任务百分比。旧任务可能没有记录或新指标。重试返回同一 job_id，已完成任务禁止重试；入队和启动恢复保证未完成工作不会仅存在内存中。主端和从端节点通过带租约和心跳的方式领取任务。任务响应还包含 `node_id`、`node_name`，表示最近一次执行的节点。
 
-`Drive`（网盘）：`id,name(1..128),kind:local|webdav|lanzou|123pan|onedrive|s3,enabled:boolean,root_path:string,max_file_bytes:integer(>=0，0=不限),allowed_exts:string[],read_order:integer(0..1000),on_path_change:move|keep,config:object<string,string>,secret_configured:boolean,capabilities:{upload,download,share,folders,move,delete:boolean},stats:object<string,integer>,created_at,updated_at`。网盘只描述连接方式，上传哪些文件、放在什么路径由同步规则决定。`root_path` 是本系统在该网盘中使用的根目录（安全相对路径；蓝奏云为文件夹 ID）。`read_order` 越小，本机原件缺失时越先读取。`on_path_change=move` 时期望路径变化会在远端移动/改名，`keep` 时保持原位并标记路径偏离；蓝奏云与 123 云盘只能用 `keep`，省略时按类型取默认值。蓝奏云 `max_file_bytes` 为 0 时按 100 MiB 处理。`stats` 按副本状态计数，`size_bytes` 为 ready 与 orphaned 副本的字节数；`capabilities` 和 `stats` 不发起网络请求。任何 GET 不返回 secret。
+`Drive`（网盘）：`id,name(1..128),kind:local|webdav|lanzou|123pan|onedrive|s3,enabled:boolean,root_path:string,max_file_bytes:integer(>=0，0=不限),allowed_exts:string[],read_order:integer(0..1000),on_path_change:move|keep,route_mode:pool|preferred|exclusive,routes:DriveRoute[],config:object<string,string>,secret_configured:boolean,capabilities:{upload,download,share,folders,move,delete:boolean},stats:object<string,integer>,created_at,updated_at`。`DriveRoute` 为 `node_id,node_name,is_master,priority(1..1000),enabled,status`；优先级数字越小越优先。`pool` 让所有符合任务类型的节点竞争；`preferred` 按路由顺序选择节点，全部配置节点不可用时回退到节点池；`exclusive` 只允许配置的节点。`local` 网盘只能由主端执行。网盘只描述连接方式，上传哪些文件、放在什么路径由同步规则决定。`root_path` 是本系统在该网盘中使用的根目录（安全相对路径；蓝奏云为文件夹 ID）。`read_order` 越小，本机原件缺失时越先读取。`on_path_change=move` 时期望路径变化会在远端移动/改名，`keep` 时保持原位并标记路径偏离；蓝奏云与 123 云盘只能用 `keep`，省略时按类型取默认值。蓝奏云 `max_file_bytes` 为 0 时按 100 MiB 处理。`stats` 按副本状态计数，`size_bytes` 为 ready 与 orphaned 副本的字节数；`capabilities` 和 `stats` 不发起网络请求。任何 GET 不返回 secret。
 
 `SyncRule`：`id(1..36，列表内唯一),name(1..128),enabled:boolean,is_default:boolean,conditions:RuleConditions,targets:SyncTarget[]`。`RuleConditions`：`subjects?:Subject.code[],doc_types?:DocType[],grades?:Grade[],cohorts?:integer[],regions?:string[],tags?:string[],parts?:Part[],media_types?:string[],min_size?:integer,max_size?:integer(0=不限)`；字段之间是「且」，同一字段多个值是「或」，全部省略匹配所有文件。`SyncTarget`：`drive_id,path_template,share:boolean,required:boolean`；同一规则不能重复指定网盘，123 云盘不能作为目标。规则列表 1..100 条，按顺序匹配，**命中第一条启用的规则为止**；最后一条必须是 `is_default=true`、启用且无条件的兜底规则（targets 可为空，即不上传）。
 
@@ -226,10 +226,10 @@ JSON：
 GET storage:read，返回 `Drive[]`（按 read_order、创建时间排序，不分页）。POST storage:write，201 Drive。JSON：
 
 ```json
-{"name":"学校 WebDAV","kind":"webdav","enabled":true,"root_path":"paper-collect","max_file_bytes":0,"allowed_exts":[".pdf",".docx"],"read_order":20,"on_path_change":"move","config":{"base_url":"https://dav.example/dav"},"secret":{"username":"user","password":"secret"}}
+{"name":"学校 WebDAV","kind":"webdav","enabled":true,"root_path":"paper-collect","max_file_bytes":0,"allowed_exts":[".pdf",".docx"],"read_order":20,"on_path_change":"move","route_mode":"preferred","routes":[{"node_id":"worker-home","priority":1},{"node_id":"master","priority":2}],"config":{"base_url":"https://dav.example/dav"},"secret":{"username":"user","password":"secret"}}
 ```
 
-`name`、`kind` 必需；省略 enabled/read_order 时默认 true/100，`on_path_change` 省略时 lanzou/123pan 为 keep、其余为 move。`allowed_exts` 自动转小写并补齐前导点，为空表示不限。config 与 secret 均为 object<string,string>，字段按适配器：
+`name`、`kind` 必需；省略 enabled/read_order 时默认 true/100，`on_path_change` 省略时 lanzou/123pan 为 keep、其余为 move。省略 `route_mode` 时为 `pool`；配置路由时每个 node_id 只能出现一次，priority 必须为不重复的 1..1000 整数。`allowed_exts` 自动转小写并补齐前导点，为空表示不限。config 与 secret 均为 object<string,string>，字段按适配器：
 
 | kind | config | secret |
 | --- | --- | --- |
@@ -263,7 +263,7 @@ config 或 secret 中出现该 kind 不支持的键会被拒绝；创建前会�
 
 ### PATCH /storage/drives/{id}（storage:write）
 
-可修改 name/enabled/root_path/max_file_bytes/allowed_exts/read_order/on_path_change/config/secret；kind 不可改。config 若出现整体替换；secret 若出现整体替换，空对象清空，省略保留。200 Drive。修改网盘设置不会自动作用到已有文件；需要时调用 `POST /storage/reconcile`（管理台为存储页的「补齐副本」）。停用网盘后，新计划中该网盘的目标记为 skipped，已写入的副本仍可读取。审计记录 storage.drive_update。
+可修改 name/enabled/root_path/max_file_bytes/allowed_exts/read_order/on_path_change/route_mode/routes/config/secret；kind 不可改。config 若出现整体替换；secret 若出现整体替换，空对象清空，省略保留。路由变更会唤醒等待中的复制任务；正在运行的任务继续由原租约完成。200 Drive。修改网盘设置不会自动作用到已有文件；需要时调用 `POST /storage/reconcile`（管理台为存储页的「补齐副本」）。停用网盘后，新计划中该网盘的目标记为 skipped，已写入的副本仍可读取。审计记录 storage.drive_update。
 
 ### POST /storage/drives/{id}/test（storage:write）
 
@@ -404,6 +404,8 @@ curl -X POST http://127.0.0.1:8080/mcp -H "Authorization: Bearer $PAPER_COLLECT_
 | GET | `/api/v1/nodes/:id/metrics` | 最近 1 小时指标，保存在主端内存，重启后清空 |
 
 节点字段：`id`、`name`、`is_master`、`enabled`、`draining`、`status`（`online`、`stale`、`offline`、`draining`、`disabled`）、`kinds`、`slots`、`running`（节点上报）、`running_kinds`（按类型统计的租约任务）、`succeeded_1h`、`failed_1h`、`version`、`protocol`、`last_ip`、`last_seen_at`、`started_at`、`cpu_percent`、`cpu_cores`、`proc_cpu_percent`、`mem_used`、`mem_total`、`proc_rss`、`net_rx_bps`、`net_tx_bps`、`cache_used`、`cache_max`、`created_at`。
+
+网盘的上传路由在网盘编辑表单中配置；节点管理权限的管理员可以把主端或任意从端加入某个网盘的优先级列表。路由只影响 `replicate`，不改变 AI/索引任务的节点类型配置。
 
 任务列表支持 `node_id` 筛选，任务响应包含 `node_id`、`node_name`。
 

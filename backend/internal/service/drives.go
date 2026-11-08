@@ -27,6 +27,8 @@ type DriveInput struct {
 	AllowedExts  []string          `json:"allowed_exts"`
 	ReadOrder    int               `json:"read_order"`
 	OnPathChange string            `json:"on_path_change"`
+	RouteMode    string            `json:"route_mode"`
+	Routes       []DriveRouteInput `json:"routes"`
 	Config       map[string]string `json:"config"`
 	Secret       map[string]string `json:"secret"`
 }
@@ -39,8 +41,27 @@ type DrivePatch struct {
 	AllowedExts  *[]string          `json:"allowed_exts"`
 	ReadOrder    *int               `json:"read_order"`
 	OnPathChange *string            `json:"on_path_change"`
+	RouteMode    *string            `json:"route_mode"`
+	Routes       *[]DriveRouteInput `json:"routes"`
 	Config       *map[string]string `json:"config"`
 	Secret       *map[string]string `json:"secret"`
+}
+
+// DriveRouteInput is one node assignment submitted with a drive.
+type DriveRouteInput struct {
+	NodeID   string
+	Priority int
+	Enabled  bool
+}
+
+// DriveRouteView is the safe, display-oriented form returned to the UI.
+type DriveRouteView struct {
+	NodeID   string
+	NodeName string
+	IsMaster bool
+	Priority int
+	Enabled  bool
+	Status   string
 }
 
 // DriveTest is the result of an explicit adapter health check.
@@ -78,12 +99,53 @@ func (s *Service) ListDrives(ctx context.Context) ([]model.Drive, error) {
 	return items, nil
 }
 
+// ListDriveRoutes returns the ordered upload nodes for one drive. Node tokens
+// and other credentials are never part of this view.
+func (s *Service) ListDriveRoutes(ctx context.Context, driveID string) ([]DriveRouteView, error) {
+	var routes []model.DriveNodeRoute
+	if err := s.db.WithContext(ctx).Where("drive_id = ?", driveID).
+		Order("priority ASC").Order("node_id ASC").Find(&routes).Error; err != nil {
+		return nil, apperr.Internal(err)
+	}
+	if len(routes) == 0 {
+		return []DriveRouteView{}, nil
+	}
+	ids := make([]string, 0, len(routes))
+	for _, route := range routes {
+		ids = append(ids, route.NodeID)
+	}
+	var nodes []model.Node
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&nodes).Error; err != nil {
+		return nil, apperr.Internal(err)
+	}
+	byID := make(map[string]model.Node, len(nodes))
+	for _, node := range nodes {
+		byID[node.ID] = node
+	}
+	out := make([]DriveRouteView, 0, len(routes))
+	for _, route := range routes {
+		node, ok := byID[route.NodeID]
+		if !ok {
+			continue
+		}
+		out = append(out, DriveRouteView{
+			NodeID: route.NodeID, NodeName: node.Name, IsMaster: node.IsMaster,
+			Priority: route.Priority, Enabled: route.Enabled, Status: s.nodeStatus(node),
+		})
+	}
+	return out, nil
+}
+
 // CreateDrive stores a new endpoint and verifies its adapter configuration.
 func (s *Service) CreateDrive(ctx context.Context, p auth.Principal, in DriveInput) (model.Drive, error) {
 	if err := validateDriveInput(&in); err != nil {
 		return model.Drive{}, err
 	}
 	if err := validateDriveMaps(in.Kind, in.Config, in.Secret); err != nil {
+		return model.Drive{}, err
+	}
+	routeMode, routes, err := s.validateDriveRoutes(ctx, in.Kind, in.RouteMode, in.Routes)
+	if err != nil {
 		return model.Drive{}, err
 	}
 	id := newID()
@@ -101,13 +163,16 @@ func (s *Service) CreateDrive(ctx context.Context, p auth.Principal, in DriveInp
 		Kind:     in.Kind,
 		Enabled:  in.Enabled,
 		RootPath: in.RootPath, MaxFileBytes: in.MaxFileBytes, AllowedExtsJSON: model.EncodeStrings(in.AllowedExts), ReadOrder: in.ReadOrder, OnPathChange: in.OnPathChange,
-		ConfigJSON:   model.EncodeMap(in.Config),
+		ConfigJSON: model.EncodeMap(in.Config), RouteMode: routeMode,
 		SecretCipher: cipher,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&drive).Error; err != nil {
+			return err
+		}
+		if err := replaceDriveRoutes(tx, drive.ID, routes); err != nil {
 			return err
 		}
 		return s.audit(tx, p, "storage.drive_create", drive.ID)
@@ -127,7 +192,7 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 		return model.Drive{}, apperr.NotFound("网盘不存在")
 	}
 
-	in := DriveInput{Name: drive.Name, Kind: drive.Kind, Enabled: drive.Enabled, RootPath: drive.RootPath, MaxFileBytes: drive.MaxFileBytes, AllowedExts: model.DecodeStrings(drive.AllowedExtsJSON), ReadOrder: drive.ReadOrder, OnPathChange: drive.OnPathChange}
+	in := DriveInput{Name: drive.Name, Kind: drive.Kind, Enabled: drive.Enabled, RootPath: drive.RootPath, MaxFileBytes: drive.MaxFileBytes, AllowedExts: model.DecodeStrings(drive.AllowedExtsJSON), ReadOrder: drive.ReadOrder, OnPathChange: drive.OnPathChange, RouteMode: drive.RouteMode}
 	if pt.Name != nil {
 		in.Name = *pt.Name
 	}
@@ -148,6 +213,20 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 	}
 	if pt.OnPathChange != nil {
 		in.OnPathChange = *pt.OnPathChange
+	}
+	var existingRoutes []model.DriveNodeRoute
+	if err := db.Where("drive_id = ?", drive.ID).Order("priority ASC").Find(&existingRoutes).Error; err != nil {
+		return model.Drive{}, apperr.Internal(err)
+	}
+	in.Routes = make([]DriveRouteInput, 0, len(existingRoutes))
+	for _, route := range existingRoutes {
+		in.Routes = append(in.Routes, DriveRouteInput{NodeID: route.NodeID, Priority: route.Priority, Enabled: route.Enabled})
+	}
+	if pt.RouteMode != nil {
+		in.RouteMode = *pt.RouteMode
+	}
+	if pt.Routes != nil {
+		in.Routes = *pt.Routes
 	}
 	if err := validateDriveInput(&in); err != nil {
 		return model.Drive{}, err
@@ -185,6 +264,10 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 	if err := validateDriveMaps(drive.Kind, cfg, secret); err != nil {
 		return model.Drive{}, err
 	}
+	routeMode, routes, err := s.validateDriveRoutes(ctx, drive.Kind, in.RouteMode, in.Routes)
+	if err != nil {
+		return model.Drive{}, err
+	}
 	if _, err := s.buildDriveAdapter(drive.Kind, drive.ID, cfg, secret); err != nil {
 		return model.Drive{}, apperr.Validation("网盘配置无效: " + storageErrorText(err))
 	}
@@ -194,8 +277,8 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 		"root_path": in.RootPath, "max_file_bytes": in.MaxFileBytes, "allowed_exts_json": model.EncodeStrings(in.AllowedExts), "on_path_change": in.OnPathChange,
 		"enabled":     in.Enabled,
 		"read_order":  in.ReadOrder,
-		"config_json": model.EncodeMap(cfg),
-		"updated_at":  s.now(),
+		"config_json": model.EncodeMap(cfg), "route_mode": routeMode,
+		"updated_at": s.now(),
 	}
 	if pt.Secret != nil {
 		cipher, err := s.sealSecret(drive.ID, secret)
@@ -204,9 +287,14 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 		}
 		updates["secret_cipher"] = cipher
 	}
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err = db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.Drive{}).Where("id = ?", drive.ID).Updates(updates).Error; err != nil {
 			return err
+		}
+		if pt.RouteMode != nil || pt.Routes != nil {
+			if err := replaceDriveRoutes(tx, drive.ID, routes); err != nil {
+				return err
+			}
 		}
 		return s.audit(tx, p, "storage.drive_update", drive.ID)
 	})
@@ -216,6 +304,7 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 	if err := db.Where("id = ?", drive.ID).First(&drive).Error; err != nil {
 		return model.Drive{}, apperr.Internal(err)
 	}
+	s.notify()
 	return drive, nil
 }
 
@@ -237,6 +326,66 @@ func (s *Service) TestDrive(ctx context.Context, id string) (DriveTest, error) {
 		return DriveTest{Healthy: false, Message: storageErrorText(err), Capabilities: caps}, nil
 	}
 	return DriveTest{Healthy: true, Message: "连接成功", Capabilities: caps}, nil
+}
+
+func (s *Service) validateDriveRoutes(ctx context.Context, kind, rawMode string, routes []DriveRouteInput) (string, []DriveRouteInput, error) {
+	mode := strings.TrimSpace(rawMode)
+	if mode == "" {
+		mode = model.DriveRoutePool
+	}
+	if !isOneOf(mode, model.DriveRouteModes...) {
+		return "", nil, apperr.Validation("上传节点策略无效")
+	}
+	if kind == model.KindLocal {
+		if mode != model.DriveRoutePool || len(routes) > 0 {
+			return "", nil, apperr.Validation("local 网盘只能由主端执行，不能配置从端路由")
+		}
+		return model.DriveRoutePool, []DriveRouteInput{}, nil
+	}
+	if mode == model.DriveRoutePool {
+		return mode, []DriveRouteInput{}, nil
+	}
+	if len(routes) == 0 || len(routes) > 32 {
+		return "", nil, apperr.Validation("节点路由需要 1 到 32 个节点")
+	}
+	seenNode := map[string]bool{}
+	seenPriority := map[int]bool{}
+	ids := make([]string, 0, len(routes))
+	for _, route := range routes {
+		route.NodeID = strings.TrimSpace(route.NodeID)
+		if route.NodeID == "" || seenNode[route.NodeID] {
+			return "", nil, apperr.Validation("节点路由不能重复且必须指定节点")
+		}
+		if route.Priority < 1 || route.Priority > 1000 || seenPriority[route.Priority] {
+			return "", nil, apperr.Validation("节点优先级必须为 1 到 1000 且不能重复")
+		}
+		seenNode[route.NodeID] = true
+		seenPriority[route.Priority] = true
+		ids = append(ids, route.NodeID)
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&model.Node{}).Where("id IN ?", ids).Count(&count).Error; err != nil {
+		return "", nil, apperr.Internal(err)
+	}
+	if count != int64(len(ids)) {
+		return "", nil, apperr.Validation("节点路由包含不存在的节点")
+	}
+	return mode, routes, nil
+}
+
+func replaceDriveRoutes(tx *gorm.DB, driveID string, routes []DriveRouteInput) error {
+	if err := tx.Where("drive_id = ?", driveID).Delete(&model.DriveNodeRoute{}).Error; err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if err := tx.Create(&model.DriveNodeRoute{
+			ID: newID(), DriveID: driveID, NodeID: route.NodeID,
+			Priority: route.Priority, Enabled: route.Enabled,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateDriveMaps(kind string, config, secret map[string]string) error {

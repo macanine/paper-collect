@@ -1,4 +1,4 @@
-import { PROVIDER_KINDS, type Drive, type OnPathChange, type ProviderKind } from '../../shared/api/types';
+import { PROVIDER_KINDS, type Drive, type DriveRouteMode, type OnPathChange, type ProviderKind } from '../../shared/api/types';
 
 // 网盘 config / secret 字段表，严格对应 docs/API.md「POST /storage/drives」的适配器字段表。
 // 不得增加合同之外的字段；secret 永不回显，编辑时留空表示保留原值。
@@ -203,6 +203,8 @@ export interface ProviderDraft {
   allowed_exts: string[];
   read_order: number;
   on_path_change: OnPathChange;
+  route_mode?: DriveRouteMode;
+  routes?: DriveRouteDraft[];
   config: Record<string, string>;
   secret?: Record<string, string>;
 }
@@ -216,6 +218,8 @@ export interface ProviderPatch {
   allowed_exts?: string[];
   read_order?: number;
   on_path_change?: OnPathChange;
+  route_mode?: DriveRouteMode;
+  routes?: DriveRouteDraft[];
   config?: Record<string, string>;
   secret?: Record<string, string>;
 }
@@ -230,10 +234,18 @@ export interface ProviderFormValues {
   allowed_exts: string[];
   read_order: number;
   on_path_change: OnPathChange;
+  route_mode?: DriveRouteMode;
+  routes?: DriveRouteDraft[];
   config: Record<string, string>;
   secret: Record<string, string>;
   /** 编辑时是否显式清空已保存凭据（发送空对象 secret）。 */
   clearSecret?: boolean;
+}
+
+export interface DriveRouteDraft {
+  node_id: string;
+  priority: number;
+  enabled: boolean;
 }
 
 export interface ProviderValidation {
@@ -273,6 +285,8 @@ export function configDefaultsForKind(kind: ProviderKind): Record<string, string
 /** 校验表单。mode=edit 时，secret 全部留空代表保留原凭据。 */
 export function validateProviderForm(values: ProviderFormValues, mode: 'create' | 'edit'): ProviderValidation {
   const errors: Record<string, string> = {};
+  const routeMode = values.route_mode ?? 'pool';
+  const routes = values.routes ?? [];
 
   if (isBlank(values.name)) errors.name = '请输入网盘名称';
   else if (values.name.trim().length > 128) errors.name = '名称不能超过 128 个字符';
@@ -285,6 +299,18 @@ export function validateProviderForm(values: ProviderFormValues, mode: 'create' 
   }
   if ((values.kind === 'lanzou' || values.kind === '123pan') && values.on_path_change !== 'keep') {
     errors.on_path_change = '该网盘不支持移动，请选择保持原位';
+  }
+  if (values.kind === 'local' && (routeMode !== 'pool' || routes.length > 0)) {
+    errors.routes = '本地网盘只能由主端执行';
+  }
+  if (values.kind !== 'local' && routeMode !== 'pool') {
+    if (routes.length === 0) errors.routes = '请至少选择一个上传节点';
+    const nodeIDs = routes.map((route) => route.node_id).filter(Boolean);
+    if (new Set(nodeIDs).size !== nodeIDs.length) errors.routes = '同一个节点只能出现一次';
+    const priorities = routes.map((route) => route.priority);
+    if (priorities.some((priority) => !Number.isInteger(priority) || priority < 1 || priority > 1000) || new Set(priorities).size !== priorities.length) {
+      errors.routes = '优先级必须是 1 到 1000 的不重复整数';
+    }
   }
   if (values.kind === 'lanzou') {
     if (/[/\\]/.test(values.root_path.trim())) {
@@ -355,6 +381,8 @@ export function buildCreatePayload(values: ProviderFormValues): ProviderDraft {
     allowed_exts: values.allowed_exts.map((ext) => ext.trim().toLowerCase()).filter((ext) => ext !== ''),
     read_order: values.read_order,
     on_path_change: values.on_path_change,
+    route_mode: values.route_mode ?? 'pool',
+    routes: values.routes ?? [],
     config: collectConfig(values.kind, values.config),
     secret: collectSecret(values.kind, values.config, values.secret),
   };
@@ -374,6 +402,8 @@ export function buildPatchPayload(values: ProviderFormValues): ProviderPatch {
     allowed_exts: values.allowed_exts.map((ext) => ext.trim().toLowerCase()).filter((ext) => ext !== ''),
     read_order: values.read_order,
     on_path_change: values.on_path_change,
+    route_mode: values.route_mode ?? 'pool',
+    routes: values.routes ?? [],
     config: collectConfig(values.kind, values.config),
   };
   if (values.clearSecret) {
@@ -402,6 +432,8 @@ export function initialProviderValues(drive: Drive | null): ProviderFormValues {
     allowed_exts: drive?.allowed_exts ?? [],
     read_order: drive?.read_order ?? 100,
     on_path_change: drive?.on_path_change ?? (kind === 'lanzou' || kind === '123pan' ? 'keep' : 'move'),
+    route_mode: drive?.route_mode ?? 'pool',
+    routes: drive?.routes?.map((route) => ({ node_id: route.node_id, priority: route.priority, enabled: route.enabled })) ?? [],
     config,
     secret: {},
     clearSecret: false,

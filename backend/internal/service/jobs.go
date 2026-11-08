@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
@@ -317,6 +318,7 @@ func (s *Service) claimJob(ctx context.Context, kind string) (model.Job, error) 
 				return model.Job{}, errNoJob
 			}
 			owner.LocalDriveOnly = true
+			owner.AllowRoutedRemote = !draining
 		}
 	}
 	return s.claimJobFor(ctx, owner, kinds)
@@ -338,18 +340,115 @@ type claimer struct {
 	RemoteOnly bool
 	// LocalDriveOnly keeps only those replicas.
 	LocalDriveOnly bool
+	// AllowRoutedRemote lets the master run a remote drive explicitly assigned
+	// to it even when WORKER_KINDS leaves ordinary remote jobs to nodes.
+	AllowRoutedRemote bool
+	// RoutedManagedIDs are drives with an explicit node policy. RoutedAllowedIDs
+	// are the policy drives this node may claim in the current snapshot.
+	RoutedManagedIDs []string
+	RoutedAllowedIDs []string
 }
 
 const localDriveJobSQL = "EXISTS (SELECT 1 FROM replicas JOIN storage_drives ON storage_drives.id = replicas.drive_id WHERE replicas.id = jobs.replica_id AND storage_drives.kind = ?)"
 
 func (c claimer) scope(query *gorm.DB) *gorm.DB {
 	if c.RemoteOnly {
-		return query.Where("NOT "+localDriveJobSQL, model.KindLocal)
+		query = query.Where("NOT "+localDriveJobSQL, model.KindLocal)
+	} else if c.LocalDriveOnly {
+		if c.AllowRoutedRemote && len(c.RoutedAllowedIDs) > 0 {
+			query = query.Where("("+localDriveJobSQL+" OR replica_id IN (SELECT id FROM replicas WHERE drive_id IN ?))", model.KindLocal, c.RoutedAllowedIDs)
+		} else {
+			query = query.Where(localDriveJobSQL, model.KindLocal)
+		}
 	}
-	if c.LocalDriveOnly {
-		return query.Where(localDriveJobSQL, model.KindLocal)
+	if len(c.RoutedManagedIDs) > 0 {
+		parts := []string{
+			"kind <> ?",
+			"replica_id IN (SELECT id FROM replicas WHERE drive_id NOT IN ?)",
+		}
+		args := []any{model.JobReplicate, c.RoutedManagedIDs}
+		if len(c.RoutedAllowedIDs) > 0 {
+			parts = append(parts, "replica_id IN (SELECT id FROM replicas WHERE drive_id IN ?)")
+			args = append(args, c.RoutedAllowedIDs)
+		}
+		query = query.Where("("+strings.Join(parts, " OR ")+")", args...)
 	}
 	return query
+}
+
+// applyRouteScope snapshots drive routing for one claim transaction. A
+// preferred route fails over only when every configured node is unavailable;
+// an exclusive route remains pending until one of its configured nodes returns.
+func (s *Service) applyRouteScope(tx *gorm.DB, owner claimer) (claimer, error) {
+	if owner.ID == "" {
+		return owner, nil
+	}
+	var drives []model.Drive
+	if err := tx.Select("id", "kind", "route_mode").Where("kind <> ?", model.KindLocal).Find(&drives).Error; err != nil {
+		return owner, err
+	}
+	if len(drives) == 0 {
+		return owner, nil
+	}
+	var routes []model.DriveNodeRoute
+	if err := tx.Where("enabled = ?", true).Order("priority ASC").Order("node_id ASC").Find(&routes).Error; err != nil {
+		return owner, err
+	}
+	var nodes []model.Node
+	if err := tx.Find(&nodes).Error; err != nil {
+		return owner, err
+	}
+	nodeByID := make(map[string]model.Node, len(nodes))
+	for _, node := range nodes {
+		nodeByID[node.ID] = node
+	}
+	routesByDrive := make(map[string][]model.DriveNodeRoute)
+	for _, route := range routes {
+		routesByDrive[route.DriveID] = append(routesByDrive[route.DriveID], route)
+	}
+	now := s.now()
+	available := func(node model.Node) bool {
+		return node.Enabled && !node.Draining && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= s.worker.LeaseDuration
+	}
+	managed := make([]string, 0)
+	allowed := make([]string, 0)
+	for _, drive := range drives {
+		mode := drive.RouteMode
+		if mode == "" || mode == model.DriveRoutePool {
+			continue
+		}
+		managed = append(managed, drive.ID)
+		driveRoutes := routesByDrive[drive.ID]
+		if len(driveRoutes) == 0 {
+			if mode == model.DriveRoutePreferred {
+				allowed = append(allowed, drive.ID)
+			}
+			continue
+		}
+		minPriority := 0
+		ownerPreferred := false
+		active := false
+		for _, route := range driveRoutes {
+			node, ok := nodeByID[route.NodeID]
+			if !ok || !available(node) {
+				continue
+			}
+			if !active || route.Priority < minPriority {
+				active, minPriority, ownerPreferred = true, route.Priority, route.NodeID == owner.ID
+			} else if route.Priority == minPriority && route.NodeID == owner.ID {
+				ownerPreferred = true
+			}
+		}
+		if !active {
+			if mode == model.DriveRoutePreferred {
+				allowed = append(allowed, drive.ID)
+			}
+		} else if ownerPreferred {
+			allowed = append(allowed, drive.ID)
+		}
+	}
+	owner.RoutedManagedIDs, owner.RoutedAllowedIDs = managed, allowed
+	return owner, nil
 }
 
 // claimJobFor leases the oldest pending job of the given kinds (any kind when
@@ -358,6 +457,11 @@ func (s *Service) claimJobFor(ctx context.Context, owner claimer, kinds []string
 	db := s.db.WithContext(ctx)
 	var claimed model.Job
 	err := db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		owner, err = s.applyRouteScope(tx, owner)
+		if err != nil {
+			return err
+		}
 		if s.db.Dialector.Name() == "sqlite" {
 			return s.claimJobSQLite(tx, owner, kinds, &claimed)
 		}

@@ -9,6 +9,24 @@ import (
 	"github.com/nic/paper-collect/backend/internal/service"
 )
 
+type driveRouteRequest struct {
+	NodeID   string `json:"node_id"`
+	Priority int    `json:"priority"`
+	Enabled  *bool  `json:"enabled"`
+}
+
+func toDriveRouteInputs(routes []driveRouteRequest) []service.DriveRouteInput {
+	out := make([]service.DriveRouteInput, 0, len(routes))
+	for _, route := range routes {
+		enabled := true
+		if route.Enabled != nil {
+			enabled = *route.Enabled
+		}
+		out = append(out, service.DriveRouteInput{NodeID: route.NodeID, Priority: route.Priority, Enabled: enabled})
+	}
+	return out
+}
+
 func (s *Server) handleListDrives(c *gin.Context) {
 	rows, err := s.svc.ListDrives(c.Request.Context())
 	if err != nil {
@@ -17,23 +35,30 @@ func (s *Server) handleListDrives(c *gin.Context) {
 	}
 	out := make([]driveDTO, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, s.driveWithInfo(c, r))
+		item, err := s.driveWithInfo(c, r)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		out = append(out, item)
 	}
 	s.respondData(c, http.StatusOK, out)
 }
 
 func (s *Server) handleCreateDrive(c *gin.Context) {
 	var req struct {
-		Name         string            `json:"name"`
-		Kind         string            `json:"kind"`
-		Enabled      *bool             `json:"enabled"`
-		RootPath     string            `json:"root_path"`
-		MaxFileBytes int64             `json:"max_file_bytes"`
-		AllowedExts  []string          `json:"allowed_exts"`
-		ReadOrder    *int              `json:"read_order"`
-		OnPathChange string            `json:"on_path_change"`
-		Config       map[string]string `json:"config"`
-		Secret       map[string]string `json:"secret"`
+		Name         string              `json:"name"`
+		Kind         string              `json:"kind"`
+		Enabled      *bool               `json:"enabled"`
+		RootPath     string              `json:"root_path"`
+		MaxFileBytes int64               `json:"max_file_bytes"`
+		AllowedExts  []string            `json:"allowed_exts"`
+		ReadOrder    *int                `json:"read_order"`
+		OnPathChange string              `json:"on_path_change"`
+		RouteMode    string              `json:"route_mode"`
+		Routes       []driveRouteRequest `json:"routes"`
+		Config       map[string]string   `json:"config"`
+		Secret       map[string]string   `json:"secret"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
@@ -42,7 +67,7 @@ func (s *Server) handleCreateDrive(c *gin.Context) {
 	in := service.DriveInput{
 		Name: req.Name, Kind: strings.TrimSpace(req.Kind), Enabled: true, RootPath: strings.TrimSpace(req.RootPath),
 		MaxFileBytes: req.MaxFileBytes, AllowedExts: req.AllowedExts, ReadOrder: 100,
-		OnPathChange: strings.TrimSpace(req.OnPathChange), Config: req.Config, Secret: req.Secret,
+		OnPathChange: strings.TrimSpace(req.OnPathChange), RouteMode: strings.TrimSpace(req.RouteMode), Routes: toDriveRouteInputs(req.Routes), Config: req.Config, Secret: req.Secret,
 	}
 	if req.Enabled != nil {
 		in.Enabled = *req.Enabled
@@ -61,35 +86,52 @@ func (s *Server) handleCreateDrive(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusCreated, s.driveWithInfo(c, drive))
+	item, err := s.driveWithInfo(c, drive)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusCreated, item)
 }
 
 func (s *Server) handlePatchDrive(c *gin.Context) {
 	var req struct {
-		Name         *string            `json:"name"`
-		Enabled      *bool              `json:"enabled"`
-		RootPath     *string            `json:"root_path"`
-		MaxFileBytes *int64             `json:"max_file_bytes"`
-		AllowedExts  *[]string          `json:"allowed_exts"`
-		ReadOrder    *int               `json:"read_order"`
-		OnPathChange *string            `json:"on_path_change"`
-		Config       *map[string]string `json:"config"`
-		Secret       *map[string]string `json:"secret"`
+		Name         *string              `json:"name"`
+		Enabled      *bool                `json:"enabled"`
+		RootPath     *string              `json:"root_path"`
+		MaxFileBytes *int64               `json:"max_file_bytes"`
+		AllowedExts  *[]string            `json:"allowed_exts"`
+		ReadOrder    *int                 `json:"read_order"`
+		OnPathChange *string              `json:"on_path_change"`
+		RouteMode    *string              `json:"route_mode"`
+		Routes       *[]driveRouteRequest `json:"routes"`
+		Config       *map[string]string   `json:"config"`
+		Secret       *map[string]string   `json:"secret"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
+	var routes *[]service.DriveRouteInput
+	if req.Routes != nil {
+		converted := toDriveRouteInputs(*req.Routes)
+		routes = &converted
+	}
 	drive, err := s.svc.UpdateDrive(c.Request.Context(), principal(c), c.Param("id"), service.DrivePatch{
 		Name: req.Name, Enabled: req.Enabled, RootPath: req.RootPath, MaxFileBytes: req.MaxFileBytes,
-		AllowedExts: req.AllowedExts, ReadOrder: req.ReadOrder, OnPathChange: req.OnPathChange,
+		AllowedExts: req.AllowedExts, ReadOrder: req.ReadOrder, OnPathChange: req.OnPathChange, RouteMode: req.RouteMode, Routes: routes,
 		Config: req.Config, Secret: req.Secret,
 	})
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, s.driveWithInfo(c, drive))
+	item, err := s.driveWithInfo(c, drive)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, item)
 }
 
 func (s *Server) handleTestDrive(c *gin.Context) {
@@ -232,8 +274,15 @@ func (s *Server) handleReplicaShare(c *gin.Context) {
 }
 
 // driveWithInfo adds adapter capabilities and replica counts, without network calls.
-func (s *Server) driveWithInfo(c *gin.Context, d model.Drive) driveDTO {
+func (s *Server) driveWithInfo(c *gin.Context, d model.Drive) (driveDTO, error) {
 	out := toDrive(d)
 	out.Capabilities, out.Stats = s.svc.DriveInfo(c.Request.Context(), d)
-	return out
+	routes, err := s.svc.ListDriveRoutes(c.Request.Context(), d.ID)
+	if err != nil {
+		return driveDTO{}, err
+	}
+	for _, route := range routes {
+		out.Routes = append(out.Routes, driveRouteDTO{NodeID: route.NodeID, NodeName: route.NodeName, IsMaster: route.IsMaster, Priority: route.Priority, Enabled: route.Enabled, Status: route.Status})
+	}
+	return out, nil
 }

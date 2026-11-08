@@ -40,6 +40,30 @@ func addWorkerNode(t *testing.T, conn *gorm.DB, draining bool) model.Node {
 	return n
 }
 
+func addLiveNode(t *testing.T, conn *gorm.DB, id, name string, master bool) model.Node {
+	t.Helper()
+	now := time.Now().UTC()
+	n := model.Node{ID: id, Name: name, IsMaster: master, TokenHash: newID(), Enabled: true, KindsJSON: "[\"replicate\"]", SlotsJSON: "{\"replicate\":1}", LastSeenAt: &now, CreatedAt: now, UpdatedAt: now}
+	if err := conn.Create(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func addRoutedReplicateJob(t *testing.T, conn *gorm.DB, driveID string) model.Job {
+	t.Helper()
+	now := time.Now().UTC()
+	replica := model.Replica{ID: newID(), BlobID: newID(), DriveID: driveID, Status: model.ReplicaPending, CreatedAt: now, UpdatedAt: now}
+	if err := conn.Create(&replica).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := model.Job{ID: newID(), Kind: model.JobReplicate, Status: model.JobPending, ReplicaID: replica.ID, CreatedAt: now, UpdatedAt: now}
+	if err := conn.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
 // A local drive's root is inside the master's DATA_DIR. A worker claiming it
 // would write to its own disk and the master would record a replica it lacks.
 func TestWorkerCannotClaimLocalDriveReplica(t *testing.T) {
@@ -58,6 +82,79 @@ func TestWorkerCannotClaimLocalDriveReplica(t *testing.T) {
 	job, err = svc.claimJob(context.Background(), model.JobReplicate)
 	if err != nil || job.ID != local.ID {
 		t.Fatalf("master claimed %q (%v), want the local drive job", job.ID, err)
+	}
+}
+
+func TestDriveRoutePriorityAndFailover(t *testing.T) {
+	svc, conn := newWorkerTestService(t, t.TempDir(), "master")
+	primary := addLiveNode(t, conn, "primary", "主上传从端", false)
+	backup := addLiveNode(t, conn, "backup", "备用上传从端", false)
+	drive := model.Drive{ID: newID(), Name: "路由网盘", Kind: model.KindWebDAV, Enabled: true, RouteMode: model.DriveRouteExclusive, AllowedExtsJSON: "[]", OnPathChange: model.OnPathChangeMove, ConfigJSON: "{}", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := conn.Create(&drive).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Create(&model.DriveNodeRoute{ID: newID(), DriveID: drive.ID, NodeID: primary.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Create(&model.DriveNodeRoute{ID: newID(), DriveID: drive.ID, NodeID: backup.ID, Priority: 2, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	first := addRoutedReplicateJob(t, conn, drive.ID)
+	claimed, err := svc.claimJobFor(context.Background(), claimer{ID: primary.ID, Name: primary.Name, RemoteOnly: true}, []string{model.JobReplicate})
+	if err != nil || claimed.ID != first.ID {
+		t.Fatalf("primary claim = %q (%v), want %q", claimed.ID, err, first.ID)
+	}
+	if _, err := svc.claimJobFor(context.Background(), claimer{ID: backup.ID, Name: backup.Name, RemoteOnly: true}, []string{model.JobReplicate}); !errors.Is(err, errNoJob) {
+		t.Fatalf("backup claimed while primary was available: %v", err)
+	}
+
+	if err := conn.Model(&model.Node{}).Where("id = ?", primary.ID).Updates(map[string]any{"enabled": false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	second := addRoutedReplicateJob(t, conn, drive.ID)
+	claimed, err = svc.claimJobFor(context.Background(), claimer{ID: backup.ID, Name: backup.Name, RemoteOnly: true}, []string{model.JobReplicate})
+	if err != nil || claimed.ID != second.ID {
+		t.Fatalf("backup failover claim = %q (%v), want %q", claimed.ID, err, second.ID)
+	}
+}
+
+func TestPreferredDriveRouteFallsBackToPool(t *testing.T) {
+	svc, conn := newWorkerTestService(t, t.TempDir(), "master")
+	preferred := addLiveNode(t, conn, "preferred", "首选从端", false)
+	other := addLiveNode(t, conn, "other", "兜底从端", false)
+	drive := model.Drive{ID: newID(), Name: "首选网盘", Kind: model.KindWebDAV, Enabled: true, RouteMode: model.DriveRoutePreferred, AllowedExtsJSON: "[]", OnPathChange: model.OnPathChangeMove, ConfigJSON: "{}", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := conn.Create(&drive).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Create(&model.DriveNodeRoute{ID: newID(), DriveID: drive.ID, NodeID: preferred.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Model(&model.Node{}).Where("id = ?", preferred.ID).Updates(map[string]any{"enabled": false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := addRoutedReplicateJob(t, conn, drive.ID)
+	claimed, err := svc.claimJobFor(context.Background(), claimer{ID: other.ID, Name: other.Name, RemoteOnly: true}, []string{model.JobReplicate})
+	if err != nil || claimed.ID != job.ID {
+		t.Fatalf("preferred fallback claim = %q (%v), want %q", claimed.ID, err, job.ID)
+	}
+}
+
+func TestMasterCanClaimExplicitRouteWhenRemotePoolIsDisabled(t *testing.T) {
+	svc, conn := newWorkerTestService(t, t.TempDir(), "master")
+	svc.worker.Kinds = []string{}
+	master := addLiveNode(t, conn, "master", "主端", true)
+	svc.worker.InstanceID, svc.worker.NodeName = master.ID, master.Name
+	drive := model.Drive{ID: newID(), Name: "主端网盘", Kind: model.KindWebDAV, Enabled: true, RouteMode: model.DriveRouteExclusive, AllowedExtsJSON: "[]", OnPathChange: model.OnPathChangeMove, ConfigJSON: "{}", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := conn.Create(&drive).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Create(&model.DriveNodeRoute{ID: newID(), DriveID: drive.ID, NodeID: master.ID, Priority: 1, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	job := addRoutedReplicateJob(t, conn, drive.ID)
+	claimed, err := svc.claimJob(context.Background(), model.JobReplicate)
+	if err != nil || claimed.ID != job.ID {
+		t.Fatalf("explicit master route claim = %q (%v), want %q", claimed.ID, err, job.ID)
 	}
 }
 

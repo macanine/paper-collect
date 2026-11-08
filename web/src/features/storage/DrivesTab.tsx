@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { App, Button, Card, Space, Table, Tag, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
 import { describeError } from '../../shared/api/errors';
 import type { Drive, ProviderKind } from '../../shared/api/types';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
@@ -9,6 +10,17 @@ import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { ProviderFormModal } from './ProviderFormModal';
 import { PROVIDER_FIELD_SPECS } from './providerFields';
 import { useDrives, useTestDrive } from './queries';
+import { listNodes } from '../nodes/api';
+
+function routeSummary(drive: Drive): string {
+  const routes = drive.routes ?? [];
+  if (drive.route_mode === 'pool' || routes.length === 0) return '自动分配';
+  return routes
+    .filter((route) => route.enabled)
+    .sort((a, b) => a.priority - b.priority)
+    .map((route) => `${route.node_name}${route.is_master ? '（主端）' : ''}`)
+    .join(' → ') || '暂无可用节点';
+}
 
 function connectionMessage(drive: Drive, healthy: boolean, detail: string): string | undefined {
   if (drive.kind !== 'onedrive' || healthy) return detail || undefined;
@@ -33,9 +45,10 @@ function CapabilityTags({ drive }: { drive: Drive }) {
   );
 }
 
-export function DrivesTab({ canWrite }: { canWrite: boolean }) {
+export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; canRoute?: boolean }) {
   const { message, modal } = App.useApp();
   const drives = useDrives();
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: ({ signal }) => listNodes(signal), enabled: canRoute });
   const testDrive = useTestDrive();
   const [editing, setEditing] = useState<Drive | null>(null);
   const [creating, setCreating] = useState(false);
@@ -74,6 +87,16 @@ export function DrivesTab({ canWrite }: { canWrite: boolean }) {
       key: 'enabled',
       width: 80,
       render: (enabled: boolean) => (enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
+    },
+    {
+      title: '上传节点',
+      key: 'route',
+      width: 220,
+      render: (_: unknown, record) => (
+        <span className="text-sm" title={routeSummary(record)}>
+          {record.kind === 'local' ? '主端本地目录' : routeSummary(record)}
+        </span>
+      ),
     },
     {
       title: '能力',
@@ -181,6 +204,8 @@ export function DrivesTab({ canWrite }: { canWrite: boolean }) {
           setCreating(false);
           void drives.refetch();
         }}
+        nodes={nodes.data ?? []}
+        canRoute={canRoute}
       />
       <ProviderFormModal
         open={editing !== null}
@@ -190,6 +215,8 @@ export function DrivesTab({ canWrite }: { canWrite: boolean }) {
           setEditing(null);
           void drives.refetch();
         }}
+        nodes={nodes.data ?? []}
+        canRoute={canRoute}
       />
     </>
   );
