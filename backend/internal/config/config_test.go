@@ -62,13 +62,13 @@ func TestWorkerRoleNeedsNoSecretsButRejectsPlainRemoteHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Node.MasterURL != "https://paper.example.com" || cfg.Node.Slots["replicate"] != 2 {
+	if cfg.Node.MasterURL != "https://paper.example.com" {
 		t.Fatalf("unexpected worker config: %+v", cfg.Node)
 	}
 	env["MASTER_URL"] = "http://127.0.0.1:8080"
 	env["WORKER_SLOTS"] = "replicate=4,index=0"
-	if cfg, err = loadTestConfig(t, env); err != nil || len(cfg.Node.Slots) != 1 || cfg.Node.Slots["replicate"] != 4 {
-		t.Fatalf("loopback http with slots: %+v, %v", cfg.Node.Slots, err)
+	if cfg, err = loadTestConfig(t, env); err != nil || cfg.Node.MasterURL != env["MASTER_URL"] {
+		t.Fatalf("loopback http with ignored runtime env: %+v, %v", cfg.Node, err)
 	}
 	env["MASTER_URL"] = "http://paper.example.com"
 	if _, err := loadTestConfig(t, env); err == nil || !strings.Contains(err.Error(), "https") {
@@ -76,15 +76,14 @@ func TestWorkerRoleNeedsNoSecretsButRejectsPlainRemoteHTTP(t *testing.T) {
 	}
 }
 
-func TestMasterKinds(t *testing.T) {
+func TestClusterRuntimeEnvironmentIsIgnored(t *testing.T) {
 	values := configEnv(t)
-	values["WORKER_KINDS"] = "none"
+	values["WORKER_KINDS"] = "invalid"
+	values["WORKER_SLOTS"] = "invalid"
+	values["WORKER_LEASE_DURATION"] = "not-a-duration"
 	cfg, err := loadTestConfig(t, values)
-	if err != nil || len(cfg.Worker.Kinds) != 0 {
-		t.Fatalf("none: %v %v", cfg.Worker.Kinds, err)
+	if err != nil {
+		t.Fatalf("runtime environment must not be parsed: %v", err)
 	}
-	values["WORKER_KINDS"] = "ingest"
-	if _, err := loadTestConfig(t, values); err == nil {
-		t.Fatal("ingest always stays on the master and is not a WORKER_KINDS value")
-	}
+	_ = cfg
 }

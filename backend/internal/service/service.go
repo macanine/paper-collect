@@ -60,6 +60,7 @@ type WorkerSettings struct {
 	IndexConcurrency     int
 	LeaseDuration        time.Duration
 	HeartbeatInterval    time.Duration
+	ClaimWait            time.Duration
 	PollInterval         time.Duration
 }
 
@@ -85,6 +86,11 @@ type Service struct {
 	wake         chan struct{}
 	wakeMu       sync.Mutex
 	worker       WorkerSettings
+	workerMu     sync.RWMutex
+	runnerMu     sync.Mutex
+	runnerParent context.Context
+	runnerCancel context.CancelFunc
+	runnerActive bool
 	pullCacheTTL time.Duration
 	pullCacheDir string
 	metrics      nodeMetrics
@@ -154,6 +160,9 @@ func New(opts Options) (*Service, error) {
 	if worker.HeartbeatInterval >= worker.LeaseDuration {
 		return nil, errors.New("service: heartbeat interval must be shorter than lease duration")
 	}
+	if worker.ClaimWait <= 0 {
+		worker.ClaimWait = 25 * time.Second
+	}
 	if worker.PollInterval <= 0 {
 		worker.PollInterval = 2 * time.Second
 	}
@@ -194,6 +203,22 @@ func (s *Service) wakeSignal() <-chan struct{} {
 	s.wakeMu.Lock()
 	defer s.wakeMu.Unlock()
 	return s.wake
+}
+
+func (s *Service) workerSettings() WorkerSettings {
+	s.workerMu.RLock()
+	defer s.workerMu.RUnlock()
+	out := s.worker
+	out.Kinds = append([]string(nil), s.worker.Kinds...)
+	return out
+}
+
+func (s *Service) setWorkerSettings(worker WorkerSettings) WorkerSettings {
+	s.workerMu.Lock()
+	defer s.workerMu.Unlock()
+	worker.Kinds = append([]string(nil), worker.Kinds...)
+	s.worker = worker
+	return worker
 }
 
 func newID() string { return uuid.NewString() }

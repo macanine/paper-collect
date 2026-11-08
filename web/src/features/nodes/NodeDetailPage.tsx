@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
-import { Alert, Button, Card, Descriptions, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { useEffect, useMemo } from 'react';
+import { Alert, App, Button, Card, Descriptions, Form, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router';
+import { useOCRProviders } from '../ai/queries';
 import { listJobs } from '../jobs/api';
 import type { Job, NodePoint } from '../../shared/api/types';
 import { formatBytes, formatDateTime, formatRate } from '../../shared/lib/format';
@@ -11,9 +12,19 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState, NotFoundPage } from '../../shared/ui/States';
 import { NodeStatusTag } from '../../shared/ui/StatusTags';
 import { getNodeMetrics } from './api';
+import { useClusterSettings } from './ClusterSettingsCard';
 import { MetricChart, type MetricSeries } from './MetricChart';
 import { useNodes, useNodeUpdate } from './NodesPage';
-import { NODE_POLL_MS, formatAgo, isLive, orderedKinds } from './nodeUtils';
+import { NodeRuntimeFields } from './NodeRuntimeFields';
+import {
+  NODE_POLL_MS,
+  formatAgo,
+  isLive,
+  orderedKinds,
+  runtimeBody,
+  runtimeFormValues,
+  type NodeRuntimeFormValues,
+} from './nodeUtils';
 
 const PRIMARY = 'var(--ant-primary)';
 const SECOND = 'var(--chart-series-2)';
@@ -27,8 +38,12 @@ const NETWORK: MetricSeries[] = [
 
 export function NodeDetailPage() {
   const { nodeId = '' } = useParams();
+  const { message } = App.useApp();
   const nodes = useNodes();
+  const providers = useOCRProviders();
+  const clusterSettings = useClusterSettings();
   const update = useNodeUpdate();
+  const [runtimeForm] = Form.useForm<NodeRuntimeFormValues>();
   const metrics = useQuery({
     queryKey: ['nodes', nodeId, 'metrics'],
     queryFn: ({ signal }) => getNodeMetrics(nodeId, signal),
@@ -40,13 +55,26 @@ export function NodeDetailPage() {
     refetchInterval: NODE_POLL_MS,
   });
   const points = useMemo(() => metrics.data ?? [], [metrics.data]);
+  const node = nodes.data?.find((item) => item.id === nodeId);
+
+  useEffect(() => {
+    if (node && !node.is_master) runtimeForm.setFieldsValue(runtimeFormValues(node));
+  }, [node?.id, node?.config_revision, runtimeForm]);
 
   if (nodes.isPending) return <LoadingState />;
   if (nodes.isError) return <ErrorState error={nodes.error} onRetry={() => void nodes.refetch()} title="节点加载失败" />;
-  const node = nodes.data.find((item) => item.id === nodeId);
   if (!node) return <NotFoundPage />;
 
   const memTotal = points.reduce((peak, point) => Math.max(peak, point.mem_total), node.mem_total);
+  const saveRuntime = async () => {
+    const values = await runtimeForm.validateFields();
+    try {
+      await update.mutateAsync({ id: node.id, body: runtimeBody(values) });
+      message.success('节点运行配置已保存，将在下一次心跳应用');
+    } catch {
+      // useNodeUpdate 已显示接口错误。
+    }
+  };
   return (
     <div className="page-stack">
       <BackLink to="/admin/nodes">返回节点列表</BackLink>
@@ -132,6 +160,72 @@ export function NodeDetailPage() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      {node.is_master ? (
+        <Card
+          title="运行配置"
+          extra={<Tag color="blue">由集群调度统一控制</Tag>}
+        >
+          <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
+            <Descriptions.Item label="执行任务">
+              {clusterSettings.data?.master_kinds.length
+                ? clusterSettings.data.master_kinds.map((kind) => JOB_KIND_LABELS[kind]).join('、')
+                : '仅主端专属任务'}
+            </Descriptions.Item>
+            <Descriptions.Item label="归档并发">{clusterSettings.data?.master_ingest_concurrency ?? '—'}</Descriptions.Item>
+            <Descriptions.Item label="空闲轮询">
+              {clusterSettings.data ? `${clusterSettings.data.poll_seconds} 秒` : '—'}
+            </Descriptions.Item>
+          </Descriptions>
+          <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
+            主端并发、任务类型、租约和心跳均在节点列表顶部统一配置。
+          </Typography.Paragraph>
+          <Link to="/admin/nodes">前往集群调度设置</Link>
+        </Card>
+      ) : (
+        <Card
+          title="运行配置"
+          extra={
+            node.applied_config_revision === node.config_revision ? (
+              <Tag color="green">已应用修订 {node.config_revision}</Tag>
+            ) : node.applied_config_revision === 0 ? (
+              <Tag color="orange">等待首次应用 · 最新 {node.config_revision}</Tag>
+            ) : (
+              <Tag color="orange">已应用 {node.applied_config_revision} / 最新 {node.config_revision}</Tag>
+            )
+          }
+        >
+          {node.applied_config_revision !== node.config_revision ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 20 }}
+              message="配置等待从端应用"
+              description={`从端下一次心跳会获取修订 ${node.config_revision}。如果长时间不更新，请检查节点是否在线和网络连接。`}
+            />
+          ) : null}
+          <Form form={runtimeForm} layout="vertical">
+            <NodeRuntimeFields
+              providers={providers.data ?? []}
+              providersLoading={providers.isPending}
+              providersError={providers.isError}
+            />
+            <Space style={{ marginTop: 20 }} wrap>
+              <Button
+                type="primary"
+                loading={update.isPending}
+                onClick={() => void saveRuntime()}
+                disabled={providers.isError}
+              >
+                保存运行配置
+              </Button>
+              <Typography.Text type="secondary">
+                已用缓存 {formatBytes(node.cache_used)} / {node.cache_max_bytes > 0 ? formatBytes(node.cache_max_bytes) : '不限'}
+              </Typography.Text>
+            </Space>
+          </Form>
+        </Card>
+      )}
 
       <Card title="正在执行" styles={{ body: { padding: 0 } }}>
         {running.isError ? <ErrorState error={running.error} onRetry={() => void running.refetch()} title="任务加载失败" /> : (

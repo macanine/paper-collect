@@ -1,6 +1,6 @@
 # HTTP API v1 接口合同
 
-版本 1.6.0 · 2026-11-03。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+版本 1.7.0 · 2026-11-08。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
 
 ## 通用规范
 
@@ -394,16 +394,24 @@ curl -X POST http://127.0.0.1:8080/mcp -H "Authorization: Bearer $PAPER_COLLECT_
 
 ## 节点
 
-以下接口需要 `nodes:manage`（管理员），并提供同名 MCP 工具 `nodes_list`、`nodes_create`、`nodes_update`、`nodes_metrics`。
+以下接口需要 `nodes:manage`（管理员），并提供 MCP 工具 `nodes_list`、`nodes_create`、`nodes_update`、`nodes_metrics`、`cluster_settings_get`、`cluster_settings_update`。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/v1/nodes` | 节点列表，主端在前 |
-| POST | `/api/v1/nodes` | 创建从端，body `{"name"}`；响应额外包含只出现一次的 `token` |
-| PATCH | `/api/v1/nodes/:id` | 修改 `name`、`enabled`、`draining`；主端不能停用，可以排空 |
+| POST | `/api/v1/nodes` | 创建从端，body `{"name","slots","cache_max_bytes","ocr_provider_ids"}`；响应额外包含只出现一次的 `token` |
+| PATCH | `/api/v1/nodes/:id` | 修改 `name`、`enabled`、`draining`、`slots`、`cache_max_bytes`、`ocr_provider_ids`；主端运行参数只能在集群设置中修改，主端不能停用，可以排空 |
 | GET | `/api/v1/nodes/:id/metrics` | 最近 1 小时指标，保存在主端内存，重启后清空 |
+| GET | `/api/v1/cluster/settings` | 读取主端控制的调度策略 |
+| PATCH | `/api/v1/cluster/settings` | 部分更新主端任务类型、并发、租约、心跳、领取等待和空闲轮询 |
 
-节点字段：`id`、`name`、`is_master`、`enabled`、`draining`、`status`（`online`、`stale`、`offline`、`draining`、`disabled`）、`kinds`、`slots`、`running`（节点上报）、`running_kinds`（按类型统计的租约任务）、`succeeded_1h`、`failed_1h`、`version`、`protocol`、`last_ip`、`last_seen_at`、`started_at`、`cpu_percent`、`cpu_cores`、`proc_cpu_percent`、`mem_used`、`mem_total`、`proc_rss`、`net_rx_bps`、`net_tx_bps`、`cache_used`、`cache_max`、`created_at`。
+节点字段：`id`、`name`、`is_master`、`enabled`、`draining`、`status`（`online`、`stale`、`offline`、`draining`、`disabled`）、`kinds`、`slots`（节点最近上报）、`configured_slots`（主端期望）、`cache_max_bytes`、`ocr_provider_ids`、`config_revision`、`applied_config_revision`、`running`（节点上报）、`running_kinds`（按类型统计的租约任务）、`succeeded_1h`、`failed_1h`、`version`、`protocol`、`last_ip`、`last_seen_at`、`started_at`、`cpu_percent`、`cpu_cores`、`proc_cpu_percent`、`mem_used`、`mem_total`、`proc_rss`、`net_rx_bps`、`net_tx_bps`、`cache_used`、`cache_max`、`created_at`。`cache_max` 是节点上报的实际值，`cache_max_bytes` 是主端配置；`config_revision == applied_config_revision` 表示从端已应用最新配置。
+
+创建从端时的 `slots` 可省略，默认 `{"replicate":2,"analyze":1,"index":1}`；每项 0..64，0 表示不领取该类型。`cache_max_bytes` 可省略，默认 20 GiB；0 表示不限。`ocr_provider_ids` 可省略，数组为空表示不声明额外 OCR 可达性，最多 32 个，每个 ID 必须指向启用的 OCRProvider。节点选择多个服务时，按 OCRProvider 的 `priority` 升序选择。
+
+`ClusterSettings` 字段：`master_kinds:("replicate"|"analyze"|"index")[]`、`master_ingest_concurrency`、`master_replicate_concurrency`、`master_analyze_concurrency`、`master_index_concurrency`、`lease_seconds`、`heartbeat_seconds`、`claim_wait_seconds`、`poll_seconds`、`revision`、`updated_at`。并发 1..64；租约 30..3600 秒；心跳至少 1 秒且小于租约；领取等待 1..25 秒且小于租约；轮询 1..60 秒。PATCH 省略的字段保持不变。每次成功 PATCH 递增全局 `revision` 和所有从端的 `config_revision`；主端 runner 立即重配，从端在下一次心跳取得相同配置。
+
+主端节点名称固定为「主端」；主端任务类型和并发不再读取环境变量。节点列表和集群设置都写入主端数据库，因此重启后保持。只有从端的 `ROLE=worker`、`MASTER_URL`、`NODE_TOKEN` 和本机 `CACHE_DIR` 仍来自环境变量。
 
 网盘的上传路由在网盘编辑表单中配置；节点管理权限的管理员可以把主端或任意从端加入某个网盘的优先级列表。路由只影响 `replicate`，不改变 AI/索引任务的节点类型配置。
 
@@ -415,8 +423,8 @@ curl -X POST http://127.0.0.1:8080/mcp -H "Authorization: Bearer $PAPER_COLLECT_
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/heartbeat` | 上报指标和 `running_job_ids`，续租，返回 `lost_job_ids`、`draining` |
-| POST | `/jobs/claim` | 长轮询领取，body `{"kinds","wait_ms","protocol","rapidocr"}`，最长 25 秒；无任务返回 204，协议版本不一致返回 409 |
+| POST | `/heartbeat` | 上报指标、`running_job_ids` 和 `config_revision`，续租，返回 `lost_job_ids`、`draining`，以及包含槽位、缓存上限、OCR 服务、心跳、领取等待和修订号的 `config` |
+| POST | `/jobs/claim` | 长轮询领取，body `{"kinds","wait_ms","protocol","ocr_provider_ids"}`，最长 25 秒；无任务返回 204，协议版本不一致返回 409 |
 | POST | `/jobs/:id/progress` | 进度 |
 | POST | `/jobs/:id/complete` | 提交结果，可 gzip，上限 32 MiB；幂等，非当前租约返回 409 |
 | POST | `/jobs/:id/fail` | `{"error","extra"}` 记录失败，`{"interrupted":true}` 重新排队 |

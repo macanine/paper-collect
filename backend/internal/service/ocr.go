@@ -288,6 +288,30 @@ func (s *Service) selectedOCRProvider(ctx context.Context, settings model.AISett
 	return model.OCRProvider{}, apperr.Validation("没有可用的 OCR 服务商，请先在 AI 解析中配置并选择")
 }
 
+// nodeOCRProvider resolves the OCR endpoint a worker declared it can reach.
+// Explicit IDs are filtered to the node's reachable set, then the enabled
+// provider with the highest global priority is selected. With no explicit IDs,
+// the globally selected provider is only assumed reachable when its URL is
+// public enough not to be a master-internal service name.
+func (s *Service) nodeOCRProvider(ctx context.Context, settings model.AISettings, ids []string) (model.OCRProvider, bool, error) {
+	if len(ids) == 0 {
+		row, err := s.selectedOCRProvider(ctx, settings)
+		if err != nil {
+			return model.OCRProvider{}, false, err
+		}
+		return row, !isMasterInternalURL(row.BaseURL), nil
+	}
+	var rows []model.OCRProvider
+	if err := s.db.WithContext(ctx).Where("id IN ? AND enabled = ?", uniqueStrings(ids), true).
+		Order("priority ASC").Order("created_at ASC").Find(&rows).Error; err != nil {
+		return model.OCRProvider{}, false, apperr.Internal(err)
+	}
+	for _, row := range rows {
+		return row, true, nil
+	}
+	return model.OCRProvider{}, false, nil
+}
+
 // ocrProviderConfig decrypts one provider for an executor.
 func (s *Service) ocrProviderConfig(row model.OCRProvider) (jobexec.OCRConfig, error) {
 	if !row.Enabled {
@@ -306,6 +330,21 @@ func (s *Service) ocrProviderConfig(row model.OCRProvider) (jobexec.OCRConfig, e
 // ocrConfig resolves the selected provider and the cache key of its output.
 func (s *Service) ocrConfig(ctx context.Context, settings model.AISettings, mediaType string) (*jobexec.OCRConfig, string, error) {
 	row, err := s.selectedOCRProvider(ctx, settings)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg, err := s.ocrProviderConfig(row)
+	if err != nil {
+		return nil, "", err
+	}
+	return &cfg, textParseKey(row, mediaType), nil
+}
+
+func (s *Service) ocrConfigForProvider(ctx context.Context, settings model.AISettings, providerID, mediaType string) (*jobexec.OCRConfig, string, error) {
+	if strings.TrimSpace(providerID) == "" {
+		return s.ocrConfig(ctx, settings, mediaType)
+	}
+	row, err := s.getOCRProvider(ctx, providerID)
 	if err != nil {
 		return nil, "", err
 	}

@@ -181,35 +181,58 @@ const claimAttempts = 64
 // them over HTTP.
 func (s *Service) StartWorker(ctx context.Context) {
 	go s.reaperLoop(ctx)
+	s.runnerMu.Lock()
+	s.runnerParent, s.runnerActive = ctx, true
+	s.restartLocalRunnersLocked()
+	s.runnerMu.Unlock()
+}
+
+func (s *Service) restartLocalRunners() {
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if !s.runnerActive {
+		return
+	}
+	s.restartLocalRunnersLocked()
+}
+
+func (s *Service) restartLocalRunnersLocked() {
+	if s.runnerCancel != nil {
+		s.runnerCancel()
+	}
+	loopCtx, cancel := context.WithCancel(s.runnerParent)
+	s.runnerCancel = cancel
+	settings := s.workerSettings()
 	limits := map[string]int{
-		model.JobIngest:    s.worker.IngestConcurrency,
-		model.JobReplicate: s.worker.ReplicateConcurrency,
-		model.JobAnalyze:   s.worker.AnalyzeConcurrency,
-		model.JobIndex:     s.worker.IndexConcurrency,
-		model.JobGroup:     s.worker.AnalyzeConcurrency,
+		model.JobIngest:    settings.IngestConcurrency,
+		model.JobReplicate: settings.ReplicateConcurrency,
+		model.JobAnalyze:   settings.AnalyzeConcurrency,
+		model.JobIndex:     settings.IndexConcurrency,
+		model.JobGroup:     settings.AnalyzeConcurrency,
 	}
 	kinds := []string{model.JobIngest, model.JobGroup, model.JobReplicate}
-	for _, kind := range s.worker.Kinds {
+	for _, kind := range settings.Kinds {
 		if kind != model.JobReplicate {
 			kinds = append(kinds, kind)
 		}
 	}
-	for _, kind := range kinds {
-		for i := 0; i < limits[kind]; i++ {
-			go s.workerLoop(ctx, kind)
+	for _, kind := range slices.Compact(kinds) {
+		for range limits[kind] {
+			go s.workerLoop(loopCtx, s.runnerParent, kind)
 		}
 	}
 }
 
 func (s *Service) reaperLoop(ctx context.Context) {
-	ticker := time.NewTicker(s.worker.HeartbeatInterval)
-	defer ticker.Stop()
 	lastPurge := time.Time{}
 	for {
+		settings := s.workerSettings()
+		timer := time.NewTimer(settings.HeartbeatInterval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if time.Since(lastPurge) > time.Hour {
 				lastPurge = time.Now()
 				if n, err := s.PurgeExpiredTrash(ctx); err != nil {
@@ -230,18 +253,18 @@ func (s *Service) reaperLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) workerLoop(ctx context.Context, kind string) {
+func (s *Service) workerLoop(loopCtx, jobCtx context.Context, kind string) {
 	for {
-		if ctx.Err() != nil {
+		if loopCtx.Err() != nil {
 			return
 		}
-		if s.processNextKind(ctx, kind) {
+		if s.processNextKind(jobCtx, kind) {
 			continue
 		}
-		timer := time.NewTimer(s.worker.PollInterval)
+		timer := time.NewTimer(s.workerSettings().PollInterval)
 		wake := s.wakeSignal()
 		select {
-		case <-ctx.Done():
+		case <-loopCtx.Done():
 			timer.Stop()
 			return
 		case <-wake:
@@ -254,9 +277,10 @@ func (s *Service) workerLoop(ctx context.Context, kind string) {
 // ProcessNext claims and runs at most one pending job of any kind. It is kept
 // for operational smoke checks and tests.
 func (s *Service) ProcessNext(ctx context.Context) bool {
-	kinds := append([]string{model.JobIngest, model.JobGroup}, s.worker.Kinds...)
-	job, err := s.claimJobFor(ctx, claimer{ID: s.worker.InstanceID, Name: s.worker.NodeName}, kinds)
-	if errors.Is(err, errNoJob) && !slices.Contains(s.worker.Kinds, model.JobReplicate) {
+	settings := s.workerSettings()
+	kinds := append([]string{model.JobIngest, model.JobGroup}, settings.Kinds...)
+	job, err := s.claimJobFor(ctx, claimer{ID: settings.InstanceID, Name: settings.NodeName}, kinds)
+	if errors.Is(err, errNoJob) && !slices.Contains(settings.Kinds, model.JobReplicate) {
 		job, err = s.claimJob(ctx, model.JobReplicate)
 	}
 	if err != nil {
@@ -303,7 +327,8 @@ func (s *Service) ProcessAvailable(ctx context.Context, limit int) int {
 // that leaves a kind to worker nodes, still runs what no node can: ingest, group
 // and replicas on a local drive.
 func (s *Service) claimJob(ctx context.Context, kind string) (model.Job, error) {
-	owner := claimer{ID: s.worker.InstanceID, Name: s.worker.NodeName}
+	settings := s.workerSettings()
+	owner := claimer{ID: settings.InstanceID, Name: settings.NodeName}
 	var kinds []string
 	if kind != "" {
 		kinds = []string{kind}
@@ -313,7 +338,7 @@ func (s *Service) claimJob(ctx context.Context, kind string) (model.Job, error) 
 		if err != nil {
 			return model.Job{}, err
 		}
-		if draining || !slices.Contains(s.worker.Kinds, kind) {
+		if draining || !slices.Contains(settings.Kinds, kind) {
 			if kind != model.JobReplicate {
 				return model.Job{}, errNoJob
 			}
@@ -407,8 +432,9 @@ func (s *Service) applyRouteScope(tx *gorm.DB, owner claimer) (claimer, error) {
 		routesByDrive[route.DriveID] = append(routesByDrive[route.DriveID], route)
 	}
 	now := s.now()
+	lease := s.workerSettings().LeaseDuration
 	available := func(node model.Node) bool {
-		return node.Enabled && !node.Draining && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= s.worker.LeaseDuration
+		return node.Enabled && !node.Draining && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= lease
 	}
 	managed := make([]string, 0)
 	allowed := make([]string, 0)
@@ -544,7 +570,7 @@ func (s *Service) claimJobSQLite(tx *gorm.DB, owner claimer, kinds []string, cla
 
 func (s *Service) tryClaim(tx *gorm.DB, owner claimer, job model.Job, claimed *model.Job) error {
 	now := s.now()
-	until := now.Add(s.worker.LeaseDuration)
+	until := now.Add(s.workerSettings().LeaseDuration)
 	if key := jobLockKey(job); key != "" {
 		acquired, err := acquireJobLock(tx, key, job.ID, now, until)
 		if err != nil {
@@ -686,6 +712,10 @@ func (s *Service) runLocal(ctx context.Context, job model.Job) {
 // PrepareJob builds the executor input for a leased job. The input contains
 // decrypted credentials and must only travel over an authenticated channel.
 func (s *Service) PrepareJob(ctx context.Context, job model.Job) (jobexec.Input, error) {
+	return s.prepareJob(ctx, job, "")
+}
+
+func (s *Service) prepareJob(ctx context.Context, job model.Job, ocrProviderID string) (jobexec.Input, error) {
 	in := jobexec.Input{JobID: job.ID, Kind: job.Kind}
 	if job.StartedAt != nil {
 		in.StartedAt = *job.StartedAt
@@ -702,9 +732,9 @@ func (s *Service) PrepareJob(ctx context.Context, job model.Job) (jobexec.Input,
 			return in, errJobDone
 		}
 	case model.JobAnalyze:
-		in.Analyze, err = s.prepareAnalyze(ctx, job)
+		in.Analyze, err = s.prepareAnalyze(ctx, job, ocrProviderID)
 	case model.JobIndex:
-		in.Index, err = s.prepareIndex(ctx, job)
+		in.Index, err = s.prepareIndex(ctx, job, ocrProviderID)
 	default:
 		err = fmt.Errorf("任务类型 %s 不能交给节点执行", job.Kind)
 	}
@@ -753,15 +783,16 @@ func (s *Service) heartbeat(parent context.Context, cancel context.CancelCauseFu
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(s.worker.HeartbeatInterval)
-		defer ticker.Stop()
 		for {
+			settings := s.workerSettings()
+			timer := time.NewTimer(settings.HeartbeatInterval)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				now := s.now()
-				until := now.Add(s.worker.LeaseDuration)
+				until := now.Add(settings.LeaseDuration)
 				err := s.db.Transaction(func(tx *gorm.DB) error {
 					res := tx.Model(&model.Job{}).
 						Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",

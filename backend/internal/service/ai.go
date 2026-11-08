@@ -793,7 +793,7 @@ func (s *Service) applySuggestionsTx(tx *gorm.DB, m model.Material, sg Suggestio
 
 // prepareAnalyze marks the analysis running and builds the executor input with
 // decrypted model and OCR credentials.
-func (s *Service) prepareAnalyze(ctx context.Context, job model.Job) (*jobexec.AnalyzeInput, error) {
+func (s *Service) prepareAnalyze(ctx context.Context, job model.Job, ocrProviderID string) (*jobexec.AnalyzeInput, error) {
 	db := s.db.WithContext(ctx)
 	var analysis model.MaterialAnalysis
 	if err := db.Where("material_id = ?", job.MaterialID).First(&analysis).Error; err != nil {
@@ -830,7 +830,7 @@ func (s *Service) prepareAnalyze(ctx context.Context, job model.Job) (*jobexec.A
 		}
 		in.Models = append(in.Models, jobexec.ModelConfig{ID: p.ID, Name: p.Name, BaseURL: p.BaseURL, APIKey: key, Model: p.DefaultModel, VisionModel: p.VisionModel})
 	}
-	ocr, key, err := s.ocrConfig(ctx, settings, material.MediaType)
+	ocr, key, err := s.ocrConfigForProvider(ctx, settings, ocrProviderID, material.MediaType)
 	if err != nil {
 		return nil, err
 	}

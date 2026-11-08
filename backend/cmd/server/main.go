@@ -72,16 +72,6 @@ func run() error {
 		Factory:      storage.New,
 		Logf:         log.Printf,
 		PullCacheTTL: cfg.PullCacheTTL,
-		Worker: service.WorkerSettings{
-			Kinds:                cfg.Worker.Kinds,
-			IngestConcurrency:    cfg.Worker.IngestConcurrency,
-			ReplicateConcurrency: cfg.Worker.ReplicateConcurrency,
-			AnalyzeConcurrency:   cfg.Worker.AnalyzeConcurrency,
-			IndexConcurrency:     cfg.Worker.IndexConcurrency,
-			LeaseDuration:        cfg.Worker.LeaseDuration,
-			HeartbeatInterval:    cfg.Worker.HeartbeatInterval,
-			PollInterval:         cfg.Worker.PollInterval,
-		},
 	})
 	if err != nil {
 		return err
@@ -96,7 +86,10 @@ func run() error {
 		}
 		return fmt.Errorf("初始化管理员失败: %w", err)
 	}
-	if _, err := svc.RegisterMaster(ctx, cfg.NodeName, version()); err != nil {
+	if _, err := svc.EnsureClusterSettings(ctx); err != nil {
+		return fmt.Errorf("初始化集群调度设置失败: %w", err)
+	}
+	if _, err := svc.RegisterMaster(ctx, "主端", version()); err != nil {
 		return fmt.Errorf("登记主端节点失败: %w", err)
 	}
 	if err := svc.RecoverInterrupted(ctx); err != nil {
@@ -152,15 +145,15 @@ func run() error {
 func runWorker(cfg config.Config) error {
 	w, err := worker.New(worker.Config{
 		MasterURL: cfg.Node.MasterURL, Token: cfg.Node.Token, Version: version(),
-		CacheDir: cfg.Node.CacheDir, CacheMax: cfg.Node.CacheMax, Slots: cfg.Node.Slots, RapidOCRURL: cfg.Node.RapidOCRURL,
-		Factory: storage.New, Logf: log.Printf,
+		CacheDir: cfg.Node.CacheDir,
+		Factory:  storage.New, Logf: log.Printf,
 	})
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("paper-collect 从端已连接 %s（任务槽位 %v）", cfg.Node.MasterURL, cfg.Node.Slots)
+	log.Printf("paper-collect 从端正在连接 %s，运行配置由主端下发", cfg.Node.MasterURL)
 	w.Run(ctx)
 	return nil
 }

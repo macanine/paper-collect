@@ -1,19 +1,38 @@
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { describeError } from '../../shared/api/errors';
 import type { ClusterNode, CreatedNode } from '../../shared/api/types';
 import { formatBytes, formatRate } from '../../shared/lib/format';
+import { JOB_KIND_LABELS } from '../../shared/lib/labels';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { NodeStatusTag } from '../../shared/ui/StatusTags';
-import { createNode, listNodes, patchNode, type NodePatchBody } from './api';
+import { useOCRProviders } from '../ai/queries';
+import { createNode, listNodes, patchNode, type NodeCreateBody, type NodePatchBody } from './api';
+import { ClusterSettingsCard } from './ClusterSettingsCard';
 import { CpuSparkline } from './MetricChart';
-import { NODE_POLL_MS, formatAgo, isLive, originNeedsTLS, totalSlots, workerEnv } from './nodeUtils';
+import { NodeRuntimeFields } from './NodeRuntimeFields';
+import {
+  NODE_POLL_MS,
+  formatAgo,
+  isLive,
+  orderedKinds,
+  originNeedsTLS,
+  runtimeBody,
+  runtimeFormValues,
+  totalSlots,
+  workerEnv,
+  type NodeRuntimeFormValues,
+} from './nodeUtils';
+
+interface NodeFormValues extends NodeRuntimeFormValues {
+  name: string;
+}
 
 export function useNodes() {
   return useQuery({
@@ -40,28 +59,52 @@ export function NodesPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<ClusterNode | null>(null);
   const [created, setCreated] = useState<CreatedNode | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [form] = Form.useForm<{ name: string }>();
+  const [form] = Form.useForm<NodeFormValues>();
   const query = useNodes();
+  const providers = useOCRProviders();
   const update = useNodeUpdate();
   const origin = window.location.origin;
 
   // 每次拉取后刷新“几秒前”，不需要单独的计时器。
   useEffect(() => setNow(Date.now()), [query.dataUpdatedAt]);
 
-  const create = useMutation({
-    mutationFn: createNode,
+  const saveNode = useMutation({
+    mutationFn: async (values: NodeFormValues) => {
+      const body: NodeCreateBody = { name: values.name.trim(), ...runtimeBody(values) };
+      if (editing) {
+        await patchNode(editing.id, body);
+        return null;
+      }
+      return createNode(body);
+    },
     onSuccess: (result) => {
-      setCreated(result);
+      if (result) setCreated(result);
       setCreating(false);
+      setEditing(null);
       form.resetFields();
       void queryClient.invalidateQueries({ queryKey: ['nodes'] });
+      message.success(editing ? '节点配置已保存，将在下一次心跳应用' : '节点已创建');
     },
-    onError: (error) => message.error(describeError(error).title),
+    onError: (error) => {
+      const { title, detail } = describeError(error);
+      message.error(detail ? `${title}：${detail}` : title);
+    },
   });
 
   const masterProtocol = query.data?.find((node) => node.is_master)?.protocol;
+  const openCreate = () => {
+    setEditing(null);
+    form.setFieldsValue({ name: '', ...runtimeFormValues() });
+    setCreating(true);
+  };
+  const openEdit = (node: ClusterNode) => {
+    if (node.is_master) return;
+    setEditing(node);
+    form.setFieldsValue({ name: node.name, ...runtimeFormValues(node) });
+  };
 
   const columns: ColumnsType<ClusterNode> = [
     {
@@ -104,8 +147,27 @@ export function NodesPage() {
       key: 'jobs',
       render: (_, node) => {
         const running = Object.values(node.running_kinds).reduce<number>((sum, count) => sum + (count ?? 0), 0);
-        return <Link to={`/jobs?node_id=${node.id}&status=running`}>{running} / {totalSlots(node.slots)}</Link>;
+        return (
+          <Space direction="vertical" size={0}>
+            <Link to={`/jobs?node_id=${node.id}&status=running`}>{running} / {totalSlots(node.slots)}</Link>
+            <Typography.Text type="secondary">
+              {node.is_master ? `主端运行 ${totalSlots(node.slots)} 槽` : `配置 ${totalSlots(node.configured_slots)} 槽`}
+            </Typography.Text>
+          </Space>
+        );
       },
+    },
+    {
+      title: '配置修订',
+      key: 'revision',
+      render: (_, node) =>
+        node.is_master ? (
+          <Tag color="blue">全局调度</Tag>
+        ) : node.applied_config_revision === node.config_revision ? (
+          <Tag color="green">已应用 {node.config_revision}</Tag>
+        ) : (
+          <Tag color="orange">等待应用 {node.applied_config_revision} / {node.config_revision}</Tag>
+        ),
     },
     {
       title: '近 1 小时',
@@ -121,6 +183,14 @@ export function NodesPage() {
       key: 'actions',
       render: (_, node) => (
         <Space size={4}>
+          <Button
+            size="small"
+            icon={<SettingOutlined />}
+            onClick={() => openEdit(node)}
+            disabled={node.is_master}
+          >
+            配置
+          </Button>
           <Button
             size="small"
             disabled={!node.enabled}
@@ -148,8 +218,8 @@ export function NodesPage() {
   ];
 
   const handleCreate = async () => {
-    const { name } = await form.validateFields();
-    create.mutate(name.trim());
+    const values = await form.validateFields();
+    saveNode.mutate(values);
   };
 
   return (
@@ -158,11 +228,13 @@ export function NodesPage() {
         title="节点"
         description="主端负责调度和存储状态，从端只领取并执行上传、AI 识别和索引任务。"
         extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             添加节点
           </Button>
         }
       />
+
+      <ClusterSettingsCard />
 
       {query.isPending ? <LoadingState /> : null}
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} title="节点加载失败" /> : null}
@@ -181,16 +253,20 @@ export function NodesPage() {
       ) : null}
 
       <Modal
-        title="添加节点"
-        open={creating}
-        onCancel={() => setCreating(false)}
+        title={editing ? `配置 ${editing.name}` : '添加节点'}
+        open={creating || editing !== null}
+        onCancel={() => {
+          setCreating(false);
+          setEditing(null);
+        }}
         onOk={() => void handleCreate()}
-        okText="创建"
+        okText={editing ? '保存配置' : '创建'}
         cancelText="取消"
-        confirmLoading={create.isPending}
+        confirmLoading={saveNode.isPending}
+        width={760}
         destroyOnHidden
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" initialValues={runtimeFormValues()}>
           <Form.Item
             name="name"
             label="节点名称"
@@ -198,6 +274,11 @@ export function NodesPage() {
           >
             <Input placeholder="例如：家里 NAS" autoFocus />
           </Form.Item>
+          <NodeRuntimeFields
+            providers={providers.data ?? []}
+            providersLoading={providers.isPending}
+            providersError={providers.isError}
+          />
         </Form>
       </Modal>
 
@@ -210,11 +291,20 @@ export function NodesPage() {
         cancelButtonProps={{ style: { display: 'none' } }}
         maskClosable={false}
       >
-        <Typography.Paragraph>令牌仅显示这一次。把下面的环境变量配置到从端后启动它，节点会在几秒内上线。</Typography.Paragraph>
+        <Typography.Paragraph>
+          令牌仅显示这一次。把下面的接入信息配置到从端后启动它；槽位、缓存上限和 OCR 服务已经由主端下发，不需要写进 env。
+        </Typography.Paragraph>
         {created ? (
           <>
             <pre className="node-token">{workerEnv(origin, created.token)}</pre>
             <CopyButton value={workerEnv(origin, created.token)} label="复制配置" />
+            <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+              当前配置：{orderedKinds((['replicate', 'analyze', 'index'] as const).filter(
+                (kind) => (created.configured_slots[kind] ?? 0) > 0,
+              ))
+                .map((kind) => `${JOB_KIND_LABELS[kind]} ${created.configured_slots[kind] ?? 0}`)
+                .join('，') || '暂不执行可下放任务'}；原件缓存上限 {created.cache_max_bytes > 0 ? formatBytes(created.cache_max_bytes) : '不限'}。
+            </Typography.Paragraph>
           </>
         ) : null}
         {originNeedsTLS(origin) ? (
