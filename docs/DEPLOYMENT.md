@@ -172,6 +172,7 @@ cp .env.example /opt/paper-collect/.env
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
+| `APP_BIND` | `127.0.0.1` | Compose 网关在宿主机上的监听地址；放在 1Panel、Nginx 等反向代理后时保持回环地址 |
 | `APP_PORT` | `2033` | 网关映射到宿主机的端口 |
 | `TZ` | `Asia/Shanghai` | Compose 服务时区 |
 | `POSTGRES_USER` | `paper` | Compose PostgreSQL 用户 |
