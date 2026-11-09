@@ -58,7 +58,7 @@ type PageText struct {
 
 // Parse reads a DOCX package from readerAt.
 func Parse(readerAt io.ReaderAt, size int64) (*Document, error) {
-	pkg, err := ooxml.New(readerAt, size)
+	pkg, err := ooxml.NewAllowingExternal(readerAt, size)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func Parse(readerAt io.ReaderAt, size int64) (*Document, error) {
 
 // ParseFile reads a DOCX package from disk.
 func ParseFile(name string) (*Document, error) {
-	pkg, err := ooxml.Open(name)
+	pkg, err := ooxml.OpenAllowingExternal(name)
 	if err != nil {
 		return nil, err
 	}

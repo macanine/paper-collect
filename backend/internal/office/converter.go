@@ -83,6 +83,16 @@ func (c *Converter) Convert(ctx context.Context, sha, documentName string, open 
 		return "", err
 	}
 	if ext == ".docx" || ext == ".pptx" {
+		sanitized := source + ".sanitized"
+		if _, err := ooxml.SanitizeExternalResources(source, sanitized); err != nil {
+			return "", err
+		}
+		if err := os.Remove(source); err != nil {
+			return "", apperr.Internal(err)
+		}
+		if err := os.Rename(sanitized, source); err != nil {
+			return "", apperr.Internal(err)
+		}
 		if err := ooxml.Validate(source); err != nil {
 			return "", err
 		}

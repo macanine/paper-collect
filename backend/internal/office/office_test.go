@@ -1,6 +1,7 @@
 package office
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -24,6 +25,48 @@ func fixture(t *testing.T) []byte {
 	return data
 }
 
+func fixtureWithExternalRelationship(t *testing.T) []byte {
+	t.Helper()
+	source := fixture(t)
+	zr, err := zip.NewReader(bytes.NewReader(source), int64(len(source)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, file := range zr.File {
+		body := make([]byte, file.UncompressedSize64)
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(rc, body); err != nil {
+			rc.Close()
+			t.Fatal(err)
+		}
+		if err := rc.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if file.Name == "word/_rels/document.xml.rels" {
+			body = bytes.Replace(body, []byte("</Relationships>"), []byte(`<Relationship Id="external-image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.test/image.png" TargetMode="External"/></Relationships>`), 1)
+		}
+		if file.Name == "word/document.xml" {
+			body = bytes.Replace(body, []byte("</w:body>"), []byte(`<w:p><w:r><w:pict><v:shape><v:imagedata r:id="external-image"/></v:shape></w:pict></w:r></w:p></w:body>`), 1)
+		}
+		writer, err := zw.Create(file.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 func converter(t *testing.T) *Converter {
 	t.Helper()
 	dir := t.TempDir()
@@ -40,7 +83,7 @@ func TestPDFRendersAndReusesSameDocument(t *testing.T) {
 	if _, err := exec.LookPath("soffice"); err != nil {
 		t.Skip("LibreOffice Writer is not installed")
 	}
-	data := fixture(t)
+	data := fixtureWithExternalRelationship(t)
 	hash := sha256.Sum256(data)
 	sha := hex.EncodeToString(hash[:])
 	c := converter(t)
