@@ -129,6 +129,43 @@ func TestPaddleOCRExtractProtocol(t *testing.T) {
 	}
 }
 
+func TestPaddleOCRRetriesFullSubmitQueue(t *testing.T) {
+	var submits int
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	mux.HandleFunc("/api/v2/ocr/jobs", func(w http.ResponseWriter, r *http.Request) {
+		submits++
+		w.Header().Set("Content-Type", "application/json")
+		if submits < 3 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 12002, "msg": "任务提交队列已满，请稍后重试"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"jobId": "job-1"}})
+	})
+	mux.HandleFunc("/api/v2/ocr/jobs/job-1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"code": 0,
+			"data": map[string]any{"state": "done", "resultUrl": map[string]string{"jsonUrl": server.URL + "/result.jsonl"}},
+		})
+	})
+	mux.HandleFunc("/result.jsonl", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["识别文本"]}}]}}`))
+	})
+	client, err := NewPaddleOCR(server.URL, "paddle-token", "PP-OCRv6", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.PollInterval = time.Millisecond
+	client.RetryInterval = time.Millisecond
+	if _, err := client.Extract(context.Background(), "试题.pdf", []byte("pdf")); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if submits != 3 {
+		t.Fatalf("submit attempts = %d, want 3", submits)
+	}
+}
+
 func TestPaddleOCRDefaultClientDoesNotOverrideJobDeadline(t *testing.T) {
 	client, err := NewPaddleOCR("https://paddleocr.example.com", "paddle-token", "PP-OCRv6", nil)
 	if err != nil {

@@ -17,17 +17,19 @@ import (
 const (
 	paddleMaxResultBytes = 64 << 20
 	paddleMaxJSONLLines  = 1000
+	paddleSubmitAttempts = 6
 )
 
 // PaddleOCR uses Baidu AI Studio's asynchronous PaddleOCR job API.
 // PP-OCRv6 currently shares the documented v5-compatible job protocol.
 type PaddleOCR struct {
-	BaseURL      string
-	Token        string
-	Model        string
-	HTTP         *http.Client
-	PollInterval time.Duration
-	Timeout      time.Duration
+	BaseURL       string
+	Token         string
+	Model         string
+	HTTP          *http.Client
+	PollInterval  time.Duration
+	RetryInterval time.Duration
+	Timeout       time.Duration
 }
 
 // NewPaddleOCR validates the endpoint and applies defaults.
@@ -47,7 +49,8 @@ func NewPaddleOCR(baseURL, token, model string, client *http.Client) (*PaddleOCR
 	}
 	return &PaddleOCR{
 		BaseURL: normalized, Token: strings.TrimSpace(token), Model: model,
-		HTTP: client, PollInterval: 3 * time.Second, Timeout: 15 * time.Minute,
+		HTTP: client, PollInterval: 3 * time.Second, RetryInterval: 2 * time.Second,
+		Timeout: 15 * time.Minute,
 	}, nil
 }
 
@@ -102,7 +105,7 @@ func (p *PaddleOCR) Extract(ctx context.Context, filename string, data []byte) (
 		p.Timeout = 15 * time.Minute
 	}
 	deadline := time.Now().Add(p.Timeout)
-	jobID, err := p.submit(ctx, filename, data)
+	jobID, err := p.submitWithRetry(ctx, filename, data)
 	if err != nil {
 		return Result{}, err
 	}
@@ -141,6 +144,37 @@ func (p *PaddleOCR) Extract(ctx context.Context, filename string, data []byte) (
 		}
 	}
 	return p.downloadResult(ctx, jsonURL)
+}
+
+func (p *PaddleOCR) submitWithRetry(ctx context.Context, filename string, data []byte) (string, error) {
+	delay := p.RetryInterval
+	if delay <= 0 {
+		delay = 2 * time.Second
+	}
+	for attempt := 1; ; attempt++ {
+		jobID, err := p.submit(ctx, filename, data)
+		if err == nil || attempt == paddleSubmitAttempts || !paddleQueueFull(err) {
+			return jobID, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", &APIError{Class: "timeout", Detail: "PaddleOCR 等待提交队列超时", Retryable: true}
+		case <-timer.C:
+		}
+		if delay < 30*time.Second {
+			delay *= 2
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+		}
+	}
+}
+
+func paddleQueueFull(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && strings.Contains(apiErr.Detail, "任务提交队列已满")
 }
 
 func (p *PaddleOCR) submit(ctx context.Context, filename string, data []byte) (string, error) {
@@ -455,6 +489,10 @@ func paddleAPIError(code int, message string) error {
 		class = "invalid_response"
 	case 10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008:
 		class = "config"
+	}
+	if strings.Contains(detail, "任务提交队列已满") {
+		class = "rate_limited"
+		retryable = true
 	}
 	return &APIError{Class: class, Detail: detail, Retryable: retryable}
 }

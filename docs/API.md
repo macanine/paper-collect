@@ -337,7 +337,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `PUT /ai/settings`（ai:write）：请求完整设置，`ocr_provider_id` 可选：省略=保留，空串=清除选择；`mineru_token` 为旧 MinerU 兼容字段：省略=保留，空串=清除；200 AISettings。旧版仅提交 MinerU 字段的客户端会继续工作，并自动物化/更新 MinerU OCRProvider。
 - `POST /ai/mineru/test`（ai:write）：兼容旧客户端，实际测试当前选中的 OCR 服务商；200 `{"healthy":boolean,"message":"脱敏说明"}`。新客户端应使用 `POST /ocr/providers/{id}/test`。
 
-升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
+升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。提交响应明确为“任务提交队列已满”时最多尝试 6 次并按 2、4、8、16、30 秒退避；成功创建 jobId 后不会重复提交。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
 
 自建服务当前固定使用 RapidOCR 3.10.0 的默认 PP-OCRv6 small；请求中的 `model` 字段仅保留协议兼容，并不会切换模型。现有 JSONL 每页使用 `page_no` 和 `texts` 字符串数组。接收端也支持按阅读顺序排列的 `blocks`：`{"type":"text","text":"..."}`、`{"type":"inline_formula","latex":"..."}` 和 `{"type":"display_formula","latex":"..."}`；`latex` 为不含外围分隔符的原始 LaTeX，JSON 中的反斜杠须转义。有非空 `blocks` 时优先使用它并忽略 `texts`，未知块类型或空公式会失败而不静默丢失。该协议为后续公式模型提供入口；当前 RapidOCR 服务仍只输出 `texts`，没有接入扫描件公式识别模型。
 
