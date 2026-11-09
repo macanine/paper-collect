@@ -54,6 +54,8 @@ type Worker struct {
 	mu      sync.Mutex
 	running map[string]*execution
 
+	capacityMu     sync.Mutex
+	claimedByKind  map[string]int
 	runtimeMu      sync.RWMutex
 	slots          map[string]int
 	cacheMax       int64
@@ -83,6 +85,7 @@ const (
 	reportTimeout  = 30 * time.Second
 	claimGrace     = 30 * time.Second // on top of the long-poll wait
 	minClaimPeriod = time.Second      // spacing when the master answers empty at once
+	capacityRetry  = time.Second      // let an in-flight job release a slot
 )
 
 // New validates the configuration.
@@ -124,7 +127,8 @@ func New(cfg Config) (*Worker, error) {
 	w := &Worker{
 		cfg: cfg, base: base, started: time.Now().UTC(), sampler: sysstat.New(),
 		running: map[string]*execution{}, pins: map[string]int{}, downloads: map[string]chan struct{}{},
-		slots: initialSlots, cacheMax: cfg.CacheMax, heartbeatEvery: cfg.Heartbeat, claimWait: cfg.ClaimWait,
+		claimedByKind: map[string]int{},
+		slots:         initialSlots, cacheMax: cfg.CacheMax, heartbeatEvery: cfg.Heartbeat, claimWait: cfg.ClaimWait,
 		ocrProviderIDs: []string{}, configured: cfg.Slots != nil,
 	}
 	if cfg.ClaimWait <= 0 {
@@ -388,10 +392,43 @@ func (w *Worker) isConfigured() bool {
 	return w.configured
 }
 
+// reserveClaimSlot includes the in-flight claim request and its execution in
+// the same capacity budget. This prevents stale claim loops left by a shrink
+// from consuming another slot from the replacement loops.
+func (w *Worker) reserveClaimSlot(kind string) bool {
+	w.runtimeMu.RLock()
+	limit := w.slots[kind]
+	w.runtimeMu.RUnlock()
+	if limit <= 0 {
+		return false
+	}
+	w.capacityMu.Lock()
+	defer w.capacityMu.Unlock()
+	if w.claimedByKind[kind] >= limit {
+		return false
+	}
+	w.claimedByKind[kind]++
+	return true
+}
+
+func (w *Worker) releaseClaimSlot(kind string) {
+	w.capacityMu.Lock()
+	defer w.capacityMu.Unlock()
+	if w.claimedByKind[kind] <= 1 {
+		delete(w.claimedByKind, kind)
+		return
+	}
+	w.claimedByKind[kind]--
+}
+
 func (w *Worker) claimLoop(loopCtx, jobCtx context.Context, kind string) {
 	backoff := time.Second
 	for loopCtx.Err() == nil {
 		started := time.Now()
+		if !w.reserveClaimSlot(kind) {
+			sleep(loopCtx, capacityRetry)
+			continue
+		}
 		var in jobexec.Input
 		claimWait := w.claimInterval()
 		callCtx, cancel := context.WithTimeout(loopCtx, claimWait+claimGrace)
@@ -401,6 +438,7 @@ func (w *Worker) claimLoop(loopCtx, jobCtx context.Context, kind string) {
 		}, &in)
 		cancel()
 		if err != nil {
+			w.releaseClaimSlot(kind)
 			if loopCtx.Err() != nil {
 				return
 			}
@@ -413,6 +451,7 @@ func (w *Worker) claimLoop(loopCtx, jobCtx context.Context, kind string) {
 		}
 		backoff = time.Second
 		if status == http.StatusNoContent {
+			w.releaseClaimSlot(kind)
 			if elapsed := time.Since(started); elapsed < minClaimPeriod {
 				sleep(loopCtx, minClaimPeriod-elapsed)
 			}
@@ -421,6 +460,7 @@ func (w *Worker) claimLoop(loopCtx, jobCtx context.Context, kind string) {
 		// A configuration revision may cancel the claim loop after the master
 		// has leased this job. Finish that job with the root worker context.
 		w.execute(jobCtx, in)
+		w.releaseClaimSlot(kind)
 	}
 }
 
