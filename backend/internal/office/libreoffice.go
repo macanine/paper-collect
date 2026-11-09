@@ -17,7 +17,7 @@ func findSOffice() (string, error) {
 	return exec.LookPath("soffice")
 }
 
-func (c *Converter) convert(ctx context.Context, work, source string) (string, error) {
+func (c *Converter) convert(ctx context.Context, work, source, ext string) (string, error) {
 	profile := filepath.Join(work, "profile")
 	if err := os.MkdirAll(filepath.Join(profile, "user"), 0o700); err != nil {
 		return "", apperr.Internal(err)
@@ -39,7 +39,11 @@ func (c *Converter) convert(ctx context.Context, work, source string) (string, e
 
 	convertCtx, cancel := context.WithTimeout(ctx, conversionLimit)
 	defer cancel()
-	cmd := exec.CommandContext(convertCtx, "soffice", "-env:UserInstallation="+profileURL, "--headless", "--nologo", "--nodefault", "--nofirststartwizard", "--nolockcheck", "--convert-to", "pdf:writer_pdf_Export", "--outdir", work, source)
+	filter := "pdf:writer_pdf_Export"
+	if ext == ".ppt" || ext == ".pptx" {
+		filter = "pdf:impress_pdf_Export"
+	}
+	cmd := exec.CommandContext(convertCtx, "soffice", "-env:UserInstallation="+profileURL, "--headless", "--nologo", "--nodefault", "--nofirststartwizard", "--nolockcheck", "--convert-to", filter, "--outdir", work, source)
 	cmd.Env = rendererEnvironment()
 	fonts, err := fontConfig(work, c.dataDir)
 	if err != nil {
@@ -54,9 +58,9 @@ func (c *Converter) convert(ctx context.Context, work, source string) (string, e
 			return "", ctx.Err()
 		}
 		if errors.Is(convertCtx.Err(), context.DeadlineExceeded) {
-			return "", apperr.Unavailable("DOCX 转换超时，请检查文档大小和复杂度")
+			return "", apperr.Unavailable("Office 转 PDF 超时，请检查文档大小和复杂度")
 		}
-		return "", apperr.Unprocessable("DOCX 无法转换为预览，请检查文档是否损坏或加密")
+		return "", apperr.Unprocessable("Office 文档无法转换为 PDF，请检查文档是否损坏或加密")
 	}
 	return filepath.Join(work, "document.pdf"), nil
 }
