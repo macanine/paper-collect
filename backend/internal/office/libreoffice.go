@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 )
@@ -53,7 +54,7 @@ func (c *Converter) convert(ctx context.Context, work, source, ext string) (stri
 		cmd.Env = append(cmd.Env, "FONTCONFIG_FILE="+fonts)
 	}
 	// LibreOffice output can contain document names or contents; do not log it.
-	if err := cmd.Run(); err != nil {
+	if err := runRenderer(cmd); err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
@@ -63,6 +64,17 @@ func (c *Converter) convert(ctx context.Context, work, source, ext string) (stri
 		return "", apperr.Unprocessable("Office 文档无法转换为 PDF，请检查文档是否损坏或加密")
 	}
 	return filepath.Join(work, "document.pdf"), nil
+}
+
+// runRenderer keeps the LibreOffice launcher and its children in one process
+// group. soffice can fork soffice.bin, so killing only the command's top-level
+// process after a timeout can leave a renderer consuming CPU indefinitely.
+func runRenderer(cmd *exec.Cmd) error {
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error { return terminateProcessGroup(cmd) }
+	cmd.WaitDelay = 5 * time.Second
+	defer func() { _ = terminateProcessGroup(cmd) }()
+	return cmd.Run()
 }
 
 // Do not pass application credentials or database connection strings to the
