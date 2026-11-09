@@ -149,7 +149,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
           emitProgress();
         }
         if (failures.length > 0) {
-          patch(key, { phase: 'failed', error: `${failures.length} 个文件传输失败，可在上传记录中重试。${failures[0]}` });
+          patch(key, { phase: 'failed', error: `${failures.length} 个文件传输失败，可在导入中心重试。${failures[0]}` });
           return;
         }
         await finalizeUpload(upload.id);
@@ -160,7 +160,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
           if (current.status === 'completed' || current.status === 'failed') {
             patch(key, (b) => ({
               phase: current.status === 'completed' ? 'done' : 'failed',
-              error: current.status === 'failed' ? '归档失败，请在上传记录中查看原因' : undefined,
+              error: current.status === 'failed' ? '归档失败，请在导入中心查看原因' : undefined,
               newCount: current.new_count,
               duplicateCount: current.duplicate_count,
               skipped: [...b.skipped, ...current.skipped],

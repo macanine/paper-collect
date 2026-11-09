@@ -48,7 +48,7 @@ export function DashboardPage() {
 
       {canRead ? (
         <div className="stat-grid">
-          <StatCard to="/inbox" title="待整理" value={s?.review} icon={<InboxOutlined />} tone={s && s.review > 0 ? 'warning' : undefined} />
+          <StatCard to="/inbox" title="待确认" value={s?.review} icon={<InboxOutlined />} tone={s && s.review > 0 ? 'warning' : undefined} />
           <StatCard to="/inbox?stage=processing" title="识别中" value={s?.processing} icon={<SyncOutlined />} />
           <StatCard to="/inbox?stage=failed" title="识别失败" value={s?.failed} icon={<ExclamationCircleOutlined />} tone={s && s.failed > 0 ? 'error' : undefined} />
           <StatCard to="/library?missing=answers" title="缺答案的试卷" value={s?.missing_answers} icon={<FileSearchOutlined />} />
@@ -88,14 +88,14 @@ export function DashboardPage() {
                 ))}
               </ul>
             ) : (
-              <EmptyState description="还没有资料，把文件拖到页面任意位置即可上传" />
+              <EmptyState description="还没有资料，把文件拖到页面任意位置即可导入" />
             )}
           </Card>
         ) : null}
         {canUpload ? (
-          <Card title="最近上传" extra={<Link to="/uploads">上传记录</Link>}>
+          <Card title="最近导入" extra={<Link to="/imports">导入中心</Link>}>
             {uploads.isPending ? (
-              <div className="dashboard-list-loading" aria-label="正在加载最近上传">
+              <div className="dashboard-list-loading" aria-label="正在加载最近导入">
                 <Skeleton active title={{ width: '68%' }} paragraph={{ rows: 2 }} />
               </div>
             ) : uploads.data?.items.length ? (
@@ -103,7 +103,7 @@ export function DashboardPage() {
                 {uploads.data.items.map((upload) => (
                   <li key={upload.id} className="dashboard-list__item dashboard-list__item--upload">
                     <div className="dashboard-list__content">
-                      <Link to={`/uploads/${upload.id}`} className="dashboard-list__title">
+                      <Link to={`/imports/${upload.id}`} className="dashboard-list__title">
                         {upload.title}
                       </Link>
                       <span className="dashboard-list__meta-text">
@@ -121,7 +121,7 @@ export function DashboardPage() {
                 ))}
               </ul>
             ) : (
-              <EmptyState description="暂无上传" />
+              <EmptyState description="暂无导入" />
             )}
           </Card>
         ) : null}

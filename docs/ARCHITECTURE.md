@@ -106,7 +106,7 @@ web/src/
 - 仪表盘资料/任务统计卡直接进入对应状态筛选；文件按 SHA-256 精确查找同内容记录（唯一），重复上传表现为来源追加而非新文件。
 - 套卷、文件、任务列表及仪表盘最近记录使用整行点击导航；移动端卡片空白区域同样可点击。导航忽略行内链接、按钮、表单控件和下拉触发器，标题链接仍保留原生语义与可访问性。
 - 套卷详情返回 `members`、`collections` 和最多 5 个关联任务，可进入文件详情、专题详情或完整任务筛选；专题列表支持 `pack_id` 反查，资料库支持 `material_id` 反查所属套卷。
-- 待整理收件箱是 `stage=review` 的文件列表，支持确认（可同时接受配套建议）和移入套卷；回收站按套卷恢复或彻底删除，保留期 30 天。
+- 待确认收件箱读取 `stage=review` 的文件并按套卷聚合，一套资料只确认一次，可同时接受配套建议；回收站按套卷恢复或彻底删除，保留期 30 天。
 - 任务列表支持 `upload_id`、`material_id`、`replica_id` 精确筛选；文件详情的副本可回到所属网盘，任务详情保留上传、文件和副本入口。
 - 浏览器网络遥测只保存在内存，最多保留最近 100 次采样；展示 P95/平均/中位延迟、成功率、传输字节、在途数量、请求耗时、响应大小和 request ID。采样不含请求正文、响应正文、凭据或查询参数；清空会重置历史聚合，但保留仍在途的请求。
 - 后端对 `/api/*` 与 `/mcp` 输出一行结构化请求日志：method、path、status、duration_ms、response_bytes、request_id。日志不记录查询参数、请求正文、凭据或响应内容。
@@ -139,7 +139,7 @@ web/src/
 | 调用方 | 凭据 | 校验 |
 | --- | --- | --- |
 | 浏览器 | 用户名/口令 → 15 分钟 access JWT + 7 天 refresh token | JWT HS256，固定 issuer/audience；每次请求查 Session/User |
-| Agent | `Authorization: Bearer sk-<随机密钥>`；旧 `pc_` 密钥兼容 | 索引查询密钥哈希并关联用户，每次请求检查撤销、过期和当前角色 |
+| Agent | `Authorization: Bearer sk-<随机密钥>` | 索引查询密钥哈希并关联用户，每次请求检查撤销、过期和当前角色 |
 | MCP | 接受代理 Bearer API 密钥 | 无浏览器会话、无 SSE、无 session id |
 
 - 角色：`admin`（全部 scope）、`editor`（套卷与文件写、专题写、上传、任务读）、`viewer`（套卷、专题、任务读）。
@@ -183,7 +183,7 @@ web/src/
 
 - 套卷是编目和浏览的单位：学科、年级、届别、地区、机构、类型、标签、描述都在套卷上；文件只保存 `part`、`answer_start_page`、`position`。
 - 套卷标题在没有 `title_locked` 时自动生成（类型 + 学科 + 届别等，缺字段时退回考试名或到达文件名）；人工 PATCH 设置 `title_locked`/`catalog_locked`，自动识别不再覆盖。
-- 待整理收件箱里的文件 `stage=review`，可带 `suggested_pack`；确认后置为 `ready` 并可选并入建议套卷。套卷 stage 取成员中最靠后者（ready < processing < review < failed）。
+- 待确认收件箱里的文件 `stage=review`，可带 `suggested_pack`；确认后置为 `ready` 并可选并入建议套卷。套卷 stage 取成员中最靠后者（ready < processing < review < failed）。
 - 专题只存放套卷引用，替换接口整体替换收录关系，不删除套卷或文件；`position` 显式保存，追加接口放在末尾。
 
 ### 6.3 状态机
@@ -377,7 +377,7 @@ worker RunAnalyze
 - RapidOCR 结果接收端支持 `page_no` + `texts` 旧格式，也支持有序 `text`、`inline_formula`、`display_formula` 内容块并保留 LaTeX。现有自建 OCR 进程仍只输出 `texts`，并未接入扫描件公式识别模型。
 - Office 转换由 `internal/office` 调用 LibreOffice 生成 PDF，使用独立配置、最高宏安全级别、外部关系清理和进程级并发限制。DOCX 预览缓存改为 `renders/office-v1/<sha前两位>/<sha>.pdf`，转换任务在独立临时目录中处理并清理；Word 使用 Writer PDF 过滤器，PPT/PPTX 使用 Impress PDF 过滤器。非容器部署需自行安装 LibreOffice Writer、Impress 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
 - 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
-- 自动配套采用双阈值：只处理“套卷恰好一个文件、该文件是可配套的试卷类 part、套卷 doc_type 属于试卷类”的文件；候选为其他试卷类套卷，按学科、年级、届别、地区、机构、标题和成员评分。最佳分 ≥70 且领先第二名 ≥15 时自动把整个套卷并入候选（迁移文件与专题收录、补齐空编目字段，审计 `pack.auto_pair`）；最佳分 ≥40 时只置为 `review` 并写 `pack_suggestion`/`suggested_pack` 等待人工确认。分数不足或学科/年级/届别冲突时不改动，任务仍以 succeeded 结束并记录原因。
+- 配套建议只处理“套卷恰好一个文件、该文件是可配套的试卷类 part、套卷 doc_type 属于试卷类”的文件；候选为其他试卷类套卷，按学科、年级、届别、地区、机构、标题和成员评分。达到建议阈值时只置为 `review` 并写 `pack_suggestion`/`suggested_pack` 等待人工确认，系统不会跨套卷自动合并。分数不足或学科/年级/届别冲突时不改动，任务仍以 succeeded 结束并记录原因。
 - 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
 - PaddleOCR 明确返回“任务提交队列已满”时，提交阶段最多尝试 6 次，并按 2、4、8、16、30 秒退避；其他提交错误不盲目重试，避免生成重复远端任务。
 - 关键超时：OCR 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
@@ -438,13 +438,13 @@ RunIndex
 | --- | --- | --- |
 | `/login` | 登录 | 公开 |
 | `/` | 工作台（统计、最近套卷、上传入口） | 登录 |
-| `/inbox` | 待整理收件箱（确认、接受配套建议） | materials:write |
+| `/inbox` | 待确认收件箱（按套卷确认、接受配套建议） | materials:write |
 | `/library` | 资料库（套卷列表与筛选） | materials:read |
 | `/packs/:packId` | 套卷详情（文件、齐全度、专题、下载） | materials:read |
 | `/materials/:materialId` | 文件详情（AI 识别、题目索引、归档与同步状态、副本） | materials:read |
 | `/search` | 搜题 | materials:read |
 | `/collections`、`/collections/:collectionId` | 专题列表/详情 | collections:read |
-| `/uploads`、`/uploads/:uploadId` | 上传记录/传输与归档进度 | uploads:write |
+| `/imports`、`/imports/:uploadId` | 导入中心/传输与归档进度 | uploads:write |
 | `/trash` | 回收站（恢复、彻底删除） | materials:write |
 | `/jobs`、`/jobs/:jobId` | 任务列表/详情与重试 | jobs:read |
 | `/storage` | 网盘、同步规则（编辑、预览并保存）、副本（筛选、批量重试/删除远端/移除记录）、补齐副本 | storage:read |
@@ -457,11 +457,11 @@ OneDrive 新建表单默认引导使用 OpenList 应用；服务端旧配置缺�
 
 ### 12.2 上传会话
 
-- 选择文件/文件夹/ZIP 后立即自动 `POST /uploads`，按文件名和当前筛选条件推断标题与 hints（学科、年级、类型、届别、地区、机构、标签），不等待预检表单。
+- 选择文件/文件夹/ZIP 后立即自动 `POST /uploads`，导入中心只展示传输、处理中、需要确认和完成/失败状态，不要求用户手动提交归档。
 - 传输使用 XHR 以获得进度，最多 3 个并发；网络错误、429、5xx 自动重试 1 秒/3 秒，415/422/409/413 不重试。
-- 全部条目 received 后自动 finalize；失败保留手动提交/重试入口。
+- 全部条目 received 后自动 finalize；失败只保留恢复和重试入口。
 - 刷新页面后 `File` 对象丢失，需要重新选择相同相对路径和字节数的文件；已接收条目跳过。
-- `GET /uploads` 提供当前浏览器的上传记录分页；`GET /uploads/{id}` 需要 ID，用于恢复中断会话。
+- `GET /uploads` 提供导入中心的批次分页；`GET /uploads/{id}` 用于恢复中断会话。
 
 ### 12.3 轮询与缓存
 
@@ -586,7 +586,7 @@ make test-all                   # 全量：go test、go vet、前端测试与构
   - 上传：单文件直传生成单个套卷且不建合集；文件夹与嵌套 ZIP 展开为套卷；ZIP 中的不支持成员单独上报；恶意 ZIP 与路径被拒且不发布；并发 ZIP 上传不覆盖已胜出的内容。
   - 去重与副本：内容去重与秒传；通过「添加本地网盘 → 预览规则 → 保存规则」生成副本并上传；云端副本拉取缓存及损坏副本拒绝。
   - 网盘同步（`service/sync_rules_test.go`，真实 `local` 网盘）：命中第一条规则且停用规则被跳过；预览不写库，令牌绑定草稿、用户、网盘与过期时间；同路径追加 sha8 后缀且重新规划不漂移；超限/扩展名跳过不算失败；改名后 move 网盘远端移动、keep 网盘记为路径偏离；规则变化转规则外且保留文件，`delete_remote`/`forget`/非规则外拒绝；从未上传的副本撤销；等待编目直到置为 ready 或强制同步；同路径不同内容不覆盖、需处理后重试恢复；停用网盘跳过但仍可读取；彻底删除时云端副本转规则外并保留 Blob。对规划代码做的 7 处故意破坏（去掉首条命中、去掉路径后缀、令牌不校验草稿、keep 当作 move、忽略大小上限、规则外直接删除、忽略等待编目）均被这些测试捕获。
-  - 套卷整理：自动配套；拆分、合并（保留专题归属）与批量编辑套卷；专题收录；回收站恢复与彻底删除。
+  - 套卷整理：配套建议确认；拆分、合并（保留专题归属）与批量编辑套卷；专题收录；回收站恢复与彻底删除。
   - AI 与搜题：AI 识别端到端与白名单字段；分析与索引共享解析；搜题索引与公式检索。
   - 权限与 MCP：Agent Bearer、作用域与撤销；MCP 工具目录与路由、权限、文档一致；未鉴权返回 401。
   - 节点：租约竞争、过期租约回收与资料锁；从端崩溃、排空、停用和主端重启由真实进程场景覆盖。

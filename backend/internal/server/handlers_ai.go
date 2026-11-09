@@ -143,8 +143,6 @@ func (s *Server) handlePutAISettings(c *gin.Context) {
 	var req struct {
 		AnalysisEnabled bool     `json:"analysis_enabled"`
 		OCRProviderID   *string  `json:"ocr_provider_id"`
-		MinerUBaseURL   string   `json:"mineru_base_url"`
-		MinerUToken     *string  `json:"mineru_token"`
 		MaxPages        int      `json:"max_pages"`
 		MaxImages       int      `json:"max_images"`
 		AutoAccept      *float64 `json:"auto_accept_confidence"`
@@ -155,8 +153,7 @@ func (s *Server) handlePutAISettings(c *gin.Context) {
 	}
 	view, err := s.svc.PutAISettings(c.Request.Context(), principal(c), service.AISettingsInput{
 		AnalysisEnabled: req.AnalysisEnabled, OCRProviderID: req.OCRProviderID,
-		MinerUBaseURL: req.MinerUBaseURL,
-		MinerUToken:   req.MinerUToken, MaxPages: req.MaxPages, MaxImages: req.MaxImages,
+		MaxPages: req.MaxPages, MaxImages: req.MaxImages,
 		AutoAcceptConfidence: req.AutoAccept,
 	})
 	if err != nil {
@@ -164,15 +161,6 @@ func (s *Server) handlePutAISettings(c *gin.Context) {
 		return
 	}
 	s.respondData(c, http.StatusOK, toAISettings(view))
-}
-
-func (s *Server) handleTestMinerU(c *gin.Context) {
-	healthy, message, err := s.svc.TestMinerU(c.Request.Context())
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	s.respondData(c, http.StatusOK, gin.H{"healthy": healthy, "message": message})
 }
 
 func (s *Server) handleListOCRProviders(c *gin.Context) {

@@ -139,7 +139,7 @@ export function PackCatalogFields({ fields = ALL_FIELDS, facets, uncertain = [],
       ) : null}
       {has('exam_name') ? (
         <Form.Item name="exam_name" label={FIELD_LABELS.exam_name} {...warn('exam_name')}>
-          <Input allowClear placeholder="试卷上印的名称，用于自动配套" maxLength={255} />
+          <Input allowClear placeholder="试卷上印的名称，用于配套建议" maxLength={255} />
         </Form.Item>
       ) : null}
       {has('chapter') ? (

@@ -205,6 +205,7 @@ func TestIndexingCanBeEnabledAfterUpload(t *testing.T) {
 func TestDirectUploadSharesParsingBetweenAnalysisAndIndex(t *testing.T) {
 	fake := newFakeAI(t)
 	env := newEnv(t)
+	ocrID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
 	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
 		"name": "文本模型", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
 		"models": []string{"text-model"}, "default_model": "text-model", "enabled": true, "priority": 1,
@@ -213,8 +214,7 @@ func TestDirectUploadSharesParsingBetweenAnalysisAndIndex(t *testing.T) {
 		t.Fatalf("provider %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true, "mineru_base_url": fake.server.URL,
-		"mineru_token": "mineru-token", "max_pages": 3, "max_images": 0,
+		"analysis_enabled": true, "ocr_provider_id": ocrID, "max_pages": 3, "max_images": 0,
 	}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("settings %d: %s", status, body)

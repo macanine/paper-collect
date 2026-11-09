@@ -12,7 +12,7 @@ import { UploadStatusTag } from '../../shared/ui/StatusTags';
 import { listUploads } from './api';
 import { useUploads } from './UploadManager';
 
-export function UploadsListPage() {
+export function ImportCenterPage() {
   const navigate = useNavigate();
   const { openDialog } = useUploads();
   const list = useListSearch([] as const);
@@ -25,10 +25,11 @@ export function UploadsListPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        title="上传记录"
+        title="导入中心"
+        description="查看资料导入进度；失败的导入可以从这里继续。"
         extra={
           <Button icon={<CloudUploadOutlined />} onClick={openDialog}>
-            上传资料
+            导入资料
           </Button>
         }
       />
@@ -40,11 +41,11 @@ export function UploadsListPage() {
             rowKey="id"
             loading={query.isFetching}
             dataSource={query.data?.items ?? []}
-            onRow={(upload) => ({ onClick: (event) => navigateTableRow(event, `/uploads/${upload.id}`, navigate), className: 'cursor-pointer' })}
-            locale={{ emptyText: <EmptyState description="还没有上传过资料" /> }}
+            onRow={(upload) => ({ onClick: (event) => navigateTableRow(event, `/imports/${upload.id}`, navigate), className: 'cursor-pointer' })}
+            locale={{ emptyText: <EmptyState description="还没有导入资料" /> }}
             pagination={{ current: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: list.setPage, hideOnSinglePage: true }}
             columns={[
-              { title: '批次', key: 'title', render: (_: unknown, u) => <Link to={`/uploads/${u.id}`}>{u.title}</Link> },
+              { title: '导入批次', key: 'title', render: (_: unknown, u) => <Link to={`/imports/${u.id}`}>{u.title}</Link> },
               { title: '状态', key: 'status', width: 110, render: (_: unknown, u) => <UploadStatusTag status={u.status} /> },
               {
                 title: '结果',

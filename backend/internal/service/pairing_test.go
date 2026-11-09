@@ -30,7 +30,7 @@ func seedPack(t *testing.T, db *gorm.DB, pack model.Pack, parts ...string) (mode
 	return pack, out
 }
 
-func TestPairingMergesStrongMatchAndSuggestsWeakOne(t *testing.T) {
+func TestPairingSuggestsMatchesForConfirmation(t *testing.T) {
 	svc, db := newWorkerTestService(t, t.TempDir(), "pairing")
 	now := time.Now().UTC()
 	exam := model.Pack{DocType: "joint", Grade: "grade12", Cohort: 2025, Region: "浙江", Organization: "Z20联盟",
@@ -38,20 +38,19 @@ func TestPairingMergesStrongMatchAndSuggestsWeakOne(t *testing.T) {
 	target, _ := seedPack(t, db, exam, model.PartQuestions)
 	_, lone := seedPack(t, db, exam, model.PartAnswers)
 
-	var renamed []string
 	if err := db.Transaction(func(tx *gorm.DB) error {
-		_, ids, _, err := svc.pairMaterialTx(tx, lone[0].ID, now)
-		renamed = ids
+		_, _, _, err := svc.pairMaterialTx(tx, lone[0].ID, now)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	var moved model.Material
-	if err := db.Where("id = ?", lone[0].ID).First(&moved).Error; err != nil || moved.PackID != target.ID {
-		t.Fatalf("answer key must join the exam pack: %+v %v", moved, err)
+	if err := db.Where("id = ?", lone[0].ID).First(&moved).Error; err != nil || moved.PackID == target.ID {
+		t.Fatalf("answer key must wait for confirmation: %+v %v", moved, err)
 	}
-	if len(renamed) == 0 {
-		t.Fatal("merged files must be renamed to the canonical part names")
+	if moved.Stage != model.StageReview || moved.SuggestedPackID != target.ID ||
+		!containsString(model.DecodeStrings(moved.ReviewReasonsJSON), model.ReviewPackSuggestion) {
+		t.Fatalf("strong match must produce a confirmation suggestion: %+v", moved)
 	}
 
 	// Same cohort and grade but no exam name or organization: only a suggestion.

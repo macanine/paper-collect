@@ -15,7 +15,6 @@ import {
   DownOutlined,
   ExperimentOutlined,
   FolderOpenOutlined,
-  HistoryOutlined,
   InboxOutlined,
   KeyOutlined,
   LogoutOutlined,
@@ -56,7 +55,7 @@ const NAVIGATION: NavigationSection[] = [
     label: '资料',
     items: [
       { key: '/', path: '/', label: '工作台', icon: <DashboardOutlined /> },
-      { key: '/inbox', path: '/inbox', label: '待整理', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
+      { key: '/inbox', path: '/inbox', label: '待确认', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
       { key: '/library', path: '/library', label: '资料库', icon: <FolderOpenOutlined />, scope: 'materials:read' },
       { key: '/search', path: '/search', label: '搜题', icon: <SearchOutlined />, scope: 'materials:read' },
       { key: '/collections', path: '/collections', label: '专题', icon: <AppstoreOutlined />, scope: 'collections:read' },
@@ -66,7 +65,6 @@ const NAVIGATION: NavigationSection[] = [
     key: 'records',
     label: '记录',
     items: [
-      { key: '/uploads', path: '/uploads', label: '上传记录', icon: <HistoryOutlined />, scope: 'uploads:write' },
       { key: '/trash', path: '/trash', label: '回收站', icon: <DeleteOutlined />, scope: 'materials:write' },
       { key: '/jobs', path: '/jobs', label: '处理日志', icon: <BarsOutlined />, scope: 'jobs:read' },
     ],
@@ -91,7 +89,7 @@ const DETAIL_LABELS: Record<string, string> = {
   materials: '文件详情',
   collections: '专题详情',
   jobs: '处理详情',
-  uploads: '上传详情',
+  imports: '导入中心',
 };
 
 function routeKey(pathname: string): string {
@@ -104,6 +102,7 @@ function routeKey(pathname: string): string {
 }
 
 function detailLabel(pathname: string, item: NavigationItem | undefined): string | null {
+  if (pathname.startsWith('/imports/')) return '导入详情';
   if (!item || pathname === item.path) return null;
   if (pathname.startsWith('/admin/nodes/')) return '节点详情';
   if (pathname.startsWith('/admin/')) return null;
@@ -158,7 +157,7 @@ const SidebarContent = memo(function SidebarContent({ sections, activeKey, revie
                     <span className="app-nav__icon" aria-hidden="true">{item.icon}</span>
                     <span className="app-nav__label">{item.label}</span>
                     {item.badge === 'review' && reviewCount > 0 ? (
-                      <span className="app-nav__badge" aria-label={`${reviewCount} 个待整理文件`}>
+                        <span className="app-nav__badge" aria-label={`${reviewCount} 个待确认文件`}>
                         <Badge count={reviewCount} size="small" overflowCount={999} />
                       </span>
                     ) : null}
@@ -177,10 +176,18 @@ const HeaderUploadButton = memo(function HeaderUploadButton() {
   const { openDialog } = useUploads();
   return (
     <span className="app-header__upload">
-      <Button type="primary" aria-label="上传资料" icon={<CloudUploadOutlined />} onClick={openDialog}>
-        <span className="app-header__upload-label">上传资料</span>
+      <Button type="primary" aria-label="导入资料" icon={<CloudUploadOutlined />} onClick={openDialog}>
+        <span className="app-header__upload-label">导入资料</span>
       </Button>
     </span>
+  );
+});
+
+const HeaderImportLink = memo(function HeaderImportLink() {
+  return (
+    <Link to="/imports" className="app-header__import">
+      导入中心
+    </Link>
   );
 });
 
@@ -219,15 +226,16 @@ function AppFrame() {
     [activeKey, navigation],
   );
   const detail = detailLabel(location.pathname, activeItem);
+  const contextLabel = activeItem?.label ?? (location.pathname.startsWith('/imports') ? '导入中心' : '管理台');
 
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
-    const current = detail ?? activeItem?.label ?? '管理台';
+    const current = detail ?? contextLabel;
     document.title = `${current} · 中学资料库`;
-  }, [activeItem?.label, detail]);
+  }, [contextLabel, detail]);
 
   const handleLogout = async () => {
     try {
@@ -292,7 +300,7 @@ function AppFrame() {
               <span className="app-breadcrumb__separator" aria-hidden="true">
                 /
               </span>
-              <span className="app-breadcrumb__current">{activeItem?.label ?? '管理台'}</span>
+              <span className="app-breadcrumb__current">{contextLabel}</span>
               {detail ? (
                 <>
                   <span className="app-breadcrumb__separator app-breadcrumb__detail" aria-hidden="true">
@@ -312,6 +320,7 @@ function AppFrame() {
                 <span>搜题</span>
               </Link>
             ) : null}
+            {can('uploads:write') ? <HeaderImportLink /> : null}
             {can('uploads:write') ? <HeaderUploadButton /> : null}
             {user ? (
               <Dropdown

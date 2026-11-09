@@ -17,7 +17,7 @@ var (
 	urlPattern    = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://\S+`)
 	keyValPattern = regexp.MustCompile(`(?i)(authorization|cookie|password|passwd|token|secret|api[_-]?key|client[_-]?secret)\s*[:=]\s*\S+`)
 	bearerPattern = regexp.MustCompile(`(?i)bearer\s+\S+`)
-	apiKeyPattern = regexp.MustCompile(`(?:sk-[A-Za-z0-9_-]{43}|pc_[0-9a-fA-F-]{36}\.[A-Za-z0-9_-]{16,128}|nd-[A-Za-z0-9_-]{43})`)
+	apiKeyPattern = regexp.MustCompile(`(?:sk-[A-Za-z0-9_-]{43}|nd-[A-Za-z0-9_-]{43})`)
 )
 
 // Redact removes URLs, credential-looking pairs and known secret values, then truncates.

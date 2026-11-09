@@ -13,8 +13,6 @@ Paper Collect 的 MCP 工具覆盖管理台所用的资料、题目、合集、�
 
 具有 `keys:manage` 的密钥可以创建和撤销密钥，创建的新密钥权限不得超过自身的有效权限；具有 `users:manage` 的密钥只能创建角色权限不超过自身有效权限的用户。具有相应权限的密钥也可调用 AI 与搜索设置接口。创建的密钥只在创建响应中显示一次，且是独立凭据；撤销创建者不会自动撤销它。
 
-升级前生成的 `pc_<id>.<secret>` 密钥无需重建，可直接填入同样的 Bearer 请求头。旧的 `/api/v1/auth/agent-token` 换取接口已移除；使用该接口的客户端需要改为直接传密钥。升级前已签发的代理 JWT 在原有有效期内仍会校验密钥和用户状态。
-
 ## 2. 配置客户端
 
 服务地址为 `http://127.0.0.1:8080/mcp`（按实际部署替换）。本地开发时 Vite 也会将 `/mcp` 代理到后端。跨主机访问应使用自己部署的 HTTPS 地址，并确保连接程序能够访问该地址。
@@ -111,7 +109,6 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `ocr_providers_test` | `POST /api/v1/ocr/providers/:id/test` | `ai:write` |
 | `ai_settings_get` | `GET /api/v1/ai/settings` | `ai:read` |
 | `ai_settings_update` | `PUT /api/v1/ai/settings` | `ai:write` |
-| `ai_mineru_test` | `POST /api/v1/ai/mineru/test` | `ai:write` |
 | `packs_search` | `GET /api/v1/packs` | `materials:read` |
 | `packs_facets` | `GET /api/v1/packs/facets` | `materials:read` |
 | `packs_get` | `GET /api/v1/packs/:id` | `materials:read` |
@@ -170,7 +167,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `storage_reconcile` | `POST /api/v1/storage/reconcile` | `storage:write` |
 | `storage_replica_share` | `POST /api/v1/storage/replicas/:id/share` | `storage:write` |
 
-资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。`materials_search` 的 `stage=review` 就是待整理收件箱，`materials_accept` 批量确认；`status` 按归档状态、`sync_status` 按网盘同步状态筛选。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
+资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。`materials_search` 的 `stage=review` 就是待确认收件箱，`materials_accept` 批量确认；`status` 按归档状态、`sync_status` 按网盘同步状态筛选。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
 
 网盘同步分三步：先用 `storage_drives_create` 添加网盘，再用 `storage_rules_list` 取得当前规则、修改后调用 `storage_rules_preview` 查看影响并拿到 `preview_token`，最后把同一份规则和令牌交给 `storage_rules_replace`。令牌 15 分钟有效，期间规则或网盘被修改需重新预览。`storage_rules_explain` 说明某个文件为什么去了哪个网盘；规则外副本用 `storage_replicas_list`（`status=orphaned`）查看，再用 `storage_replicas_bulk` 删除远端或只移除记录。
 

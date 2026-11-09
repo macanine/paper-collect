@@ -589,16 +589,14 @@ export interface AITestResult {
 export interface AISettings {
   analysis_enabled: boolean;
   ocr_provider_id: string;
-  mineru_base_url: string;
   max_pages: number;
   max_images: number;
   auto_accept_confidence: number;
-  mineru_configured: boolean;
   ocr_configured: boolean;
   updated_at: string;
 }
 
-export interface MinerUTestResult {
+export interface OCRTestResult {
   healthy: boolean;
   message: string;
 }

@@ -13,11 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Pairing thresholds: a strong unique match is merged automatically, a
-// plausible one is suggested in the review inbox.
+// Pairing threshold: plausible matches are sent to the review inbox for confirmation.
 const (
-	pairAutoScore    = 70
-	pairAutoMargin   = 15
 	pairSuggestScore = 40
 	pairCandidates   = 300
 )
@@ -116,16 +113,6 @@ func (s *Service) pairMaterialTx(tx *gorm.DB, materialID string, now time.Time) 
 		second = candidates[1].Score
 	}
 	metrics["best_score"], metrics["second_score"] = best.Score, second
-	if best.Score >= pairAutoScore && best.Score-second >= pairAutoMargin {
-		renamed, err := s.mergePacksTx(tx, best.Pack.ID, []string{pack.ID}, now)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		if err := s.auditSystem(tx, "pack.auto_pair", best.Pack.ID); err != nil {
-			return "", nil, nil, err
-		}
-		return "已自动并入《" + best.Pack.Title + "》", renamed, metrics, nil
-	}
 	if best.Score >= pairSuggestScore {
 		reasons := model.DecodeStrings(m.ReviewReasonsJSON)
 		if m.Stage != model.StageReview {

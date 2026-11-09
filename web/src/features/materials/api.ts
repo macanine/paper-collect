@@ -41,7 +41,7 @@ export function updateMaterial(id: string, body: MaterialUpdate): Promise<Materi
   return apiRequest<MaterialDetail>(`/materials/${segment(id)}`, { method: 'PATCH', body });
 }
 
-/** 确认待整理文件；acceptSuggestion 同时并入建议的套卷。 */
+/** 确认待确认文件；acceptSuggestion 同时并入建议的套卷。 */
 export function acceptMaterials(ids: string[], acceptSuggestion = false): Promise<{ count: number }> {
   return apiRequest<{ count: number }>('/materials/accept', { method: 'POST', body: { ids, accept_suggestion: acceptSuggestion } });
 }

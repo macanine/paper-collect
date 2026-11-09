@@ -6,16 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"strings"
 
 	"github.com/google/uuid"
 )
 
-// New API keys are opaque 256-bit secrets. Legacy keys remain valid after upgrades.
-const (
-	APIKeyPrefix       = "sk-"
-	LegacyAPIKeyPrefix = "pc_"
-)
+// API keys are opaque 256-bit secrets.
+const APIKeyPrefix = "sk-"
 
 // NewRefreshToken returns an opaque refresh token and its SHA-256 hash.
 // Only the hash is stored on the server.
@@ -49,34 +45,18 @@ func NewAPIKey() (id, full, secretHash string, err error) {
 // ErrInvalidAPIKey is returned for any malformed API key. It carries no detail.
 var ErrInvalidAPIKey = errors.New("auth: invalid api key")
 
-// ParseAPIKey accepts current opaque keys and the legacy pc_<id>.<secret> form.
-// Opaque keys return an empty id and are looked up by their secret hash.
+// ParseAPIKey accepts opaque keys. The secret is looked up by its hash.
 func ParseAPIKey(full string) (id, secret string, err error) {
-	if strings.HasPrefix(full, APIKeyPrefix) {
-		secret = strings.TrimPrefix(full, APIKeyPrefix)
-		if len(secret) != base64.RawURLEncoding.EncodedLen(32) {
-			return "", "", ErrInvalidAPIKey
-		}
-		decoded, decodeErr := base64.RawURLEncoding.DecodeString(secret)
-		if decodeErr != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != secret {
-			return "", "", ErrInvalidAPIKey
-		}
-		return "", secret, nil
-	}
-	if !strings.HasPrefix(full, LegacyAPIKeyPrefix) {
+	if len(full) <= len(APIKeyPrefix) || full[:len(APIKeyPrefix)] != APIKeyPrefix {
 		return "", "", ErrInvalidAPIKey
 	}
-	rest := strings.TrimPrefix(full, LegacyAPIKeyPrefix)
-	dot := strings.IndexByte(rest, '.')
-	if dot <= 0 || dot == len(rest)-1 {
+	secret = full[len(APIKeyPrefix):]
+	if len(secret) != base64.RawURLEncoding.EncodedLen(32) {
 		return "", "", ErrInvalidAPIKey
 	}
-	id, secret = rest[:dot], rest[dot+1:]
-	if _, perr := uuid.Parse(id); perr != nil {
+	decoded, decodeErr := base64.RawURLEncoding.DecodeString(secret)
+	if decodeErr != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != secret {
 		return "", "", ErrInvalidAPIKey
 	}
-	if len(secret) < 16 || len(secret) > 128 {
-		return "", "", ErrInvalidAPIKey
-	}
-	return id, secret, nil
+	return "", secret, nil
 }

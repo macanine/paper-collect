@@ -92,7 +92,6 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.POST("/ocr/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.handleTestOCRProvider)
 	authGroup.GET("/ai/settings", s.requireScope(model.ScopeAIRead), s.handleGetAISettings)
 	authGroup.PUT("/ai/settings", s.requireScope(model.ScopeAIWrite), s.handlePutAISettings)
-	authGroup.POST("/ai/mineru/test", s.requireScope(model.ScopeAIWrite), s.handleTestMinerU)
 
 	authGroup.GET("/packs", s.requireScope(model.ScopeMaterialsRead), s.handleListPacks)
 	authGroup.GET("/packs/facets", s.requireScope(model.ScopeMaterialsRead), s.handlePackFacets)

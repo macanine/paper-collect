@@ -10,32 +10,29 @@ import (
 	"github.com/nic/paper-collect/backend/internal/model"
 )
 
-func TestDirectKeyLegacyCompatibilityAndCurrentOwnerState(t *testing.T) {
+func TestDirectKeyCurrentOwnerState(t *testing.T) {
 	s, db := newWorkerTestService(t, t.TempDir(), "key-auth")
 	ctx := context.Background()
 	user := model.User{ID: newID(), Username: "key_owner", PasswordHash: "unused", Role: model.RoleAdmin, Enabled: true}
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	keyID := newID()
-	secret := "legacy-test-random-secret-value"
-	key := model.APIKey{ID: keyID, UserID: user.ID, Name: "legacy", SecretHash: auth.HashToken(secret), ScopesJSON: model.EncodeStrings([]string{model.ScopeMaterialsRead, model.ScopeStorageWrite})}
-	if err := db.Create(&key).Error; err != nil {
-		t.Fatal(err)
-	}
-	credential := auth.LegacyAPIKeyPrefix + keyID + "." + secret
-	p, err := s.Authenticate(ctx, credential)
-	if err != nil || !p.IsAgent() || !p.Has(model.ScopeMaterialsRead) || !p.Has(model.ScopeStorageWrite) {
-		t.Fatal("legacy key did not authenticate directly")
-	}
-	if _, err := s.Authenticate(ctx, credential+"wrong"); err == nil {
-		t.Fatal("wrong legacy secret was accepted")
-	}
-	legacyJWT, err := s.signer.Sign(user.ID, "", keyID)
+	key, credential, err := s.CreateKey(ctx, auth.Principal{UserID: user.ID, Role: user.Role}, "current", []string{model.ScopeMaterialsRead, model.ScopeStorageWrite}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old, err := s.Authenticate(ctx, legacyJWT); err != nil || old.KeyID != keyID {
+	p, err := s.Authenticate(ctx, credential)
+	if err != nil || !p.IsAgent() || !p.Has(model.ScopeMaterialsRead) || !p.Has(model.ScopeStorageWrite) {
+		t.Fatal("opaque key did not authenticate directly")
+	}
+	if _, err := s.Authenticate(ctx, credential+"wrong"); err == nil {
+		t.Fatal("wrong secret was accepted")
+	}
+	agentJWT, err := s.signer.Sign(user.ID, "", key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old, err := s.Authenticate(ctx, agentJWT); err != nil || old.KeyID != key.ID {
 		t.Fatal("previously issued agent JWT should remain valid until expiry")
 	}
 	if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("role", model.RoleViewer).Error; err != nil {
@@ -54,13 +51,13 @@ func TestDirectKeyLegacyCompatibilityAndCurrentOwnerState(t *testing.T) {
 	if err := db.Model(&model.User{}).Where("id = ?", user.ID).Update("enabled", true).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Model(&model.APIKey{}).Where("id = ?", keyID).Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
+	if err := db.Model(&model.APIKey{}).Where("id = ?", key.ID).Update("expires_at", time.Now().Add(-time.Minute)).Error; err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Authenticate(ctx, credential); err == nil {
 		t.Fatal("expired key was accepted")
 	}
-	if _, err := s.Authenticate(ctx, legacyJWT); err == nil {
+	if _, err := s.Authenticate(ctx, agentJWT); err == nil {
 		t.Fatal("expired key must invalidate its old JWT")
 	}
 }

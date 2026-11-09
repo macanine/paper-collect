@@ -112,7 +112,6 @@ export function AiSettingsPage() {
       await save.mutateAsync({
         analysis_enabled: values.analysis_enabled,
         ocr_provider_id: values.ocr_provider_id ?? '',
-        mineru_base_url: settings.data?.mineru_base_url ?? '',
         max_pages: values.max_pages,
         max_images: values.max_images,
         auto_accept_confidence: values.auto_accept_percent / 100,
@@ -308,7 +307,7 @@ export function AiSettingsPage() {
             <Form.Item
               name="auto_accept_percent"
               label="自动入库把握度"
-              extra="AI 整体把握度达到此值且没有不确定字段时直接入库，否则进入待整理。调高更稳妥，调低更省事。"
+              extra="AI 整体把握度达到此值且没有不确定字段时直接入库，否则进入待确认。调高更稳妥，调低更省事。"
               rules={[{ required: true }]}
             >
               <InputNumber min={0} max={100} addonAfter="%" className="w-full" />

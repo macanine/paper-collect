@@ -10,16 +10,16 @@
 - 写接口拒绝非法 JSON、未知字段、不支持的枚举、越界值。PATCH 是部分更新：省略=不改，空数组=清空，禁止 null（允许 null 的字段另写）。请求 JSON 默认 1 MiB。
 - HTTP：200 读取/更新；201 创建；202 任务已入队；204 删除/通知；400 格式错误；401 凭据无效；403 权限不足；404 不存在；409 状态冲突/重复路径；410 临时资源已过期；413 超尺寸；415 不支持类型；422 文件内容与声明不一致；429 登录频率限制；503 暂不可用。
 - GET /healthz 无鉴权返回 `{"status":"ok"}`。所有业务接口强制鉴权，仅 auth/login、auth/refresh 例外。
-- 浏览器 REST 使用 `Authorization: Bearer <access JWT>`；API 密钥直接使用 `Authorization: Bearer <API 密钥>` 访问 REST 和 MCP。新密钥以 `sk-` 开头，旧的 `pc_<id>.<secret>` 仍可直接使用。MCP 接受 API 密钥，不接受浏览器会话。
+- 浏览器 REST 使用 `Authorization: Bearer <access JWT>`；API 密钥直接使用 `Authorization: Bearer <API 密钥>` 访问 REST 和 MCP。API 密钥以 `sk-` 开头。MCP 接受 API 密钥，不接受浏览器会话。
 - 角色：admin（全部）、editor（套卷与文件写、专题写、上传、任务读）、viewer（套卷、专题、任务读）。scope 包括 materials、collections、uploads、jobs、storage、keys、users、audit、ai 和 search 对应的读写或管理权限。API 密钥 scope 必须为用户权限子集；有相应授权时可访问管理、AI 和搜索设置接口。API 密钥创建其他密钥时只能授予自身持有的权限，创建用户时该用户角色的权限也不得超出当前密钥。新建密钥是独立凭据，不随创建者的密钥撤销而撤销。每次请求重新检查用户和密钥是否有效。
 
 ## 数据字典
 
 `Subject.code`：chinese 语文、math 数学、english 英语、physics 物理、chemistry 化学、biology 生物、politics 政治、history 历史、geography 地理、information_technology 信息技术、general_technology 通用技术、comprehensive 综合。`GET /subjects` 返回 `Subject[]{code,name}`。
 
-`Pack`（套卷）：`id,title(1..255),title_locked:boolean,catalog_locked:boolean,doc_type:DocType,subject_codes:string[](0..12),grade:""|grade7|grade8|grade9|grade10|grade11|grade12,term:""|first|second,cohort:integer(0 或 1900..2200),region(<=64),organization(<=128),exam_date(YYYY-MM 或空),exam_name(<=255),chapter(<=255),tags:string[](<=30，每项1..64),description(<=4000),stage:Stage,is_exam:boolean,has_questions:boolean,has_answers:boolean,has_answer_sheet:boolean,members:PackMember[],collections?:Collection[],deleted_at:date-time|null,created_at,updated_at`。`PackMember`：`id,title,file_name,part:Part,answer_start_page:integer,stage:Stage,status:MaterialStatus,sync_status:SyncStatus,media_type,size_bytes,position:integer`。`DocType`：gaokao_real、gaokao_mock、zhongkao_real、zhongkao_mock、joint、monthly、midterm、final、opening、unit、weekly、topic、lecture、study_guide、courseware、homework、other。**Stage**：processing=识别中；review=待整理（低置信度、有配套建议、疑似重复、识别失败或未开启自动识别）；ready=已入库；failed=识别失败。套卷 stage 取成员中最靠后的阶段（ready < processing < review < failed）。`has_questions/has_answers/has_answer_sheet` 由成员 part 推导，`is_exam` 表示试卷类套卷。
+`Pack`（套卷）：`id,title(1..255),title_locked:boolean,catalog_locked:boolean,doc_type:DocType,subject_codes:string[](0..12),grade:""|grade7|grade8|grade9|grade10|grade11|grade12,term:""|first|second,cohort:integer(0 或 1900..2200),region(<=64),organization(<=128),exam_date(YYYY-MM 或空),exam_name(<=255),chapter(<=255),tags:string[](<=30，每项1..64),description(<=4000),stage:Stage,is_exam:boolean,has_questions:boolean,has_answers:boolean,has_answer_sheet:boolean,members:PackMember[],collections?:Collection[],deleted_at:date-time|null,created_at,updated_at`。`PackMember`：`id,title,file_name,part:Part,answer_start_page:integer,stage:Stage,status:MaterialStatus,sync_status:SyncStatus,media_type,size_bytes,position:integer`。`DocType`：gaokao_real、gaokao_mock、zhongkao_real、zhongkao_mock、joint、monthly、midterm、final、opening、unit、weekly、topic、lecture、study_guide、courseware、homework、other。**Stage**：processing=识别中；review=待确认（低置信度、有配套建议、疑似重复、识别失败或未开启自动识别）；ready=已入库；failed=识别失败。套卷 stage 取成员中最靠后的阶段（ready < processing < review < failed）。`has_questions/has_answers/has_answer_sheet` 由成员 part 推导，`is_exam` 表示试卷类套卷。
 
-`Material`（文件）：`id,pack_id,position:integer,part:Part,answer_start_page:integer,title(1..255),file_name,original_name,stage:Stage,review_reasons:string[],suggested_pack?:{id,title},status:MaterialStatus,sync_status:SyncStatus,sync_planned_at:date-time|null,media_type,size_bytes,sha256(64 位小写十六进制，全局唯一),created_at,updated_at,pack?:Pack`。**一个 SHA-256 只对应一个 Material**：同一内容再次上传只追加 `MaterialSource`，不重复解析、计费或新建套卷。**Part 有且只有 8 类**：questions=试题，只有题目；answers=答案，只有答案或解析；full=题目+答案在同一文件（后部集中答案）；teacher=教师版，每题后紧跟答案；answer_sheet=空白答题卡；listening=听力音频或原文；main=单文档资料正文（讲义、课件、指南）；other=无法判断。详情额外含 `sources:MaterialSource[]`、`replicas:Replica[]` 和 `pack:Pack`。**MaterialStatus** 只回答原件是否安全：archived=原件在本机 CAS；missing=本机原件缺失，只能从网盘副本读取。**SyncStatus** 单独回答网盘同步进度：waiting_catalog=等待编目确定（规则依赖编目，尚未生成计划）；not_required=命中的规则不上传任何网盘；syncing=有副本在等待、上传或移动；synced=全部必需目标已就绪；attention=必需目标失败、必需目标的分享失败，或副本路径已偏离（网盘设置为保持原位）。`sync_planned_at` 为最近一次生成同步计划的时间。`review_reasons` 取值 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual。`suggested_pack` 为待整理的配套建议。
+`Material`（文件）：`id,pack_id,position:integer,part:Part,answer_start_page:integer,title(1..255),file_name,original_name,stage:Stage,review_reasons:string[],suggested_pack?:{id,title},status:MaterialStatus,sync_status:SyncStatus,sync_planned_at:date-time|null,media_type,size_bytes,sha256(64 位小写十六进制，全局唯一),created_at,updated_at,pack?:Pack`。**一个 SHA-256 只对应一个 Material**：同一内容再次上传只追加 `MaterialSource`，不重复解析、计费或新建套卷。**Part 有且只有 8 类**：questions=试题，只有题目；answers=答案，只有答案或解析；full=题目+答案在同一文件（后部集中答案）；teacher=教师版，每题后紧跟答案；answer_sheet=空白答题卡；listening=听力音频或原文；main=单文档资料正文（讲义、课件、指南）；other=无法判断。详情额外含 `sources:MaterialSource[]`、`replicas:Replica[]` 和 `pack:Pack`。**MaterialStatus** 只回答原件是否安全：archived=原件在本机 CAS；missing=本机原件缺失，只能从网盘副本读取。**SyncStatus** 单独回答网盘同步进度：waiting_catalog=等待编目确定（规则依赖编目，尚未生成计划）；not_required=命中的规则不上传任何网盘；syncing=有副本在等待、上传或移动；synced=全部必需目标已就绪；attention=必需目标失败、必需目标的分享失败，或副本路径已偏离（网盘设置为保持原位）。`sync_planned_at` 为最近一次生成同步计划的时间。`review_reasons` 取值 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual。`suggested_pack` 为待确认的配套建议。
 
 `MaterialSource`：`id,material_id,upload_id,user_id,path,duplicate:boolean,created_at`；记录每一次到达。`duplicate=true` 表示这次上传的内容此前已经归档。
 
@@ -54,8 +54,6 @@ JSON `{"refresh_token":"opaque"}`。200 同登录；旧 refresh token 立即失�
 ### POST /auth/logout（JWT）
 
 JSON `{"refresh_token":"opaque"}`。204；注销关联会话，同时使其 access JWT 失效。无效 token 也返回 204，不泄露会话存在性。
-
-旧 `/auth/agent-token` 接口已移除。已有 `pc_` 密钥不需重新创建，可直接作为 Bearer 凭据；升级前已签发的代理 JWT 在原有效期内仍按密钥状态校验。
 
 ### GET /auth/me（JWT）
 
@@ -117,7 +115,7 @@ JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。tr
 
 ### GET /materials（materials:read）
 
-查询：page、page_size、`q`（标题/原始文件名，<=200）、`stage`（Stage）、`part`（Part）、`status`（MaterialStatus）、`sync_status`（SyncStatus）、`reason`（review_reasons 之一）、`pack_id`、`sha256`（64 位十六进制，精确查询相同内容）。200 Page<Material>；`stage=review` 即待整理收件箱，按 created_at 升序，其余按时间倒序。
+查询：page、page_size、`q`（标题/原始文件名，<=200）、`stage`（Stage）、`part`（Part）、`status`（MaterialStatus）、`sync_status`（SyncStatus）、`reason`（review_reasons 之一）、`pack_id`、`sha256`（64 位十六进制，精确查询相同内容）。200 Page<Material>；`stage=review` 即待确认收件箱，按 created_at 升序，其余按时间倒序。
 
 ### GET /materials/stats（materials:read）
 
@@ -133,7 +131,7 @@ JSON 可含 `part`（Part）、`answer_start_page`（0..10000）、`pack_id`（�
 
 ### POST /materials/accept（materials:write）
 
-JSON `{"ids":["uuid"],"accept_suggestion":true}`；1..500 个待整理文件。`accept_suggestion=true` 且存在 `suggested_pack` 时先把文件并入建议套卷，然后统一置为 `ready`。200 data=`{"count":n}`。审计记录 material.accept。
+JSON `{"ids":["uuid"],"accept_suggestion":true}`；1..500 个待确认文件。`accept_suggestion=true` 且存在 `suggested_pack` 时先把文件并入建议套卷，然后统一置为 `ready`。200 data=`{"count":n}`。审计记录 material.accept。
 
 ### GET /materials/{id}/download（materials:read）
 
@@ -311,7 +309,7 @@ JSON `{"ids":["uuid"],"action":"retry|delete_remote|forget"}`；1..100 个。逐
 
 ## 智能识别（LLM + OCR）
 
-AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（修改配置、探测、测试）。两者默认只授予 admin，可单独授权给 API 密钥。资料分析读取沿用 materials:read，触发与应用沿用 materials:write。密钥只写不读：响应只返回 `api_key_configured`、`token_configured`、`mineru_configured` 和 `ocr_configured`；服务端用 MASTER_KEY 加密，AAD 为 provider id（旧 `ai_settings` 字段 使用固定串 `ai:settings`，迁移时重新绑定到新 provider id）。
+AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（修改配置、探测、测试）。两者默认只授予 admin，可单独授权给 API 密钥。资料分析读取沿用 materials:read，触发与应用沿用 materials:write。密钥只写不读：响应只返回 `api_key_configured`、`token_configured` 和 `ocr_configured`；服务端用 MASTER_KEY 加密，AAD 为 provider id。
 
 `AIProvider`：`id,name(1..128),base_url(http/https，OpenAI 兼容根，通常以 /v1 结尾),models:string[](0..200，每项 1..200 字符，自动去重),default_model:string(<=200),vision_model:string(<=200，可空),enabled:boolean,priority:integer(0..1000),api_key_configured:boolean,created_at,updated_at`。`POST /ai/providers` 请求 `{"name":"主模型","base_url":"https://api.example.com/v1","api_key":"sk-...","priority":10,"enabled":true,"default_model":"gpt-4o-mini","vision_model":"gpt-4o","models":["gpt-4o-mini","gpt-4o"]}`；创建时 `api_key` 可省略（表示没有密钥；需要鉴权的端点会失败），PATCH 时省略保留、空串清空。PATCH 部分更新，不允许改 id；不提供物理删除，使用 `enabled=false` 停用。
 
@@ -329,15 +327,12 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `PATCH /ocr/providers/{id}`（ai:write）：200 OCRProvider。
 - `POST /ocr/providers/{id}/test`（ai:write）：用已保存配置探测可达性与令牌；200 `{"healthy":boolean,"message":"脱敏说明"}`，不伪造成功。
 
-`AISettings`：`analysis_enabled:boolean`（默认 false）,`ocr_provider_id:string`（当前选中的 OCRProvider；为空时选择 priority 最小的启用服务商）,`mineru_base_url:string`（旧字段，仅兼容保留）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，OCR 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`mineru_configured:boolean`（旧令牌状态）,`ocr_configured:boolean`（当前服务商令牌状态）,`updated_at`。
+`AISettings`：`analysis_enabled:boolean`（默认 false）,`ocr_provider_id:string`（当前选中的 OCRProvider；为空时选择 priority 最小的启用服务商）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，OCR 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`ocr_configured:boolean`（当前服务商令牌状态）,`updated_at`。
 
 选择自建 RapidOCR 时，DOCX 由 Go 直接解析 OOXML：正文、标题、表格、文本框、公式和分页提示进入解析缓存，嵌入的位图再逐张提交同一 OCR 接口；识别和索引共享解析缓存。外部图片、模板、OLE 对象和数据源不会读取。常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。该 DOCX 路径不经过 LibreOffice 或 PDF 文本层，分析/搜题无需 `soffice`，也无需同步升级 RapidOCR 镜像。选择 MinerU 或 PaddleOCR 时，DOC/DOCX/PPT/PPTX 会先由 LibreOffice 转为 PDF；RapidOCR 的 DOC/PPT/PPTX 也走同一转换。DOCX/PPTX 转 PDF 前会从临时副本移除可触发网络访问的外部关系并保留 inert 超链接。页码来自显式分页或文档保存的分页提示，连续文档可能只有第 1 页；复杂公式、图片 OCR 和复杂排版不能保证与原文完全一致。
 
 - `GET /ai/settings`（ai:read）：200 AISettings。
-- `PUT /ai/settings`（ai:write）：请求完整设置，`ocr_provider_id` 可选：省略=保留，空串=清除选择；`mineru_token` 为旧 MinerU 兼容字段：省略=保留，空串=清除；200 AISettings。旧版仅提交 MinerU 字段的客户端会继续工作，并自动物化/更新 MinerU OCRProvider。
-- `POST /ai/mineru/test`（ai:write）：兼容旧客户端，实际测试当前选中的 OCR 服务商；200 `{"healthy":boolean,"message":"脱敏说明"}`。新客户端应使用 `POST /ocr/providers/{id}/test`。
-
-升级时若 `ocr_providers` 为空且旧 `ai_settings.mineru_token_cipher` 有值，启动/读取设置会幂等迁移为一条 MinerU 服务商并设为当前服务商。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。提交响应明确为“任务提交队列已满”时最多尝试 6 次并按 2、4、8、16、30 秒退避；成功创建 jobId 后不会重复提交。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
+- `PUT /ai/settings`（ai:write）：请求 `analysis_enabled`、`ocr_provider_id`、`max_pages`、`max_images` 和可选 `auto_accept_confidence`；省略 `ocr_provider_id` 表示保留当前选择，空串表示清除选择；200 AISettings。PaddleOCR 使用 `https://paddleocr.aistudio-app.com` 的 `POST /api/v2/ocr/jobs`、`GET /api/v2/ocr/jobs/{jobId}` 与 JSONL `jsonUrl`；`PP-OCRv6` 沿用官网 v5 兼容异步协议。提交响应明确为“任务提交队列已满”时最多尝试 6 次并按 2、4、8、16、30 秒退避；成功创建 jobId 后不会重复提交。自建 RapidOCR 使用 `POST /api/v1/ocr/jobs`、`GET /api/v1/ocr/jobs/{id}` 和 `result_url` JSONL；服务地址在 Compose 内为 `http://rapidocr:9003`，不对外暴露。
 
 自建服务当前固定使用 RapidOCR 3.10.0 的默认 PP-OCRv6 small；请求中的 `model` 字段仅保留协议兼容，并不会切换模型。现有 JSONL 每页使用 `page_no` 和 `texts` 字符串数组。接收端也支持按阅读顺序排列的 `blocks`：`{"type":"text","text":"..."}`、`{"type":"inline_formula","latex":"..."}` 和 `{"type":"display_formula","latex":"..."}`；`latex` 为不含外围分隔符的原始 LaTeX，JSON 中的反斜杠须转义。有非空 `blocks` 时优先使用它并忽略 `texts`，未知块类型或空公式会失败而不静默丢失。该协议为后续公式模型提供入口；当前 RapidOCR 服务仍只输出 `texts`，没有接入扫描件公式识别模型。
 
@@ -351,7 +346,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 题目索引链路：解析文本按 `batch_pages`（默认 10）与 `batch_chars`（默认 12000）分组，最多 3 个批次并发切题；模型输出上限 128000 token，并请求 `reasoning_effort=high`。单批发生空响应或非法 JSON 时按页、再按正文二分重试；上游 5xx/限流最多额外重试一次，超时、鉴权等错误直接失败，不通过递归重试放大调用量。批次结果按原顺序合并去重后在同一事务写入题目与检索词。
 
-自动配套链路：`group` 任务只处理“套卷恰好一个文件、该文件是试卷类 part（questions/full/teacher/answers/answer_sheet，可配套）且套卷 doc_type 属于试卷类”的文件；候选为其他同 doc_type 的试卷类套卷。评分结合学科、年级、届别、地区、机构、套卷标题与成员标题；最佳分 >=70 且领先第二名 >=15 时自动把整个套卷并入候选套卷（迁移文件与专题收录、补齐空编目字段），写审计 `pack.auto_pair`；最佳分 >=40 时只把文件置为 `review` 并记录 `pack_suggestion` 与 `suggested_pack`，等待人工确认（`POST /materials/accept`）。分数不足或出现学科/年级/届别冲突时不改动，任务仍以 succeeded 结束并记录原因。人工修改 part 或重新分析成功后可能再次入队。审计记录 `pack.auto_pair`。
+配套建议链路：`group` 任务只处理“套卷恰好一个文件、该文件是试卷类 part（questions/full/teacher/answers/answer_sheet，可配套）且套卷 doc_type 属于试卷类”的文件；候选为其他同 doc_type 的试卷类套卷。评分结合学科、年级、届别、地区、机构、套卷标题与成员标题；达到建议阈值时只把文件置为 `review` 并记录 `pack_suggestion` 与 `suggested_pack`，等待人工确认（`POST /materials/accept`）。系统不会跨套卷自动合并；分数不足或出现学科/年级/届别冲突时不改动，任务仍以 succeeded 结束并记录原因。人工修改 part 或重新分析成功后可能再次入队。
 
 Job 的 `material_id` 关联 analyze/index/group 等任务资料；`kind` 包含 `analyze`、`index`、`group`。
 

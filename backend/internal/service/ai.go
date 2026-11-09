@@ -81,17 +81,14 @@ type AITestResult struct {
 
 // AISettingsView hides OCR provider tokens.
 type AISettingsView struct {
-	Settings         model.AISettings
-	MinerUConfigured bool
-	OCRConfigured    bool
+	Settings      model.AISettings
+	OCRConfigured bool
 }
 
-// AISettingsInput is a full settings replacement. Token nil keeps the stored value.
+// AISettingsInput is a full settings replacement.
 type AISettingsInput struct {
 	AnalysisEnabled bool
 	OCRProviderID   *string
-	MinerUBaseURL   string
-	MinerUToken     *string
 	MaxPages        int
 	MaxImages       int
 	// AutoAcceptConfidence nil keeps the stored threshold.
@@ -363,7 +360,7 @@ func upstreamError(err error) error {
 }
 
 func defaultAISettings() model.AISettings {
-	return model.AISettings{ID: 1, AnalysisEnabled: false, MinerUBaseURL: "https://mineru.net", MaxPages: 3, MaxImages: 2, AutoAcceptConfidence: 0.8}
+	return model.AISettings{ID: 1, AnalysisEnabled: false, MaxPages: 3, MaxImages: 2, AutoAcceptConfidence: 0.8}
 }
 
 // ensureAISettings returns the singleton row, creating defaults when absent.
@@ -388,18 +385,13 @@ func (s *Service) ensureAISettings(ctx context.Context) (model.AISettings, error
 	return row, nil
 }
 
-// GetAISettings returns settings with the token hidden.
+// GetAISettings returns settings with provider credentials hidden.
 func (s *Service) GetAISettings(ctx context.Context) (AISettingsView, error) {
 	row, err := s.ensureAISettings(ctx)
 	if err != nil {
 		return AISettingsView{}, err
 	}
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return s.migrateLegacyOCRProvider(tx, &row)
-	}); err != nil {
-		return AISettingsView{}, apperr.Internal(err)
-	}
-	view := AISettingsView{Settings: row, MinerUConfigured: row.MinerUTokenCipher != ""}
+	view := AISettingsView{Settings: row}
 	if row.OCRProviderID != "" {
 		var provider model.OCRProvider
 		if err := s.db.WithContext(ctx).Where("id = ?", row.OCRProviderID).First(&provider).Error; err == nil {
@@ -409,21 +401,13 @@ func (s *Service) GetAISettings(ctx context.Context) (AISettingsView, error) {
 	return view, nil
 }
 
-// PutAISettings replaces the complete settings object. Token nil keeps the old one.
+// PutAISettings replaces the complete analysis settings object.
 func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISettingsInput) (AISettingsView, error) {
 	if in.MaxPages < 1 || in.MaxPages > 10 {
 		return AISettingsView{}, apperr.Validation("max_pages 必须在 1 到 10 之间")
 	}
 	if in.MaxImages < 0 || in.MaxImages > 4 {
 		return AISettingsView{}, apperr.Validation("max_images 必须在 0 到 4 之间")
-	}
-	base := ""
-	if strings.TrimSpace(in.MinerUBaseURL) != "" {
-		var err error
-		base, err = ai.ValidateBaseURL(in.MinerUBaseURL)
-		if err != nil {
-			return AISettingsView{}, apperr.Validation("MinerU Base URL 无效: " + err.Error())
-		}
 	}
 	current, err := s.ensureAISettings(ctx)
 	if err != nil {
@@ -433,18 +417,14 @@ func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISett
 	if in.OCRProviderID != nil {
 		providerID = strings.TrimSpace(*in.OCRProviderID)
 	}
-	var selected model.OCRProvider
 	if providerID != "" {
+		var selected model.OCRProvider
 		if err := s.db.WithContext(ctx).Where("id = ?", providerID).First(&selected).Error; err != nil {
 			return AISettingsView{}, apperr.Validation("所选 OCR 服务商不存在")
 		}
 		if !selected.Enabled {
 			return AISettingsView{}, apperr.Validation("所选 OCR 服务商已停用")
 		}
-	}
-	legacy := current
-	if base != "" {
-		legacy.MinerUBaseURL = base
 	}
 	updates := map[string]any{
 		"analysis_enabled": in.AnalysisEnabled, "ocr_provider_id": providerID,
@@ -457,88 +437,9 @@ func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISett
 		}
 		updates["auto_accept_confidence"] = v
 	}
-	if base != "" {
-		updates["mineru_base_url"] = base
-	}
-	if in.MinerUToken != nil {
-		token := strings.TrimSpace(*in.MinerUToken)
-		if token == "" {
-			updates["mineru_token_cipher"] = ""
-		} else {
-			cipher, err := s.box.Seal([]byte(token), []byte("ai.settings"))
-			if err != nil {
-				return AISettingsView{}, apperr.Internal(err)
-			}
-			updates["mineru_token_cipher"] = cipher
-		}
-	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.AISettings{}).Where("id = ?", 1).Updates(updates).Error; err != nil {
 			return err
-		}
-		// Legacy clients used PUT /ai/settings as the only OCR configuration
-		// surface. Keep them working by materializing a MinerU provider.
-		if providerID == "" && current.OCRProviderID == "" &&
-			(base != "" || in.MinerUToken != nil) {
-			id := newID()
-			cipher := ""
-			if in.MinerUToken != nil && strings.TrimSpace(*in.MinerUToken) != "" {
-				var sealErr error
-				cipher, sealErr = s.box.Seal([]byte(strings.TrimSpace(*in.MinerUToken)), []byte(id))
-				if sealErr != nil {
-					return sealErr
-				}
-			} else if legacy.MinerUTokenCipher != "" {
-				legacyToken, openErr := s.box.Open(legacy.MinerUTokenCipher, []byte("ai.settings"))
-				if openErr != nil {
-					return openErr
-				}
-				var sealErr error
-				cipher, sealErr = s.box.Seal(legacyToken, []byte(id))
-				if sealErr != nil {
-					return sealErr
-				}
-			}
-			now := s.now()
-			provider := model.OCRProvider{
-				ID: id, Name: "MinerU", Kind: model.OCRKindMinerU, BaseURL: legacy.MinerUBaseURL,
-				TokenCipher: cipher, Enabled: true, Priority: 100, CreatedAt: now, UpdatedAt: now,
-			}
-			if err := tx.Create(&provider).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&model.AISettings{}).Where("id = ?", 1).
-				Update("ocr_provider_id", id).Error; err != nil {
-				return err
-			}
-		}
-		// A legacy MinerU client may keep using the old PUT payload after the
-		// provider was migrated. Apply its token/base updates to the selected
-		// MinerU provider as well so credentials remain editable.
-		if selected.ID != "" && selected.Kind == model.OCRKindMinerU {
-			legacyUpdates := map[string]any{}
-			if base != "" {
-				legacyUpdates["base_url"] = base
-			}
-			if in.MinerUToken != nil {
-				token := strings.TrimSpace(*in.MinerUToken)
-				if token == "" {
-					legacyUpdates["token_cipher"] = ""
-				} else {
-					cipher, err := s.box.Seal([]byte(token), []byte(selected.ID))
-					if err != nil {
-						return err
-					}
-					legacyUpdates["token_cipher"] = cipher
-				}
-			}
-			if len(legacyUpdates) > 0 {
-				legacyUpdates["updated_at"] = s.now()
-				if err := tx.Model(&model.OCRProvider{}).Where("id = ?", selected.ID).
-					Updates(legacyUpdates).Error; err != nil {
-					return err
-				}
-			}
 		}
 		return s.audit(tx, p, "ai.settings_update", "1")
 	}); err != nil {
@@ -547,24 +448,6 @@ func (s *Service) PutAISettings(ctx context.Context, p auth.Principal, in AISett
 	}
 	return s.GetAISettings(ctx)
 }
-
-// TestMinerU is the legacy endpoint; it tests the selected OCR provider.
-func (s *Service) TestMinerU(ctx context.Context) (bool, string, error) {
-	row, err := s.ensureAISettings(ctx)
-	if err != nil {
-		return false, "", err
-	}
-	provider, err := s.selectedOCRProvider(ctx, row)
-	if err != nil {
-		return false, redact(ai.Sanitize(err.Error())), nil
-	}
-	result, err := s.TestOCRProvider(ctx, provider.ID)
-	if err != nil {
-		return false, redact(ai.Sanitize(err.Error())), nil
-	}
-	return result.Healthy, result.Message, nil
-}
-
 func toAnalysisView(row model.MaterialAnalysis, providerName string) AnalysisView {
 	var suggestions Suggestions
 	_ = json.Unmarshal([]byte(row.SuggestionsJSON), &suggestions)

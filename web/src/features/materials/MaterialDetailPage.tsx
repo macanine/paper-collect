@@ -244,10 +244,10 @@ export function MaterialDetailPage() {
           pagination={false}
           dataSource={material.sources}
           columns={[
-            { title: '上传路径', dataIndex: 'path', key: 'path', width: 280, render: (path: string) => <span className="break-all">{path}</span> },
+            { title: '来源路径', dataIndex: 'path', key: 'path', width: 280, render: (path: string) => <span className="break-all">{path}</span> },
             { title: '', key: 'dup', width: 110, render: (_: unknown, src) => (src.duplicate ? <Tag>重复上传</Tag> : <Tag color="blue">首次上传</Tag>) },
             { title: '时间', dataIndex: 'created_at', key: 'created', width: 170, render: (v: string) => formatDateTime(v) },
-            { title: '', key: 'upload', width: 90, render: (_: unknown, src) => (src.upload_id && can('uploads:write') ? <Link to={`/uploads/${src.upload_id}`}>上传记录</Link> : null) },
+            { title: '', key: 'upload', width: 90, render: (_: unknown, src) => (src.upload_id && can('uploads:write') ? <Link to={`/imports/${src.upload_id}`}>导入</Link> : null) },
           ]}
           scroll={{ x: 650 }}
         />

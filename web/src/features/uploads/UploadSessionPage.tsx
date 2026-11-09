@@ -1,17 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Descriptions, Progress, Result, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Progress, Result, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Link, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
-import type { Job, JobStatus, Upload } from '../../shared/api/types';
+import type { JobStatus, Upload } from '../../shared/api/types';
 import { formatBytes, formatDuration, formatRate } from '../../shared/lib/format';
-import { UPLOAD_STATUS_LABELS } from '../../shared/lib/labels';
 import { useCompactViewport } from '../../shared/lib/useCompactViewport';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { LinkButton } from '../../shared/ui/LinkButton';
-import { JobStatusTag, StageTag, UploadStatusTag } from '../../shared/ui/StatusTags';
+import { StageTag, UploadStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { retryJob } from '../jobs/api';
 import { FileSelector } from './FileSelector';
@@ -28,7 +27,7 @@ export function UploadSessionPage() {
   if (query.isError) {
     return (
       <div className="page-stack">
-        <BackLink to="/uploads">返回上传记录</BackLink>
+        <BackLink to="/imports">返回导入中心</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="清单加载失败" />
       </div>
     );
@@ -210,22 +209,16 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
 
   return (
     <div className="page-stack">
-      <BackLink to="/uploads">返回上传记录</BackLink>
+      <BackLink to="/imports">返回导入中心</BackLink>
       <PageHeader
         title={upload.title}
         extra={
           <Space wrap>
             <UploadStatusTag status={upload.status} />
-            {canTransfer ? (
-              running ? (
-                <Button danger onClick={() => transfer.cancel()}>
-                  暂停
-                </Button>
-              ) : (
-                <Button type="primary" disabled={!stats.readyToStart} onClick={() => transfer.start()}>
-                  {stats.receivedCount > 0 ? '继续传输' : '开始传输'}
-                </Button>
-              )
+            {canTransfer && running ? (
+              <Button danger onClick={() => transfer.cancel()}>
+                暂停
+              </Button>
             ) : null}
             {canTransfer ? (
               <Button
@@ -233,11 +226,6 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
                 onClick={() => transfer.start(rows.filter((row) => row.status === 'failed').map((row) => row.entry.id))}
               >
                 重试失败项
-              </Button>
-            ) : null}
-            {canTransfer ? (
-              <Button type="primary" ghost disabled={running || !stats.allReceived} loading={finalize.isPending} onClick={() => void handleFinalize()}>
-                提交归档
               </Button>
             ) : null}
           </Space>
@@ -275,9 +263,6 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
           jobStatus={job.data?.status}
           jobFailure={job.data?.error ?? ''}
           jobProgress={job.data?.progress_message ?? ''}
-          jobLogs={job.data?.logs}
-          jobId={upload.job_id}
-          attempts={job.data?.attempts ?? 0}
           canRetryJob={can('jobs:write')}
           retrying={retrying}
           onRetry={() => void handleRetryJob()}
@@ -309,36 +294,30 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
 
 interface SubmittedCardProps {
   upload: Upload;
-  jobId: string;
   jobPending: boolean;
   jobQueryError: unknown;
   jobStatus: JobStatus | undefined;
   jobFailure: string;
   jobProgress: string;
-  jobLogs: Job['logs'];
-  attempts: number;
   canRetryJob: boolean;
   retrying: boolean;
   onRetry: () => void;
 }
 
-function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jobFailure, jobProgress, attempts, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
+function SubmittedCard({ upload, jobPending, jobQueryError, jobStatus, jobFailure, jobProgress, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
   if (upload.status === 'completed') {
     return (
       <Card title="处理结果">
         <Result
           status="success"
           title={`新增 ${upload.new_count} 个文件，${upload.duplicate_count} 个已存在`}
-          subTitle={upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : '新文件正在识别，把握不足的会出现在待整理里'}
+          subTitle={upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : '新文件正在识别，把握不足的会出现在待确认里'}
           extra={[
             <LinkButton key="inbox" type="primary" to="/inbox">
-              去待整理
+              去待确认
             </LinkButton>,
             <LinkButton key="library" to="/library">
               打开资料库
-            </LinkButton>,
-            <LinkButton key="job" to={`/jobs/${jobId}`}>
-              处理日志
             </LinkButton>,
           ]}
         />
@@ -348,7 +327,7 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
           dataSource={upload.results}
           pagination={{ pageSize: 50, hideOnSinglePage: true }}
           columns={[
-            { title: '上传路径', dataIndex: 'path', key: 'path', render: (path: string) => <span className="break-all">{path}</span> },
+            { title: '来源路径', dataIndex: 'path', key: 'path', render: (path: string) => <span className="break-all">{path}</span> },
             {
               title: '结果',
               key: 'result',
@@ -377,19 +356,11 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
   }
 
   return (
-    <Card title="归档任务">
-      {jobQueryError ? <Alert type="error" showIcon title="任务状态加载失败" className="mb-3" /> : null}
-      <Descriptions
-        size="small"
-        column={{ xs: 1, md: 3 }}
-        items={[
-          { key: 'job', label: '任务', children: <Link to={`/jobs/${jobId}`}>查看处理记录</Link> },
-          { key: 'status', label: '状态', children: jobPending || !jobStatus ? '加载中…' : <JobStatusTag status={jobStatus} /> },
-          { key: 'attempts', label: '尝试次数', children: attempts },
-          { key: 'upload-status', label: '清单状态', children: UPLOAD_STATUS_LABELS[upload.status] },
-          { key: 'progress', label: '当前进度', children: jobProgress || '等待处理' },
-        ]}
-      />
+    <Card title="正在处理">
+      {jobQueryError ? <Alert type="error" showIcon title="导入状态加载失败" className="mb-3" /> : null}
+      <Typography.Text type="secondary">
+        {jobPending ? '正在安排导入…' : jobProgress || (jobStatus === 'failed' ? '导入失败' : '文件正在整理，请稍候')}
+      </Typography.Text>
       {jobStatus === 'failed' ? (
         <Alert
           className="mt-3"

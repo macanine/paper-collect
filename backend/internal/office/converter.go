@@ -118,16 +118,11 @@ func (c *Converter) Convert(ctx context.Context, sha, documentName string, open 
 func (c *Converter) Remove(sha string) {
 	if validHash(sha) {
 		_ = os.Remove(c.cachePath(sha))
-		_ = os.Remove(c.legacyPreviewPath(sha))
 	}
 }
 
 func (c *Converter) cachePath(sha string) string {
 	return filepath.Join(c.dataDir, "renders", "office-v1", sha[:2], sha+".pdf")
-}
-
-func (c *Converter) legacyPreviewPath(sha string) string {
-	return filepath.Join(c.dataDir, "previews", "docx-v1", sha[:2], sha+".pdf")
 }
 
 func writeOriginal(ctx context.Context, open func(context.Context) (io.ReadCloser, error), name, want string) error {

@@ -28,7 +28,7 @@ function BatchRow({ batch, onDismiss }: { batch: UploadBatch; onDismiss: () => v
     <div className="upload-tray__row">
       <div className="upload-tray__row-head">
         <Typography.Text strong ellipsis className="upload-tray__title">
-          {batch.uploadId ? <Link to={`/uploads/${batch.uploadId}`}>{batch.title}</Link> : batch.title}
+          {batch.uploadId ? <Link to={`/imports/${batch.uploadId}`}>{batch.title}</Link> : batch.title}
         </Typography.Text>
         <Tag color={PHASE_COLOR[batch.phase]}>{PHASE_TEXT[batch.phase]}</Tag>
         {finished ? <Button type="text" size="small" aria-label="移除" icon={<CloseOutlined />} onClick={onDismiss} /> : null}
@@ -55,16 +55,16 @@ function BatchRow({ batch, onDismiss }: { batch: UploadBatch; onDismiss: () => v
   );
 }
 
-/** 右下角常驻的上传托盘：不打断当前页面。 */
+/** 右下角常驻的导入进度：不打断当前页面。 */
 export function UploadTray() {
   const { batches, dismiss, clearFinished } = useUploads();
   const [collapsed, setCollapsed] = useState(false);
   if (batches.length === 0) return null;
   const active = batches.filter((b) => b.phase !== 'done' && b.phase !== 'failed').length;
   return (
-    <section className="upload-tray" aria-label="上传进度">
+    <section className="upload-tray" aria-label="导入进度">
       <header className="upload-tray__header">
-        <strong>{active > 0 ? `正在上传 ${active} 批` : '上传完成'}</strong>
+        <strong>{active > 0 ? `正在导入 ${active} 批` : '导入完成'}</strong>
         <span className="upload-tray__actions">
           {active < batches.length ? (
             <Button type="link" size="small" onClick={clearFinished}>
@@ -87,7 +87,7 @@ export function UploadTray() {
           ))}
           {batches.some((b) => b.phase === 'done') ? (
             <div className="upload-tray__footer">
-              <Link to="/inbox">去待整理看看 →</Link>
+              <Link to="/inbox">去待确认看看 →</Link>
             </div>
           ) : null}
         </div>

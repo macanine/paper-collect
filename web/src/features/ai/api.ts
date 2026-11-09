@@ -8,7 +8,7 @@ import type {
   AnalysisEnqueueResult,
   MaterialDetail,
   MaterialAnalysis,
-  MinerUTestResult,
+  OCRTestResult,
   OCRProvider,
   OCRProviderKind,
 } from '../../shared/api/types';
@@ -57,8 +57,6 @@ export function getAISettings(): Promise<AISettings> {
 export function putAISettings(input: {
   analysis_enabled: boolean;
   ocr_provider_id: string;
-  mineru_base_url: string;
-  mineru_token?: string;
   max_pages: number;
   max_images: number;
   auto_accept_confidence?: number;
@@ -90,8 +88,8 @@ export function updateOCRProvider(id: string, patch: OCRProviderPatch): Promise<
   return apiRequest<OCRProvider>(`/ocr/providers/${segment(id)}`, { method: 'PATCH', body: patch });
 }
 
-export function testOCRProvider(id: string): Promise<MinerUTestResult> {
-  return apiRequest<MinerUTestResult>(`/ocr/providers/${segment(id)}/test`, { method: 'POST', body: {} });
+export function testOCRProvider(id: string): Promise<OCRTestResult> {
+  return apiRequest<OCRTestResult>(`/ocr/providers/${segment(id)}/test`, { method: 'POST', body: {} });
 }
 
 export function getMaterialAnalysis(materialId: string): Promise<MaterialAnalysis> {
@@ -105,7 +103,7 @@ export function enqueueMaterialAnalysis(materialId: string, force: boolean): Pro
   });
 }
 
-/** 以人工确认的方式重新应用识别结果：覆盖套卷字段并移出待整理。 */
+/** 以人工确认的方式重新应用识别结果：覆盖套卷字段并移出待确认。 */
 export function applyMaterialAnalysis(materialId: string): Promise<MaterialDetail> {
   return apiRequest<MaterialDetail>(`/materials/${segment(materialId)}/analysis/apply`, { method: 'POST', body: {} });
 }

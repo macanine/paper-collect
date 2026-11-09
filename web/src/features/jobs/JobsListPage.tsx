@@ -113,7 +113,7 @@ export function JobsListPage() {
       width: 120,
       render: (_: unknown, job) => (
         <div className="flex flex-col text-xs">
-          {job.upload_id && can('uploads:write') ? <Link to={`/uploads/${job.upload_id}`}>查看清单</Link> : null}
+          {job.upload_id && can('uploads:write') ? <Link to={`/imports/${job.upload_id}`}>查看导入</Link> : null}
           {job.material_id && can('materials:read') ? <Link to={`/materials/${job.material_id}`}>查看资料</Link> : null}
           {job.replica_id ? (
             <Tooltip title={job.replica_id}>
@@ -184,7 +184,7 @@ export function JobsListPage() {
             {job.node_name ? <span>节点 {job.node_name}</span> : null}
           </div>
           <div className="compact-entity__links">
-            {job.upload_id && can('uploads:write') ? <Link to={`/uploads/${job.upload_id}`}>上传清单</Link> : null}
+            {job.upload_id && can('uploads:write') ? <Link to={`/imports/${job.upload_id}`}>导入</Link> : null}
             {job.material_id && can('materials:read') ? <Link to={`/materials/${job.material_id}`}>关联资料</Link> : null}
             {job.replica_id ? <Link to={`/jobs?replica_id=${job.replica_id}`}>同副本任务</Link> : null}
             {canRetry && job.status === 'failed' ? (
@@ -251,7 +251,7 @@ export function JobsListPage() {
           description={
             <span>
               {list.filters.material_id ? `资料 ${list.filters.material_id.slice(0, 8)}` : ''}
-              {list.filters.upload_id ? `上传清单 ${list.filters.upload_id.slice(0, 8)}` : ''}
+              {list.filters.upload_id ? `导入 ${list.filters.upload_id.slice(0, 8)}` : ''}
               {list.filters.replica_id ? `存储副本 ${list.filters.replica_id.slice(0, 8)}` : ''}
             </span>
           }

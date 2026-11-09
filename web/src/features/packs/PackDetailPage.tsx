@@ -237,7 +237,7 @@ export function PackDetailPage() {
           type="info"
           showIcon
           title="这套试卷还缺答案"
-          description="把答案和试卷放在同一文件夹或用相同名称上传，系统会自动配套；也可以在资料库里勾选两个套卷后“合并为一套”。"
+          description="把答案和试卷放在同一文件夹或用相同名称上传，系统会给出配套建议；确认后才会合并，也可以在资料库里勾选两个套卷后“合并为一套”。"
         />
       ) : null}
 

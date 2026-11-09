@@ -260,16 +260,6 @@ func (s *Service) selectedOCRProvider(ctx context.Context, settings model.AISett
 	db := s.db.WithContext(ctx)
 	var row model.OCRProvider
 	providerID := settings.OCRProviderID
-	if providerID == "" {
-		// Bootstrap migrates existing installations, but tests and upgraded
-		// requests can reach here before the settings row is materialized.
-		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			return s.migrateLegacyOCRProvider(tx, &settings)
-		}); err != nil {
-			return model.OCRProvider{}, apperr.Internal(err)
-		}
-		providerID = settings.OCRProviderID
-	}
 	if providerID != "" {
 		if err := db.Where("id = ?", providerID).First(&row).Error; err == nil {
 			if row.Enabled {
@@ -385,63 +375,4 @@ func (s *Service) saveParsedText(ctx context.Context, materialID string, p *jobe
 	}).Error; err != nil {
 		s.logf("parsed text cache unavailable")
 	}
-}
-
-// migrateLegacyOCRProvider creates one MinerU provider from the legacy
-// singleton settings. It is idempotent and leaves the old fields intact.
-func (s *Service) migrateLegacyOCRProvider(tx *gorm.DB, settings *model.AISettings) error {
-	var count int64
-	if err := tx.Model(&model.OCRProvider{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		if settings.OCRProviderID != "" {
-			return nil
-		}
-		// A disabled but explicitly configured provider must remain selected;
-		// resolution will report that it is disabled instead of silently
-		// switching to a different provider.
-		var first model.OCRProvider
-		err := tx.Where("enabled = ?", true).Order("priority ASC").Order("created_at ASC").First(&first).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			err = tx.Order("priority ASC").Order("created_at ASC").First(&first).Error
-		}
-		if err == nil {
-			if err := tx.Model(&model.AISettings{}).Where("id = ?", 1).
-				Update("ocr_provider_id", first.ID).Error; err != nil {
-				return err
-			}
-			settings.OCRProviderID = first.ID
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		return nil
-	}
-	if settings.MinerUTokenCipher == "" {
-		return nil
-	}
-	token, err := s.box.Open(settings.MinerUTokenCipher, []byte("ai.settings"))
-	if err != nil {
-		return errors.New("无法解密待迁移的 MinerU 令牌")
-	}
-	id := newID()
-	cipher, err := s.box.Seal(token, []byte(id))
-	if err != nil {
-		return err
-	}
-	now := s.now()
-	row := model.OCRProvider{
-		ID: id, Name: "MinerU（迁移）", Kind: model.OCRKindMinerU,
-		BaseURL: settings.MinerUBaseURL, TokenCipher: cipher,
-		Model: "", Enabled: true, Priority: 100, CreatedAt: now, UpdatedAt: now,
-	}
-	if err := tx.Create(&row).Error; err != nil {
-		return err
-	}
-	if err := tx.Model(&model.AISettings{}).Where("id = ?", 1).
-		Update("ocr_provider_id", row.ID).Error; err != nil {
-		return err
-	}
-	settings.OCRProviderID = row.ID
-	return nil
 }

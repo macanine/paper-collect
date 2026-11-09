@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
-import { Navigate, Route, Routes } from 'react-router';
+import { Route, Routes } from 'react-router';
 import { useAuth } from './features/auth/AuthContext';
 import { LoginPage } from './features/auth/LoginPage';
 import { hasScope } from './features/auth/permissions';
@@ -28,7 +28,7 @@ const NodesPage = page(() => import('./features/nodes/NodesPage'), 'NodesPage');
 const NodeDetailPage = page(() => import('./features/nodes/NodeDetailPage'), 'NodeDetailPage');
 const StoragePage = page(() => import('./features/storage/StoragePage'), 'StoragePage');
 const TrashPage = page(() => import('./features/trash/TrashPage'), 'TrashPage');
-const UploadsListPage = page(() => import('./features/uploads/UploadsListPage'), 'UploadsListPage');
+const ImportCenterPage = page(() => import('./features/uploads/ImportCenterPage'), 'ImportCenterPage');
 const UploadSessionPage = page(() => import('./features/uploads/UploadSessionPage'), 'UploadSessionPage');
 const UsersPage = page(() => import('./features/users/UsersPage'), 'UsersPage');
 const AuthenticatedLayout = page(() => import('./layouts/AppLayout'), 'AuthenticatedLayout');
@@ -48,8 +48,8 @@ const ROUTES: { path: string; scope: Scope; element: ReactNode }[] = [
   { path: 'search', scope: 'materials:read', element: <SearchPage /> },
   { path: 'collections', scope: 'collections:read', element: <CollectionsListPage /> },
   { path: 'collections/:collectionId', scope: 'collections:read', element: <CollectionDetailPage /> },
-  { path: 'uploads', scope: 'uploads:write', element: <UploadsListPage /> },
-  { path: 'uploads/:uploadId', scope: 'uploads:write', element: <UploadSessionPage /> },
+  { path: 'imports', scope: 'uploads:write', element: <ImportCenterPage /> },
+  { path: 'imports/:uploadId', scope: 'uploads:write', element: <UploadSessionPage /> },
   { path: 'trash', scope: 'materials:write', element: <TrashPage /> },
   { path: 'jobs', scope: 'jobs:read', element: <JobsListPage /> },
   { path: 'jobs/:jobId', scope: 'jobs:read', element: <JobDetailPage /> },
@@ -78,9 +78,6 @@ export function App() {
         {ROUTES.map((route) => (
           <Route key={route.path} path={route.path} element={<ScopeGuard scope={route.scope}>{route.element}</ScopeGuard>} />
         ))}
-        {/* 旧地址重定向到新的入口 */}
-        <Route path="materials" element={<Navigate to="/library" replace />} />
-        <Route path="uploads/new" element={<Navigate to="/uploads" replace />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>

@@ -141,6 +141,25 @@ func newFakeAI(t *testing.T) *fakeAI {
 	return f
 }
 
+func configureOCRProvider(t *testing.T, env *testEnv, baseURL, kind, token string) string {
+	t.Helper()
+	status, body := env.do(t, http.MethodPost, "/api/v1/ocr/providers", map[string]any{
+		"name": kind + " 测试服务", "kind": kind, "base_url": baseURL, "token": token, "enabled": true, "priority": 1,
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("ocr provider %d: %s", status, body)
+	}
+	var out struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Data.ID == "" {
+		t.Fatalf("ocr provider response: %s", body)
+	}
+	return out.Data.ID
+}
+
 func (f *fakeAI) parseCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -193,6 +212,7 @@ func (e *testEnv) processJobs(t *testing.T) {
 func TestAIAnalysisEndToEnd(t *testing.T) {
 	fake := newFakeAI(t)
 	env := newEnv(t)
+	ocrID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
 
 	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
 		"name": "测试网关", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
@@ -228,8 +248,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	}
 
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true, "mineru_base_url": fake.server.URL,
-		"mineru_token": "mineru-token", "max_pages": 3, "max_images": 2,
+		"analysis_enabled": true, "ocr_provider_id": ocrID, "max_pages": 3, "max_images": 2,
 	}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("put settings %d: %s", status, body)
@@ -377,9 +396,10 @@ func TestAIProviderRejectsBadKeyWithoutLeaking(t *testing.T) {
 	}
 }
 
-func TestOCRProviderSelectionAndMigration(t *testing.T) {
+func TestOCRProviderSelection(t *testing.T) {
 	fake := newFakeAI(t)
 	env := newEnv(t)
+	mineruID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
 
 	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
 		"name": "文本模型", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
@@ -389,13 +409,11 @@ func TestOCRProviderSelectionAndMigration(t *testing.T) {
 		t.Fatalf("model provider %d: %s", status, body)
 	}
 
-	// Legacy settings still work and materialize the old MinerU configuration.
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": false, "mineru_base_url": fake.server.URL,
-		"mineru_token": "mineru-token", "max_pages": 3, "max_images": 0,
+		"analysis_enabled": false, "ocr_provider_id": mineruID, "max_pages": 3, "max_images": 0,
 	}, nil)
 	if status != http.StatusOK || strings.Contains(string(body), "mineru-token") {
-		t.Fatalf("legacy settings %d: %s", status, body)
+		t.Fatalf("settings %d: %s", status, body)
 	}
 	var settings struct {
 		Data struct {
@@ -404,7 +422,7 @@ func TestOCRProviderSelectionAndMigration(t *testing.T) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &settings); err != nil || settings.Data.OCRProviderID == "" || !settings.Data.OCRConfigured {
-		t.Fatalf("legacy OCR migration missing: %s", body)
+		t.Fatalf("OCR provider missing: %s", body)
 	}
 
 	status, body = env.do(t, http.MethodPost, "/api/v1/ocr/providers", map[string]any{
@@ -426,19 +444,18 @@ func TestOCRProviderSelectionAndMigration(t *testing.T) {
 
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
 		"analysis_enabled": true, "ocr_provider_id": paddle.Data.ID,
-		"mineru_base_url": fake.server.URL, "max_pages": 3, "max_images": 0,
+		"max_pages": 3, "max_images": 0,
 	}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("select paddle %d: %s", status, body)
 	}
-	// An older client may omit ocr_provider_id. It must not silently clear the
-	// selected PaddleOCR provider.
+	// Omitting the provider keeps the current selection.
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true, "mineru_base_url": fake.server.URL,
-		"max_pages": 3, "max_images": 0,
+		"analysis_enabled": true,
+		"max_pages":        3, "max_images": 0,
 	}, nil)
 	if status != http.StatusOK || !strings.Contains(string(body), paddle.Data.ID) {
-		t.Fatalf("legacy update cleared OCR provider %d: %s", status, body)
+		t.Fatalf("update cleared OCR provider %d: %s", status, body)
 	}
 
 	uploadID, _ := env.upload(t, "Paddle 识别", map[string][]byte{"试题.pdf": minimalPDF()})
@@ -462,6 +479,7 @@ func TestOCRProviderSelectionAndMigration(t *testing.T) {
 func TestQuestionSearchIndexAndPages(t *testing.T) {
 	fake := newFakeAI(t)
 	env := newEnv(t)
+	ocrID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
 	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
 		"name": "切题模型", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
 		"models": []string{"text-model"}, "default_model": "text-model", "enabled": true, "priority": 1,
@@ -470,8 +488,7 @@ func TestQuestionSearchIndexAndPages(t *testing.T) {
 		t.Fatalf("provider %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": false, "mineru_base_url": fake.server.URL,
-		"mineru_token": "mineru-token", "max_pages": 10, "max_images": 0,
+		"analysis_enabled": false, "ocr_provider_id": ocrID, "max_pages": 10, "max_images": 0,
 	}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("ai settings %d: %s", status, body)

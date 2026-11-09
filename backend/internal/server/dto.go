@@ -575,15 +575,13 @@ type aiProviderDTO struct {
 }
 
 type aiSettingsDTO struct {
-	AnalysisEnabled  bool      `json:"analysis_enabled"`
-	OCRProviderID    string    `json:"ocr_provider_id"`
-	MinerUBaseURL    string    `json:"mineru_base_url"`
-	MaxPages         int       `json:"max_pages"`
-	MaxImages        int       `json:"max_images"`
-	AutoAccept       float64   `json:"auto_accept_confidence"`
-	MinerUConfigured bool      `json:"mineru_configured"`
-	OCRConfigured    bool      `json:"ocr_configured"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	AnalysisEnabled bool      `json:"analysis_enabled"`
+	OCRProviderID   string    `json:"ocr_provider_id"`
+	MaxPages        int       `json:"max_pages"`
+	MaxImages       int       `json:"max_images"`
+	AutoAccept      float64   `json:"auto_accept_confidence"`
+	OCRConfigured   bool      `json:"ocr_configured"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type ocrProviderDTO struct {
@@ -633,11 +631,11 @@ func toAIProvider(v service.AIProviderView) aiProviderDTO {
 
 func toAISettings(v service.AISettingsView) aiSettingsDTO {
 	return aiSettingsDTO{
-		AnalysisEnabled: v.Settings.AnalysisEnabled, MinerUBaseURL: v.Settings.MinerUBaseURL,
-		OCRProviderID: v.Settings.OCRProviderID,
-		MaxPages:      v.Settings.MaxPages, MaxImages: v.Settings.MaxImages, AutoAccept: v.Settings.AutoAcceptConfidence,
-		MinerUConfigured: v.MinerUConfigured, OCRConfigured: v.OCRConfigured,
-		UpdatedAt: v.Settings.UpdatedAt,
+		AnalysisEnabled: v.Settings.AnalysisEnabled,
+		OCRProviderID:   v.Settings.OCRProviderID,
+		MaxPages:        v.Settings.MaxPages, MaxImages: v.Settings.MaxImages, AutoAccept: v.Settings.AutoAcceptConfidence,
+		OCRConfigured: v.OCRConfigured,
+		UpdatedAt:     v.Settings.UpdatedAt,
 	}
 }
 

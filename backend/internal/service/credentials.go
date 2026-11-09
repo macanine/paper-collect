@@ -152,7 +152,7 @@ func (s *Service) Logout(ctx context.Context, p auth.Principal, refreshToken str
 // Every call re-checks user, session and key state, so revocation is immediate.
 func (s *Service) Authenticate(ctx context.Context, bearer string) (auth.Principal, error) {
 	unauth := apperr.Unauthorized("凭据无效或已过期")
-	if strings.HasPrefix(bearer, auth.APIKeyPrefix) || strings.HasPrefix(bearer, auth.LegacyAPIKeyPrefix) {
+	if strings.HasPrefix(bearer, auth.APIKeyPrefix) {
 		id, secret, err := auth.ParseAPIKey(bearer)
 		if err != nil {
 			return auth.Principal{}, unauth

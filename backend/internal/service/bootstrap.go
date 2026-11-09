@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"time"
@@ -79,15 +78,6 @@ func (s *Service) Bootstrap(ctx context.Context, adminUsername, adminPassword st
 				return wrap("create ai settings", err)
 			}
 		}
-		var existingAISettings model.AISettings
-		if err := tx.Where("id = ?", 1).First(&existingAISettings).Error; err == nil {
-			if err := s.migrateLegacyOCRProvider(tx, &existingAISettings); err != nil {
-				return wrap("migrate OCR provider", err)
-			}
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return wrap("load ai settings", err)
-		}
-
 		var searchSettings int64
 		if err := tx.Model(&model.SearchSettings{}).Where("id = ?", 1).Count(&searchSettings).Error; err != nil {
 			return wrap("count search settings", err)

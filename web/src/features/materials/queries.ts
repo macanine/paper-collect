@@ -8,7 +8,7 @@ export const materialKeys = {
   detail: (id: string) => ['materials', 'detail', id] as const,
 };
 
-/** 资料、套卷、待整理和仪表盘共享同一批数据，任一写操作后一起刷新。 */
+/** 资料、套卷、待确认和仪表盘共享同一批数据，任一写操作后一起刷新。 */
 export function invalidateLibrary(queryClient: QueryClient) {
   for (const key of ['materials', 'packs', 'collections', 'dashboard', 'uploads']) {
     void queryClient.invalidateQueries({ queryKey: [key] });

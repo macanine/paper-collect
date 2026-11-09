@@ -17,11 +17,7 @@ func TestOpaqueAPIKeyFormatAndParsing(t *testing.T) {
 	if err != nil || parsedID != "" || HashToken(secret) != hash {
 		t.Fatal("failed to parse new key")
 	}
-	legacyID, legacySecret, err := ParseAPIKey("pc_" + id + ".legacy-test-secret")
-	if err != nil || legacyID != id || legacySecret != "legacy-test-secret" {
-		t.Fatal("legacy key must remain valid")
-	}
-	for _, invalid := range []string{"sk-", "sk-abc", full + "=", "pc_invalid.secret", "unknown"} {
+	for _, invalid := range []string{"sk-", "sk-abc", full + "=", "unknown"} {
 		if _, _, err := ParseAPIKey(invalid); err == nil {
 			t.Fatal("malformed credential accepted")
 		}

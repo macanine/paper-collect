@@ -415,8 +415,8 @@ type Job struct {
 	UpdatedAt       time.Time
 }
 
-// Drive route policies control which node may upload a replica. Pool preserves
-// the legacy behaviour where any eligible node may claim the job. Preferred
+// Drive route policies control which node may upload a replica. Pool uses the
+// shared-pool behavior where any eligible node may claim the job. Preferred
 // follows the configured priority list while falling back to the pool when no
 // configured node is available. Exclusive only uses configured nodes.
 const (
@@ -678,13 +678,11 @@ type AIProvider struct {
 
 // AISettings is the singleton document-analysis configuration (ID is always 1).
 type AISettings struct {
-	ID                int    `gorm:"primaryKey"`
-	AnalysisEnabled   bool   `gorm:"not null"`
-	OCRProviderID     string `gorm:"size:36;index"`
-	MinerUBaseURL     string `gorm:"column:mineru_base_url;type:text;not null"`
-	MinerUTokenCipher string `gorm:"column:mineru_token_cipher;type:text"`
-	MaxPages          int    `gorm:"not null"`
-	MaxImages         int    `gorm:"not null"`
+	ID              int    `gorm:"primaryKey"`
+	AnalysisEnabled bool   `gorm:"not null"`
+	OCRProviderID   string `gorm:"size:36;index"`
+	MaxPages        int    `gorm:"not null"`
+	MaxImages       int    `gorm:"not null"`
 	// AutoAcceptConfidence is the overall confidence at or above which an
 	// analysed file goes straight to ready instead of the review inbox.
 	AutoAcceptConfidence float64 `gorm:"not null;default:0.8"`

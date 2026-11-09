@@ -43,7 +43,7 @@ export function AuditLogsPage() {
         if (action.startsWith('material.') && action !== 'material.delete') return <Link to={`/materials/${value}`}>查看资料</Link>;
         if (action.startsWith('collection.') && action !== 'collection.delete') return <Link to={`/collections/${value}`}>查看合集</Link>;
         if (action === 'job.retry') return <Link to={`/jobs/${value}`}>查看任务</Link>;
-        if (action.startsWith('upload.') || action === 'ingest.complete') return <Link to={`/uploads/${value}`}>查看上传清单</Link>;
+        if (action.startsWith('upload.') || action === 'ingest.complete') return <Link to={`/imports/${value}`}>查看导入</Link>;
         if (action.startsWith('storage.')) return '存储设置';
         if (action.startsWith('ai.')) return '智能识别设置';
         if (action.startsWith('user.') || action.startsWith('auth.')) return '用户账户';

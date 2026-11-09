@@ -66,7 +66,7 @@ export const TERM_LABELS: Record<Term, string> = {
 
 export const STAGE_LABELS: Record<Stage, string> = {
   processing: '识别中',
-  review: '待整理',
+  review: '待确认',
   ready: '已入库',
   failed: '识别失败',
 };
@@ -142,7 +142,7 @@ export const JOB_KIND_LABELS: Record<JobKind, string> = {
   replicate: '副本复制',
   analyze: 'AI 识别',
   index: '题目索引',
-  group: '自动配套',
+  group: '配套建议',
 };
 
 export const ANALYSIS_STATUS_LABELS: Record<AnalysisStatus, string> = {

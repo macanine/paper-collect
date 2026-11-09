@@ -41,7 +41,7 @@ export function UploadDialog() {
       tags: values.tags ?? [],
     };
     start(selected, hints);
-    message.success('已开始上传，可以继续做别的事');
+    message.success('已开始导入，可以继续做别的事');
     reset();
     closeDialog();
   };
@@ -50,9 +50,9 @@ export function UploadDialog() {
   return (
     <Modal
       open={dialogOpen}
-      title="上传资料"
+      title="导入资料"
       width={720}
-      okText={selected.length > 0 ? `开始上传 ${selected.length} 个文件` : '开始上传'}
+      okText={selected.length > 0 ? `开始导入 ${selected.length} 个文件` : '开始导入'}
       okButtonProps={{ disabled: selected.length === 0 }}
       cancelText="取消"
       onOk={submit}
@@ -79,20 +79,18 @@ export function UploadDialog() {
             }
           />
         ) : null}
-        <Collapse
-          size="small"
-          items={[
-            {
-              key: 'hints',
-              label: '给这批资料加提示（可选，AI 会参考）',
-              children: (
-                <Form form={form} layout="vertical">
-                  <PackCatalogFields fields={['doc_type', 'subject_codes', 'grade', 'cohort', 'region', 'organization', 'tags']} facets={facets.data} />
-                </Form>
-              ),
-            },
-          ]}
-        />
+        <Form form={form} component={false}>
+          <Collapse
+            size="small"
+            items={[
+              {
+                key: 'hints',
+                label: '给这批资料加提示（可选，AI 会参考）',
+                children: <PackCatalogFields fields={['doc_type', 'subject_codes', 'grade', 'cohort', 'region', 'organization', 'tags']} facets={facets.data} />,
+              },
+            ]}
+          />
+        </Form>
         <Typography.Text type="secondary">
           支持 PDF、Word、PPT、Excel、图片、音频和 ZIP（含多层压缩包）。也可以把文件直接拖到页面任意位置。
         </Typography.Text>

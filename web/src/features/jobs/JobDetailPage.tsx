@@ -127,7 +127,7 @@ export function JobDetailPage() {
               ),
             },
             { key: 'progress', label: '当前进度', span: { xs: 1, md: 2 }, children: progressText(job) },
-            ...(job.upload_id && can('uploads:write') ? [{ key: 'upload', label: '关联清单', children: <Link to={`/uploads/${job.upload_id}`}>查看上传清单</Link> }] : []),
+            ...(job.upload_id && can('uploads:write') ? [{ key: 'upload', label: '关联导入', children: <Link to={`/imports/${job.upload_id}`}>查看导入</Link> }] : []),
             ...(job.material_id && can('materials:read') ? [{ key: 'material', label: '关联资料', children: <Link to={`/materials/${job.material_id}`}>查看资料</Link> }] : []),
             ...(job.replica_id && can('jobs:read') ? [{
               key: 'replica',

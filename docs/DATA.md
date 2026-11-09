@@ -41,7 +41,7 @@
 | `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型字段（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 字段默认 `PP-OCRv5`，但自建服务固定使用 RapidOCR 3.10 默认 PP-OCRv6 small），启停与优先级 |
 | `cluster_settings` | `ClusterSettings` | 单例 `id=default`；主端任务类型与四类并发、租约/心跳/领取/轮询参数和调度修订号 |
 | `nodes` | `Node` | 主端与从端运行状态；从端另存主端期望槽位、缓存上限、OCRProvider ID、配置修订和已应用修订，节点令牌只存哈希 |
-| `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限；旧 MinerU 字段仅用于兼容迁移 |
+| `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限与自动入库阈值 |
 | `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、应用时间、Markdown 路径、脱敏错误 |
 | `search_settings` | `SearchSettings` | 单例 `id=1`；索引开关、页数/批次上限、指定 provider/model |
 | `material_texts` | `MaterialText` | 每资料一行；`source_hash`、`parse_key`、页数、逐页文本 JSON、完整 Markdown；供分析与索引复用 |
@@ -81,7 +81,7 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 
 - `Material.status` 只反映原件：本机 CAS 中存在为 `archived`，缺失为 `missing`。
 - `Material.sync_status` 反映网盘同步：未生成计划前为 `waiting_catalog`；之后忽略 skipped/orphaned 副本，没有其他副本为 `not_required`，必需目标全部 ready 为 `synced`，有副本 pending/uploading/moving 为 `syncing`，必需目标失败、必需目标分享失败或已写入副本路径偏离为 `attention`。`sync_planned_at` 记录最近一次生成计划的时间。
-- `Material.stage` 是人工整理阶段：processing（识别中）、review（待整理）、ready（已入库）、failed（识别失败）；`review_reasons_json` 记录 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual，`suggested_pack_id` 指向待确认的配套套卷。套卷 stage 取成员中最靠后的阶段。
+- `Material.stage` 是人工整理阶段：processing（识别中）、review（待确认）、ready（已入库）、failed（识别失败）；`review_reasons_json` 记录 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual，`suggested_pack_id` 指向待确认的配套套卷。套卷 stage 取成员中最靠后的阶段。
 - `Material.part` 是文件在套卷中的部件：questions、answers、full、teacher、answer_sheet、listening、main、other；`answer_start_page` 记录同一文件内答案起始页。
 - `Material.title` 与 `file_name` 由「套卷标题 + part 中文标签」派生；套卷 `title_locked=true` 时固定不变，人工 PATCH 设置 `catalog_locked=true` 阻止自动编目覆盖。改名后重新计算副本 `desired_path`，`on_path_change=move` 的网盘随之移动。
 - `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received（或 existing 秒传）→ 归档后写入 `results`。
@@ -108,7 +108,7 @@ DATA_DIR/
   tmp/docx-*.part                      远端副本读取 DOCX 时的临时文件
   tmp/docx-*/                          预览转换期间的临时 Word 文件和独立配置
   tmp/fontconfig-cache/                 macOS 转换器使用的字体缓存
-  previews/docx-v1/<sha前两位>/<sha>.pdf  DOCX 生成的 PDF 预览缓存
+  renders/office-v1/<sha前两位>/<sha>.pdf  DOCX 生成的 PDF 预览缓存
   analysis/<materialID>/document.md    识别用 Markdown（数据库存绝对路径）
   drives/<driveID>/...                 `local` 网盘的副本（按路径模板分层）
 ```
