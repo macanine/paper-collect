@@ -258,7 +258,19 @@ func (s *Service) workerLoop(loopCtx, jobCtx context.Context, kind string) {
 		if loopCtx.Err() != nil {
 			return
 		}
-		if s.processNextKind(jobCtx, kind) {
+		if !s.reserveWorkerSlot(kind) {
+			timer := time.NewTimer(s.workerSettings().PollInterval)
+			select {
+			case <-loopCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			continue
+		}
+		processed := s.processNextKind(jobCtx, kind)
+		s.releaseWorkerSlot(kind)
+		if processed {
 			continue
 		}
 		timer := time.NewTimer(s.workerSettings().PollInterval)

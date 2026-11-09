@@ -137,6 +137,38 @@ func TestClusterSettingsRejectInvalidValuesWithoutChangingState(t *testing.T) {
 	}
 }
 
+func TestLocalRunnerCapacityFollowsRuntimeShrink(t *testing.T) {
+	svc, _ := newWorkerTestService(t, t.TempDir(), "master")
+	settings := svc.workerSettings()
+	settings.AnalyzeConcurrency = 3
+	svc.setWorkerSettings(settings)
+
+	for i := 0; i < 3; i++ {
+		if !svc.reserveWorkerSlot(model.JobAnalyze) {
+			t.Fatalf("slot %d was not reserved", i+1)
+		}
+	}
+	if svc.reserveWorkerSlot(model.JobAnalyze) {
+		t.Fatal("claim capacity exceeded its configured limit")
+	}
+
+	settings = svc.workerSettings()
+	settings.AnalyzeConcurrency = 1
+	svc.setWorkerSettings(settings)
+	if svc.reserveWorkerSlot(model.JobAnalyze) {
+		t.Fatal("old in-flight claims were forgotten after shrinking")
+	}
+	svc.releaseWorkerSlot(model.JobAnalyze)
+	svc.releaseWorkerSlot(model.JobAnalyze)
+	if svc.reserveWorkerSlot(model.JobAnalyze) {
+		t.Fatal("replacement runners exceeded the shrunken capacity")
+	}
+	svc.releaseWorkerSlot(model.JobAnalyze)
+	if !svc.reserveWorkerSlot(model.JobAnalyze) {
+		t.Fatal("released capacity was not reusable")
+	}
+}
+
 func TestNodeOCRProviderUsesGlobalPriority(t *testing.T) {
 	svc, conn := newWorkerTestService(t, t.TempDir(), "master")
 	now := time.Now().UTC()

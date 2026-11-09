@@ -433,6 +433,36 @@ func TestHeartbeatAppliesMasterRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestClaimCapacityFollowsRuntimeShrink(t *testing.T) {
+	w := newWorker(t, &fakeMaster{}, func(c *Config) {
+		c.Slots = map[string]int{jobexec.KindAnalyze: 3}
+	})
+	for i := 0; i < 3; i++ {
+		if !w.reserveClaimSlot(jobexec.KindAnalyze) {
+			t.Fatalf("slot %d was not reserved", i+1)
+		}
+	}
+	if w.reserveClaimSlot(jobexec.KindAnalyze) {
+		t.Fatal("claim capacity exceeded its configured limit")
+	}
+
+	w.applyRemoteConfig(remoteConfig{
+		Slots: map[string]int{jobexec.KindAnalyze: 1}, Revision: 2,
+	})
+	if w.reserveClaimSlot(jobexec.KindAnalyze) {
+		t.Fatal("old in-flight claims were forgotten after shrinking")
+	}
+	w.releaseClaimSlot(jobexec.KindAnalyze)
+	w.releaseClaimSlot(jobexec.KindAnalyze)
+	if w.reserveClaimSlot(jobexec.KindAnalyze) {
+		t.Fatal("replacement loops exceeded the shrunken capacity")
+	}
+	w.releaseClaimSlot(jobexec.KindAnalyze)
+	if !w.reserveClaimSlot(jobexec.KindAnalyze) {
+		t.Fatal("released capacity was not reusable")
+	}
+}
+
 func TestStalePartialFilesAreRemovedOnStart(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "tmp"), 0o700); err != nil {
