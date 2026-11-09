@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/ai"
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/docx"
+	"github.com/nic/paper-collect/backend/internal/office"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -20,10 +22,15 @@ const (
 	maxDOCXSource = 512 << 20
 	parseTimeout  = 16 * time.Minute
 	docxMediaType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	docMediaType  = "application/msword"
+	pptMediaType  = "application/vnd.ms-powerpoint"
+	pptxMediaType = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 	ocrKindRapid  = "rapidocr"
 	ocrKindPaddle = "paddleocr"
 	ocrKindMinerU = "mineru"
 )
+
+var officeConversionSlots = make(chan struct{}, 2)
 
 // OCRConfig is a decrypted OCR provider.
 type OCRConfig struct {
@@ -95,6 +102,9 @@ func parseDocument(ctx context.Context, env Env, cfg OCRConfig, b Blob) (ai.Resu
 	if cfg.Kind == ocrKindRapid && b.MediaType == docxMediaType {
 		return parseDOCX(ctx, env, client, b)
 	}
+	if isOfficeOCRMediaType(b.MediaType) {
+		return parseOfficeForOCR(ctx, env, client, b)
+	}
 	original, err := env.OpenBlob(ctx, b)
 	if err != nil {
 		return ai.Result{}, err
@@ -112,6 +122,53 @@ func parseDocument(ctx context.Context, env Env, cfg OCRConfig, b Blob) (ai.Resu
 		return ai.Result{}, errors.New("原件为空")
 	}
 	return client.Extract(ctx, b.FileName, data)
+}
+
+func isOfficeOCRMediaType(mediaType string) bool {
+	switch mediaType {
+	case docMediaType, docxMediaType, pptMediaType, pptxMediaType:
+		return true
+	default:
+		return false
+	}
+}
+
+// parseOfficeForOCR renders formats the hosted parsers do not consistently
+// accept into PDF. LibreOffice is already part of both full application
+// images; a process-wide two-slot limit bounds its memory use on busy nodes.
+func parseOfficeForOCR(ctx context.Context, env Env, client OCRClient, b Blob) (ai.Result, error) {
+	select {
+	case officeConversionSlots <- struct{}{}:
+		defer func() { <-officeConversionSlots }()
+	case <-ctx.Done():
+		return ai.Result{}, ctx.Err()
+	}
+	env.Progress(ctx, "正在将 Office 文档转换为 PDF", 0, 0, nil)
+	if err := os.MkdirAll(env.TempDir(), 0o700); err != nil {
+		return ai.Result{}, apperr.Internal(err)
+	}
+	work, err := os.MkdirTemp(env.TempDir(), "office-ocr-")
+	if err != nil {
+		return ai.Result{}, apperr.Internal(err)
+	}
+	defer os.RemoveAll(work)
+	converter := office.New(work)
+	pdfPath, err := converter.Convert(ctx, b.SHA256, b.FileName, func(ctx context.Context) (io.ReadCloser, error) {
+		return env.OpenBlob(ctx, b)
+	})
+	if err != nil {
+		return ai.Result{}, err
+	}
+	pdf, err := os.Open(pdfPath)
+	if err != nil {
+		return ai.Result{}, apperr.Internal(err)
+	}
+	defer pdf.Close()
+	data, err := readAllLimit(pdf, 512<<20)
+	if err != nil {
+		return ai.Result{}, fmt.Errorf("读取 Office 转换结果失败: %w", err)
+	}
+	return client.Extract(ctx, strings.TrimSuffix(b.FileName, filepath.Ext(b.FileName))+".pdf", data)
 }
 
 // parseDOCX extracts the Word body directly, then asks the OCR service only
