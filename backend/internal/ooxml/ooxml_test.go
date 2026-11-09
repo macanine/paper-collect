@@ -3,6 +3,8 @@ package ooxml
 import (
 	"archive/zip"
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,6 +33,11 @@ func openBytes(t *testing.T, data []byte) (*Package, error) {
 	return New(bytes.NewReader(data), int64(len(data)))
 }
 
+func openBytesAllowingExternal(t *testing.T, data []byte) (*Package, error) {
+	t.Helper()
+	return NewAllowingExternal(bytes.NewReader(data), int64(len(data)))
+}
+
 func TestRejectsExternalResourcesAndAllowsHyperlinks(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind, mode string
@@ -53,6 +60,63 @@ func TestRejectsExternalResourcesAndAllowsHyperlinks(t *testing.T) {
 				t.Fatal("external target was exposed")
 			}
 		})
+	}
+}
+
+func TestInertParserCanOpenExternalRelationships(t *testing.T) {
+	data := archive(t, map[string]string{
+		"word/_rels/document.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.test/image.png" TargetMode="External"/>` +
+			`<Relationship Id="r2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.test/" TargetMode="External"/>` +
+			`</Relationships>`,
+	})
+	pkg, err := openBytesAllowingExternal(t, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pkg.Close()
+	relationships, err := pkg.Relationships("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relationships) != 2 {
+		t.Fatalf("relationships = %+v", relationships)
+	}
+}
+
+func TestSanitizeExternalResources(t *testing.T) {
+	data := archive(t, map[string]string{
+		"word/document.xml": "body",
+		"word/_rels/document.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.test/image.png" TargetMode="External"/>` +
+			`<Relationship Id="hyperlink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.test/" TargetMode="External"/>` +
+			`<Relationship Id="embedded" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>` +
+			`</Relationships>`,
+	})
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.docx")
+	dest := filepath.Join(dir, "clean.docx")
+	if err := os.WriteFile(source, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := SanitizeExternalResources(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	pkg, err := Open(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pkg.Close()
+	relationships, err := pkg.Relationships("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relationships) != 2 || relationships[0].ID != "hyperlink" || relationships[1].ID != "embedded" {
+		t.Fatalf("relationships = %+v", relationships)
 	}
 }
 

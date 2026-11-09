@@ -96,6 +96,24 @@ func TestImageRelationshipAndOrder(t *testing.T) {
 	}
 }
 
+func TestExternalImageIsIgnored(t *testing.T) {
+	document := `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>` +
+		`<w:p><w:r><w:t>正文</w:t></w:r><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p>` +
+		`</w:body></w:document>`
+	files := map[string]string{
+		"word/document.xml":            document,
+		"word/_rels/document.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.test/image.png" TargetMode="External"/></Relationships>`,
+	}
+	doc := parsePackage(t, packageBytes(t, files))
+	if len(doc.Images) != 0 {
+		t.Fatalf("external image was read: %+v", doc.Images)
+	}
+	pages, _ := doc.Render(nil)
+	if len(pages) != 1 || pages[0].Text != "正文" {
+		t.Fatalf("pages = %+v", pages)
+	}
+}
+
 func TestDocumentWithoutBodyIsRejected(t *testing.T) {
 	data := packageBytes(t, map[string]string{"word/styles.xml": "x"})
 	if _, err := Parse(bytes.NewReader(data), int64(len(data))); err == nil {

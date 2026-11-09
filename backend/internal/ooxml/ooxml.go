@@ -6,6 +6,7 @@ package ooxml
 import (
 	"archive/zip"
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/url"
 	"os"
@@ -29,6 +30,16 @@ type Package struct {
 
 // Open validates and opens a package from disk.
 func Open(name string) (*Package, error) {
+	return open(name, true)
+}
+
+// OpenAllowingExternal opens a package whose external relationships will be
+// ignored by an inert parser. Callers must not pass the package to a renderer.
+func OpenAllowingExternal(name string) (*Package, error) {
+	return open(name, false)
+}
+
+func open(name string, validateExternal bool) (*Package, error) {
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, apperr.Internal(err)
@@ -38,7 +49,7 @@ func Open(name string) (*Package, error) {
 		f.Close()
 		return nil, apperr.Internal(err)
 	}
-	pkg, err := New(f, info.Size())
+	pkg, err := newPackage(f, info.Size(), validateExternal)
 	if err != nil {
 		f.Close()
 		return nil, err
@@ -50,6 +61,17 @@ func Open(name string) (*Package, error) {
 // New validates a package read from readerAt. The caller retains ownership of
 // the reader and must keep it open until it is done with the package.
 func New(readerAt io.ReaderAt, size int64) (*Package, error) {
+	return newPackage(readerAt, size, true)
+}
+
+// NewAllowingExternal validates the ZIP structure but permits relationships
+// to external resources. It is only for parsers that never resolve or fetch
+// those relationships.
+func NewAllowingExternal(readerAt io.ReaderAt, size int64) (*Package, error) {
+	return newPackage(readerAt, size, false)
+}
+
+func newPackage(readerAt io.ReaderAt, size int64, validateExternal bool) (*Package, error) {
 	zr, err := zip.NewReader(readerAt, size)
 	if err != nil {
 		return nil, apperr.Unprocessable("文档不是有效的 Office 压缩包")
@@ -82,7 +104,7 @@ func New(readerAt io.ReaderAt, size int64) (*Package, error) {
 		total += f.UncompressedSize64
 		pkg.files[name] = f
 	}
-	if err := pkg.validateRelationships(); err != nil {
+	if err := pkg.validateRelationships(validateExternal); err != nil {
 		return nil, err
 	}
 	return pkg, nil
@@ -200,6 +222,149 @@ func Validate(name string) error {
 	return pkg.Close()
 }
 
+// SanitizeExternalResources writes an equivalent OOXML package with external
+// images, templates, OLE objects and data sources removed. Hyperlink
+// relationships remain because they are inert metadata for headless rendering.
+func SanitizeExternalResources(source, dest string) (int, error) {
+	pkg, err := OpenAllowingExternal(source)
+	if err != nil {
+		return 0, err
+	}
+	if err := pkg.Close(); err != nil {
+		return 0, apperr.Internal(err)
+	}
+
+	in, err := os.Open(source)
+	if err != nil {
+		return 0, apperr.Internal(err)
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return 0, apperr.Internal(err)
+	}
+	zr, err := zip.NewReader(in, info.Size())
+	if err != nil {
+		return 0, apperr.Unprocessable("文档不是有效的 Office 压缩包")
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 0, apperr.Internal(err)
+	}
+	cleanup := true
+	defer func() {
+		out.Close()
+		if cleanup {
+			_ = os.Remove(dest)
+		}
+	}()
+
+	zw := zip.NewWriter(out)
+	removed := 0
+	for _, file := range zr.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		writer, err := zw.CreateHeader(&zip.FileHeader{Name: file.Name, Method: file.Method})
+		if err != nil {
+			return 0, apperr.Internal(err)
+		}
+		if strings.HasSuffix(strings.ToLower(file.Name), ".rels") {
+			count, err := sanitizeRelationships(file, writer)
+			if err != nil {
+				return 0, apperr.Unprocessable("文档内部关系文件损坏")
+			}
+			removed += count
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return 0, apperr.Unprocessable("文档内部文件损坏")
+		}
+		_, copyErr := io.Copy(writer, rc)
+		closeErr := rc.Close()
+		if copyErr != nil || closeErr != nil {
+			return 0, apperr.Unprocessable("读取文档内部文件失败")
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return 0, apperr.Internal(err)
+	}
+	if err := out.Close(); err != nil {
+		return 0, apperr.Internal(err)
+	}
+	cleanup = false
+	if err := Validate(dest); err != nil {
+		_ = os.Remove(dest)
+		return 0, err
+	}
+	return removed, nil
+}
+
+func sanitizeRelationships(file *zip.File, writer io.Writer) (int, error) {
+	if file.UncompressedSize64 > maxRelationships {
+		return 0, apperr.TooLarge("文档内部关系文件过大")
+	}
+	rc, err := file.Open()
+	if err != nil {
+		return 0, err
+	}
+	defer rc.Close()
+	decoder := xml.NewDecoder(io.LimitReader(rc, maxRelationships+1))
+	encoder := xml.NewEncoder(writer)
+	removed := 0
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+		if start, ok := token.(xml.StartElement); ok && removableExternalRelationship(start.Attr) {
+			if err := decoder.Skip(); err != nil {
+				return 0, err
+			}
+			removed++
+			continue
+		}
+		if start, ok := token.(xml.StartElement); ok {
+			// The encoder derives namespace declarations from Name.Space. Passing
+			// decoded xmlns attributes through in addition produces duplicates
+			// that LibreOffice treats as a corrupt package.
+			attrs := start.Attr[:0]
+			for _, attr := range start.Attr {
+				if attr.Name.Space != "xmlns" && attr.Name.Local != "xmlns" {
+					attrs = append(attrs, attr)
+				}
+			}
+			start.Attr = attrs
+			token = start
+		}
+		if err := encoder.EncodeToken(token); err != nil {
+			return 0, err
+		}
+	}
+	if err := encoder.Flush(); err != nil {
+		return 0, err
+	}
+	return removed, nil
+}
+
+func removableExternalRelationship(attrs []xml.Attr) bool {
+	external := false
+	hyperLink := false
+	for _, attr := range attrs {
+		switch attr.Name.Local {
+		case "TargetMode":
+			external = strings.EqualFold(strings.TrimSpace(attr.Value), "External")
+		case "Type":
+			hyperLink = strings.HasSuffix(strings.ToLower(strings.TrimSpace(attr.Value)), "/hyperlink")
+		}
+	}
+	return external && !hyperLink
+}
+
 func invalidName(raw, clean string) bool {
 	if raw == "" || clean == "." || clean == ".." {
 		return true
@@ -228,7 +393,7 @@ func relsName(part string) string {
 	return path.Join(path.Dir(part), "_rels", path.Base(part)+".rels")
 }
 
-func (p *Package) validateRelationships() error {
+func (p *Package) validateRelationships(validateExternal bool) error {
 	for name, f := range p.files {
 		if !strings.HasSuffix(strings.ToLower(name), ".rels") {
 			continue
@@ -240,7 +405,7 @@ func (p *Package) validateRelationships() error {
 		for _, rel := range rels {
 			// Templates, images, OLE objects and data sources must be embedded.
 			// Clickable hyperlinks are inert and remain allowed.
-			if rel.External && !strings.HasSuffix(strings.ToLower(rel.Type), "/hyperlink") {
+			if validateExternal && rel.External && !strings.HasSuffix(strings.ToLower(rel.Type), "/hyperlink") {
 				return apperr.Unprocessable("文档包含外部引用资源，请嵌入资源后重试，或下载原件查看")
 			}
 		}

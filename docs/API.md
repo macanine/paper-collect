@@ -331,7 +331,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 `AISettings`：`analysis_enabled:boolean`（默认 false）,`ocr_provider_id:string`（当前选中的 OCRProvider；为空时选择 priority 最小的启用服务商）,`mineru_base_url:string`（旧字段，仅兼容保留）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，OCR 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`mineru_configured:boolean`（旧令牌状态）,`ocr_configured:boolean`（当前服务商令牌状态）,`updated_at`。
 
-选择自建 RapidOCR 时，DOCX 由 Go 直接解析 OOXML：正文、标题、表格、文本框、公式和分页提示进入解析缓存，嵌入的位图再逐张提交同一 OCR 接口；识别和索引共享解析缓存。常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。该 DOCX 路径不经过 LibreOffice 或 PDF 文本层，分析/搜题无需 `soffice`，也无需同步升级 RapidOCR 镜像。选择 MinerU 或 PaddleOCR 时，DOC/DOCX/PPT/PPTX 会先由 LibreOffice 转为 PDF；RapidOCR 的 DOC/PPT/PPTX 也走同一转换。页码来自显式分页或文档保存的分页提示，连续文档可能只有第 1 页；复杂公式、图片 OCR 和复杂排版不能保证与原文完全一致。
+选择自建 RapidOCR 时，DOCX 由 Go 直接解析 OOXML：正文、标题、表格、文本框、公式和分页提示进入解析缓存，嵌入的位图再逐张提交同一 OCR 接口；识别和索引共享解析缓存。外部图片、模板、OLE 对象和数据源不会读取。常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。该 DOCX 路径不经过 LibreOffice 或 PDF 文本层，分析/搜题无需 `soffice`，也无需同步升级 RapidOCR 镜像。选择 MinerU 或 PaddleOCR 时，DOC/DOCX/PPT/PPTX 会先由 LibreOffice 转为 PDF；RapidOCR 的 DOC/PPT/PPTX 也走同一转换。DOCX/PPTX 转 PDF 前会从临时副本移除可触发网络访问的外部关系并保留 inert 超链接。页码来自显式分页或文档保存的分页提示，连续文档可能只有第 1 页；复杂公式、图片 OCR 和复杂排版不能保证与原文完全一致。
 
 - `GET /ai/settings`（ai:read）：200 AISettings。
 - `PUT /ai/settings`（ai:write）：请求完整设置，`ocr_provider_id` 可选：省略=保留，空串=清除选择；`mineru_token` 为旧 MinerU 兼容字段：省略=保留，空串=清除；200 AISettings。旧版仅提交 MinerU 字段的客户端会继续工作，并自动物化/更新 MinerU OCRProvider。

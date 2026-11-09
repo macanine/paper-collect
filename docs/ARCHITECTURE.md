@@ -373,8 +373,9 @@ worker RunAnalyze
 - 解析出的独立页面图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。DOCX 生成的 PDF 预览缓存可能包含文档原有图片，应按原件保护。
 - 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。RapidOCR 的 DOCX 原生解析另含 `docx-native-v2` 版本标记，避免复用旧的公式文本缓存。
 - DOCX 原生解析由 `internal/docx` 完成：读取 `word/document.xml` 与关系表，按段落/表格/文本框/公式生成 Markdown 和逐页文本，识别显式分页与 `lastRenderedPageBreak`；常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。嵌入的 PNG/JPEG/GIF/BMP/TIFF/WebP 按引用顺序记录，最多 20 张、单张 12 MiB、总计 64 MiB，图片 OCR 失败只记录日志，不影响正文。页码依赖文档保存的分页提示，连续文档没有提示时按第 1 页处理。自建 RapidOCR 的 DOCX 不经过 LibreOffice 转换或 OCR 文字层，因此分析/搜题不依赖 `soffice`，也不依赖 RapidOCR 镜像版本同步。MinerU/PaddleOCR 接收的 DOCX，以及所有服务接收的 DOC/PPT/PPTX 会先由 LibreOffice 输出 PDF，再交给统一 OCR 协议。
+- DOCX 原生解析器不会读取外部关系目标；外部图片、模板、OLE 对象和数据源只作为关系元数据跳过。送入 LibreOffice 前，DOCX/PPTX 的临时副本会移除这些可能触发网络访问的外部关系，保留 inert 超链接，避免渲染器拉取外部资源。
 - RapidOCR 结果接收端支持 `page_no` + `texts` 旧格式，也支持有序 `text`、`inline_formula`、`display_formula` 内容块并保留 LaTeX。现有自建 OCR 进程仍只输出 `texts`，并未接入扫描件公式识别模型。
-- Office 转换由 `internal/office` 调用 LibreOffice 生成 PDF，使用独立配置、最高宏安全级别和进程级并发限制。DOCX 预览缓存改为 `renders/office-v1/<sha前两位>/<sha>.pdf`，转换任务在独立临时目录中处理并清理；Word 使用 Writer PDF 过滤器，PPT/PPTX 使用 Impress PDF 过滤器。非容器部署需自行安装 LibreOffice Writer、Impress 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
+- Office 转换由 `internal/office` 调用 LibreOffice 生成 PDF，使用独立配置、最高宏安全级别、外部关系清理和进程级并发限制。DOCX 预览缓存改为 `renders/office-v1/<sha前两位>/<sha>.pdf`，转换任务在独立临时目录中处理并清理；Word 使用 Writer PDF 过滤器，PPT/PPTX 使用 Impress PDF 过滤器。非容器部署需自行安装 LibreOffice Writer、Impress 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
 - 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
 - 自动配套采用双阈值：只处理“套卷恰好一个文件、该文件是可配套的试卷类 part、套卷 doc_type 属于试卷类”的文件；候选为其他试卷类套卷，按学科、年级、届别、地区、机构、标题和成员评分。最佳分 ≥70 且领先第二名 ≥15 时自动把整个套卷并入候选（迁移文件与专题收录、补齐空编目字段，审计 `pack.auto_pair`）；最佳分 ≥40 时只置为 `review` 并写 `pack_suggestion`/`suggested_pack` 等待人工确认。分数不足或学科/年级/届别冲突时不改动，任务仍以 succeeded 结束并记录原因。
 - 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
