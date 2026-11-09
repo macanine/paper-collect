@@ -68,7 +68,7 @@ export function UploadDialog() {
           <Alert
             type="info"
             showIcon
-            message={`已选 ${selected.length} 个文件，共 ${formatBytes(totalBytes)}`}
+            title={`已选 ${selected.length} 个文件，共 ${formatBytes(totalBytes)}`}
             description={
               <Typography.Paragraph ellipsis={{ rows: 2 }} className="!mb-0">
                 {selected.map((f) => f.relativePath).join('、')}

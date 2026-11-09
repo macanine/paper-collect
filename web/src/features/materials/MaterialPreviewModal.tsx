@@ -77,7 +77,7 @@ export function MaterialPreviewModal({ materialId, title, isWord, pdfFileName, i
       ]}</Space>}
     >
       {isWord ? <Typography.Paragraph type="secondary">Word 文档已转换为 PDF 预览，字体或排版可能与原件略有不同。</Typography.Paragraph> : null}
-      {error ? <Alert type="error" showIcon message="预览失败" description={error} action={<Button onClick={() => setAttempt((value) => value + 1)}>重试</Button>} /> : null}
+      {error ? <Alert type="error" showIcon title="预览失败" description={error} action={<Button onClick={() => setAttempt((value) => value + 1)}>重试</Button>} /> : null}
       {!url && !error ? <div style={{ textAlign: 'center', padding: 48 }}><Spin tip={isWord ? '正在生成预览，请稍候' : '正在加载预览'} size="large"><div style={{ minHeight: 60 }} /></Spin></div> : null}
       <div ref={viewport} style={{ maxHeight: '65vh', overflow: 'auto', background: url ? token.colorFillAlter : undefined, textAlign: 'center' }}>
         {url && width ? <Document
@@ -85,12 +85,12 @@ export function MaterialPreviewModal({ materialId, title, isWord, pdfFileName, i
           options={pdfOptions}
           suspense={false}
           loading={<Spin tip="正在加载 PDF"><div style={{ minHeight: 80 }} /></Spin>}
-          error={<Alert type="error" showIcon message="PDF 预览失败，请尝试下载原件" />}
+          error={<Alert type="error" showIcon title="PDF 预览失败，请尝试下载原件" />}
           onLoadSuccess={({ numPages }) => { setPageCount(numPages); setPage(Number.isSafeInteger(initialPage) ? Math.max(1, Math.min(initialPage, numPages)) : 1); }}
           onItemClick={({ pageNumber }) => setPage(pageNumber)}
           externalLinkTarget="_blank"
         >
-          <Page pageNumber={page} width={width} suspense={false} loading={<Spin tip="正在渲染页面"><div style={{ minHeight: 80 }} /></Spin>} error={<Alert type="error" showIcon message="页面渲染失败" />} />
+          <Page pageNumber={page} width={width} suspense={false} loading={<Spin tip="正在渲染页面"><div style={{ minHeight: 80 }} /></Spin>} error={<Alert type="error" showIcon title="页面渲染失败" />} />
         </Document> : null}
       </div>
     </Modal>

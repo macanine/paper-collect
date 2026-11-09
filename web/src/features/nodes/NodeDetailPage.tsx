@@ -116,7 +116,7 @@ export function NodeDetailPage() {
       />
 
       {node.is_master && node.draining ? (
-        <Alert type="info" showIcon message="主端排空中" description="主端不再执行可下放的任务，但仍会处理归档、配套和本地目录网盘的复制，这些任务只能在主端运行。" />
+        <Alert type="info" showIcon title="主端排空中" description="主端不再执行可下放的任务，但仍会处理归档、配套和本地目录网盘的复制，这些任务只能在主端运行。" />
       ) : null}
 
       <Card title="资源趋势（最近 1 小时）">
@@ -200,7 +200,7 @@ export function NodeDetailPage() {
               type="warning"
               showIcon
               style={{ marginBottom: 20 }}
-              message="配置等待从端应用"
+              title="配置等待从端应用"
               description={`从端下一次心跳会获取修订 ${node.config_revision}。如果长时间不更新，请检查节点是否在线和网络连接。`}
             />
           ) : null}

@@ -48,7 +48,7 @@ export function LoginPage() {
     <main className="login-page">
       <Card className="login-card">
         <div className="login-brand">
-          <span className="login-brand__mark">
+          <span className="login-brand__mark" aria-hidden="true">
             <BookOutlined />
           </span>
           <div>
@@ -60,7 +60,7 @@ export function LoginPage() {
           <h1>登录</h1>
           <p>使用管理员分配的账户继续</p>
         </div>
-        {errorText ? <Alert className="mb-4" type="error" showIcon message={errorText} /> : null}
+        {errorText ? <Alert className="mb-4" type="error" showIcon title={errorText} /> : null}
         <Form<LoginFormValues> layout="vertical" onFinish={onFinish} requiredMark={false} disabled={submitting}>
           <Form.Item name="username" label="用户名" rules={[{ required: true, whitespace: true, message: '请输入用户名' }]}>
             <Input prefix={<UserOutlined />} autoComplete="username" autoFocus />

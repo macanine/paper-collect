@@ -46,117 +46,125 @@ export function NetworkActivity() {
   const recent = useMemo(() => [...telemetry.samples].reverse(), [telemetry.samples]);
   const latest = telemetry.samples.at(-1);
 
-  const desktopColumns: ColumnsType<NetworkSample> = [
-    {
-      title: '时间',
-      dataIndex: 'startedAt',
-      key: 'startedAt',
-      width: 82,
-      render: (value: number) => (
-        <span className="tabular-nums text-xs text-slate-500">{clockFormatter.format(value)}</span>
-      ),
-    },
-    {
-      title: '请求',
-      key: 'request',
-      render: (_: unknown, sample) => (
-        <div className="network-request-cell">
-          <div className="flex min-w-0 items-center gap-2">
-            <Tag className="network-method">{sample.method}</Tag>
-            <Typography.Text ellipsis={{ tooltip: sample.path }} className="min-w-0 font-mono text-xs">
-              {sample.path}
-            </Typography.Text>
-          </div>
-          <span className="text-xs text-slate-500">{OPERATION_LABELS[sample.operation]}</span>
-        </div>
-      ),
-    },
-    {
-      title: '结果',
-      key: 'status',
-      width: 90,
-      render: (_: unknown, sample) => statusTag(sample),
-    },
-    {
-      title: '耗时',
-      dataIndex: 'durationMs',
-      key: 'durationMs',
-      width: 88,
-      align: 'right',
-      render: (value: number) => (
-        <span className={`tabular-nums ${value >= 3000 ? 'text-red-600' : value >= 1000 ? 'text-amber-600' : ''}`}>
-          {latencyText(value)}
-        </span>
-      ),
-    },
-    {
-      title: '数据',
-      dataIndex: 'bytes',
-      key: 'bytes',
-      width: 88,
-      align: 'right',
-      render: (value: number | undefined) => (
-        <span className="tabular-nums text-xs text-slate-500">{value === undefined ? '—' : formatBytes(value)}</span>
-      ),
-    },
-    {
-      title: '请求 ID',
-      dataIndex: 'requestId',
-      key: 'requestId',
-      width: 150,
-      render: (value: string | undefined) =>
-        value ? (
-          <div className="flex items-center gap-1">
-            <Tooltip title={value}>
-              <span className="font-mono text-xs">{shortId(value)}</span>
-            </Tooltip>
-            <CopyButton value={value} label="复制" />
-          </div>
-        ) : (
-          <span className="text-xs text-slate-400">—</span>
+  // These columns are independent of telemetry samples. Keeping them stable avoids
+  // rebuilding the entire table definition every time a request finishes.
+  const desktopColumns = useMemo<ColumnsType<NetworkSample>>(
+    () => [
+      {
+        title: '时间',
+        dataIndex: 'startedAt',
+        key: 'startedAt',
+        width: 82,
+        render: (value: number) => (
+          <span className="tabular-nums text-xs text-slate-500">{clockFormatter.format(value)}</span>
         ),
-    },
-  ];
-
-  const compactColumns: ColumnsType<NetworkSample> = [
-    {
-      title: '请求',
-      key: 'summary',
-      render: (_: unknown, sample) => (
-        <div className="compact-entity">
-          <div className="compact-entity__heading">
-            <span className="compact-entity__title flex min-w-0 items-center gap-2">
+      },
+      {
+        title: '请求',
+        key: 'request',
+        render: (_: unknown, sample) => (
+          <div className="network-request-cell">
+            <div className="flex min-w-0 items-center gap-2">
               <Tag className="network-method">{sample.method}</Tag>
-              <span className="min-w-0 break-all font-mono text-xs">{sample.path}</span>
-            </span>
-            {statusTag(sample)}
+              <Typography.Text ellipsis={{ tooltip: sample.path }} className="min-w-0 font-mono text-xs">
+                {sample.path}
+              </Typography.Text>
+            </div>
+            <span className="text-xs text-slate-500">{OPERATION_LABELS[sample.operation]}</span>
           </div>
-          <div className="compact-entity__meta">
-            <span>{clockFormatter.format(sample.startedAt)}</span>
-            <span>{OPERATION_LABELS[sample.operation]}</span>
-            <span
-              className={`tabular-nums ${sample.durationMs >= 3000 ? 'text-red-600' : sample.durationMs >= 1000 ? 'text-amber-600' : ''}`}
-            >
-              {latencyText(sample.durationMs)}
-            </span>
-            <span className="tabular-nums">
-              {sample.bytes === undefined ? '数据量未知' : formatBytes(sample.bytes)}
-            </span>
+        ),
+      },
+      {
+        title: '结果',
+        key: 'status',
+        width: 90,
+        render: (_: unknown, sample) => statusTag(sample),
+      },
+      {
+        title: '耗时',
+        dataIndex: 'durationMs',
+        key: 'durationMs',
+        width: 88,
+        align: 'right',
+        render: (value: number) => (
+          <span className={`tabular-nums ${value >= 3000 ? 'text-red-600' : value >= 1000 ? 'text-amber-600' : ''}`}>
+            {latencyText(value)}
+          </span>
+        ),
+      },
+      {
+        title: '数据',
+        dataIndex: 'bytes',
+        key: 'bytes',
+        width: 88,
+        align: 'right',
+        render: (value: number | undefined) => (
+          <span className="tabular-nums text-xs text-slate-500">{value === undefined ? '—' : formatBytes(value)}</span>
+        ),
+      },
+      {
+        title: '请求 ID',
+        dataIndex: 'requestId',
+        key: 'requestId',
+        width: 150,
+        render: (value: string | undefined) =>
+          value ? (
+            <div className="flex items-center gap-1">
+              <Tooltip title={value}>
+                <span className="font-mono text-xs">{shortId(value)}</span>
+              </Tooltip>
+              <CopyButton value={value} label="复制" />
+            </div>
+          ) : (
+            <span className="text-xs text-slate-400">—</span>
+          ),
+      },
+    ],
+    [],
+  );
+
+  const compactColumns = useMemo<ColumnsType<NetworkSample>>(
+    () => [
+      {
+        title: '请求',
+        key: 'summary',
+        render: (_: unknown, sample) => (
+          <div className="compact-entity">
+            <div className="compact-entity__heading">
+              <span className="compact-entity__title flex min-w-0 items-center gap-2">
+                <Tag className="network-method">{sample.method}</Tag>
+                <span className="min-w-0 break-all font-mono text-xs">{sample.path}</span>
+              </span>
+              {statusTag(sample)}
+            </div>
+            <div className="compact-entity__meta">
+              <span>{clockFormatter.format(sample.startedAt)}</span>
+              <span>{OPERATION_LABELS[sample.operation]}</span>
+              <span
+                className={`tabular-nums ${sample.durationMs >= 3000 ? 'text-red-600' : sample.durationMs >= 1000 ? 'text-amber-600' : ''}`}
+              >
+                {latencyText(sample.durationMs)}
+              </span>
+              <span className="tabular-nums">
+                {sample.bytes === undefined ? '数据量未知' : formatBytes(sample.bytes)}
+              </span>
+            </div>
+            <div className="compact-entity__links">
+              {sample.requestId ? (
+                <>
+                  <span className="font-mono text-xs text-slate-500">请求 ID {shortId(sample.requestId)}</span>
+                  <CopyButton value={sample.requestId} label="复制" />
+                </>
+              ) : (
+                <span className="text-xs text-slate-400">无请求 ID</span>
+              )}
+            </div>
           </div>
-          <div className="compact-entity__links">
-            {sample.requestId ? (
-              <>
-                <span className="font-mono text-xs text-slate-500">请求 ID {shortId(sample.requestId)}</span>
-                <CopyButton value={sample.requestId} label="复制" />
-              </>
-            ) : (
-              <span className="text-xs text-slate-400">无请求 ID</span>
-            )}
-          </div>
-        </div>
-      ),
-    },
-  ];
+        ),
+      },
+    ],
+    [],
+  );
 
   return (
     <>

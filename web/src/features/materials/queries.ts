@@ -15,12 +15,14 @@ export function invalidateLibrary(queryClient: QueryClient) {
   }
 }
 
-export function useMaterialsList(params: MaterialListParams, options: { poll?: boolean } = {}) {
+export function useMaterialsList(params: MaterialListParams, options: { poll?: boolean | number } = {}) {
+  const refetchInterval = options.poll === true ? 5000 : typeof options.poll === 'number' ? options.poll : false;
   return useQuery({
     queryKey: materialKeys.list(params),
     queryFn: ({ signal }) => listMaterials(params, signal),
     placeholderData: keepPreviousData,
-    refetchInterval: options.poll ? 5000 : false,
+    refetchInterval,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -30,6 +32,7 @@ export function useMaterial(id: string) {
     queryFn: () => getMaterial(id),
     enabled: id !== '',
     refetchInterval: (query) => (query.state.data?.stage === 'processing' ? 3000 : false),
+    refetchIntervalInBackground: false,
   });
 }
 

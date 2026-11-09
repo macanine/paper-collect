@@ -66,7 +66,7 @@ export function StoragePage() {
       />
 
       {attention > 0 ? (
-        <Alert type="warning" showIcon message={`有 ${attention} 个副本同步失败，可在「副本」标签页筛选「失败」查看并重试。`} />
+        <Alert type="warning" showIcon title={`有 ${attention} 个副本同步失败，可在「副本」标签页筛选「失败」查看并重试。`} />
       ) : null}
 
       <Card styles={{ body: { padding: 0 } }}>

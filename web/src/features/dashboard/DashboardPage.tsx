@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Card, List, Statistic, Tag } from 'antd';
+import { Card, Skeleton, Statistic, Tag } from 'antd';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -11,8 +11,9 @@ import {
 import { Link } from 'react-router';
 import { formatDateTime } from '../../shared/lib/format';
 import { PageHeader } from '../../shared/ui/PageHeader';
-import { InlineError } from '../../shared/ui/States';
+import { EmptyState, InlineError } from '../../shared/ui/States';
 import { UploadStatusTag } from '../../shared/ui/StatusTags';
+import { LinkButton } from '../../shared/ui/LinkButton';
 import { useAuth } from '../auth/AuthContext';
 import { Completeness, PackMeta } from '../packs/PackBadges';
 import { useLibraryStats, useRecentPacks, useRecentUploads } from './queries';
@@ -38,7 +39,11 @@ export function DashboardPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader title="工作台" />
+      <PageHeader
+        title="工作台"
+        description="查看资料整理进度、最近更新和需要你处理的事项。"
+        extra={canRead ? <LinkButton to="/library">浏览资料库</LinkButton> : null}
+      />
       {stats.error ? <InlineError error={stats.error} /> : null}
 
       {canRead ? (
@@ -64,51 +69,60 @@ export function DashboardPage() {
       <div className="dashboard-columns">
         {canRead ? (
           <Card title="最近更新的套卷" extra={<Link to="/library">全部</Link>}>
-            <List
-              loading={packs.isPending}
-              dataSource={packs.data?.items ?? []}
-              locale={{ emptyText: '还没有资料，把文件拖到页面任意位置即可上传' }}
-              renderItem={(pack) => (
-                <List.Item>
-                  <List.Item.Meta
-                    title={<Link to={`/packs/${pack.id}`}>{pack.title}</Link>}
-                    description={
-                      <span className="flex flex-wrap items-center gap-2">
-                        <PackMeta pack={pack} />
-                        <Completeness pack={pack} />
-                      </span>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
+            {packs.isPending ? (
+              <div className="dashboard-list-loading" aria-label="正在加载最近套卷">
+                <Skeleton active title={{ width: '68%' }} paragraph={{ rows: 2 }} />
+              </div>
+            ) : packs.data?.items.length ? (
+              <ul className="dashboard-list">
+                {packs.data.items.map((pack) => (
+                  <li key={pack.id} className="dashboard-list__item">
+                    <Link to={`/packs/${pack.id}`} className="dashboard-list__title">
+                      {pack.title}
+                    </Link>
+                    <div className="dashboard-list__meta">
+                      <PackMeta pack={pack} />
+                      <Completeness pack={pack} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState description="还没有资料，把文件拖到页面任意位置即可上传" />
+            )}
           </Card>
         ) : null}
         {canUpload ? (
           <Card title="最近上传" extra={<Link to="/uploads">上传记录</Link>}>
-            <List
-              loading={uploads.isPending}
-              dataSource={uploads.data?.items ?? []}
-              locale={{ emptyText: '暂无上传' }}
-              renderItem={(upload) => (
-                <List.Item extra={<UploadStatusTag status={upload.status} />}>
-                  <List.Item.Meta
-                    title={<Link to={`/uploads/${upload.id}`}>{upload.title}</Link>}
-                    description={
-                      <span>
+            {uploads.isPending ? (
+              <div className="dashboard-list-loading" aria-label="正在加载最近上传">
+                <Skeleton active title={{ width: '68%' }} paragraph={{ rows: 2 }} />
+              </div>
+            ) : uploads.data?.items.length ? (
+              <ul className="dashboard-list">
+                {uploads.data.items.map((upload) => (
+                  <li key={upload.id} className="dashboard-list__item dashboard-list__item--upload">
+                    <div className="dashboard-list__content">
+                      <Link to={`/uploads/${upload.id}`} className="dashboard-list__title">
+                        {upload.title}
+                      </Link>
+                      <span className="dashboard-list__meta-text">
                         {formatDateTime(upload.created_at)}
                         {upload.status === 'completed' ? (
                           <>
                             {' · '}新增 {upload.new_count} · 已存在 {upload.duplicate_count}
-                            {upload.skipped.length > 0 ? <Tag className="ml-2">跳过 {upload.skipped.length}</Tag> : null}
+                            {upload.skipped.length > 0 ? <Tag>跳过 {upload.skipped.length}</Tag> : null}
                           </>
                         ) : null}
                       </span>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
+                    </div>
+                    <UploadStatusTag status={upload.status} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState description="暂无上传" />
+            )}
           </Card>
         ) : null}
       </div>

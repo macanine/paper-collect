@@ -289,7 +289,7 @@ export function NodesPage() {
         onOk={() => setCreated(null)}
         okText="我已保存"
         cancelButtonProps={{ style: { display: 'none' } }}
-        maskClosable={false}
+        mask={{ closable: false }}
       >
         <Typography.Paragraph>
           令牌仅显示这一次。把下面的接入信息配置到从端后启动它；槽位、缓存上限和 OCR 服务已经由主端下发，不需要写进 env。
@@ -312,7 +312,7 @@ export function NodesPage() {
             style={{ marginTop: 12 }}
             type="warning"
             showIcon
-            message="当前地址不是 HTTPS"
+            title="当前地址不是 HTTPS"
             description="任务会携带解密后的网盘和模型密钥，从端拒绝通过明文连接非本机主端。请为主端配置 HTTPS，并把 MASTER_URL 改成 HTTPS 地址。"
           />
         ) : null}

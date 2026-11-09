@@ -185,7 +185,7 @@ export function ReplicasTab({ canWrite }: { canWrite: boolean }) {
         ) : null}
       </div>
       {!canWrite ? null : status === '' && !driveId ? (
-        <Alert className="mx-6 mb-3" type="info" showIcon message="选择「失败 / 已跳过 / 规则外 / 路径偏离」状态，可筛选出需要处理的副本并批量操作。" />
+        <Alert className="mx-6 mb-3" type="info" showIcon title="选择「失败 / 已跳过 / 规则外 / 路径偏离」状态，可筛选出需要处理的副本并批量操作。" />
       ) : null}
       {replicas.isPending ? <LoadingState /> : null}
       {replicas.isError ? <ErrorState error={replicas.error} onRetry={() => void replicas.refetch()} /> : null}

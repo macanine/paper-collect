@@ -44,6 +44,7 @@ function ReviewPanel({ material, onDone }: { material: Material; onDone: () => v
   }, [form, material.id, material.part, material.answer_start_page, pack]);
 
   const confirm = useCallback(async () => {
+    if (saving) return;
     const values = await form.validateFields();
     setSaving(true);
     try {
@@ -61,7 +62,7 @@ function ReviewPanel({ material, onDone }: { material: Material; onDone: () => v
     } finally {
       setSaving(false);
     }
-  }, [accept, form, material, message, onDone, pack, queryClient]);
+  }, [accept, form, material, message, onDone, pack, queryClient, saving]);
 
   const siblingsInReview = (pack?.members ?? []).filter((m) => m.id !== material.id && m.stage === 'review').map((m) => m.id);
   const confirmPack = async () => {
@@ -98,7 +99,7 @@ function ReviewPanel({ material, onDone }: { material: Material; onDone: () => v
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.closest('input, textarea, .ant-select') || target.isContentEditable)) return;
+      if (target && (target.closest('input, textarea, select, button, a, [role="button"], .ant-select') || target.isContentEditable)) return;
       if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey) {
         event.preventDefault();
         void confirm();
@@ -153,7 +154,7 @@ function ReviewPanel({ material, onDone }: { material: Material; onDone: () => v
           <Alert
             type="error"
             showIcon
-            message="识别失败"
+            title="识别失败"
             description={analysis.data?.error || '可以重新识别，或直接手动填写后确认。'}
             action={
               <Button size="small" icon={<ReloadOutlined />} onClick={() => void retry()}>
@@ -167,7 +168,7 @@ function ReviewPanel({ material, onDone }: { material: Material; onDone: () => v
           <Alert
             type="info"
             showIcon
-            message={
+            title={
               <span>
                 可能和《<Link to={`/packs/${material.suggested_pack.id}`}>{material.suggested_pack.title}</Link>》是一套
               </span>
@@ -240,7 +241,9 @@ export function InboxPage() {
   const [page, setPage] = useState(1);
   const query = useMaterialsList(
     { page, page_size: 50, stage, reason: (reason as Material['review_reasons'][number]) || undefined },
-    { poll: true },
+    // 待整理列表由用户主动确认，持续轮询只会让表单和列表频繁重排；
+    // 识别中/失败状态才需要低频刷新。
+    { poll: stage === 'review' ? false : 8000 },
   );
   const accept = useAcceptMaterials();
   const items = useMemo(() => query.data?.items ?? [], [query.data]);
@@ -253,8 +256,20 @@ export function InboxPage() {
     setActiveId(undefined);
   }, [stage, reason]);
 
+  useEffect(() => {
+    setChecked((current) => {
+      const next = current.filter((id) => items.some((item) => item.id === id));
+      return next.length === current.length ? current : next;
+    });
+    setActiveId((current) => (current && items.some((item) => item.id === current) ? current : items[0]?.id));
+  }, [items]);
+
   const advance = useCallback(() => {
     const index = items.findIndex((m) => m.id === active?.id);
+    if (index < 0) {
+      setActiveId(items[0]?.id);
+      return;
+    }
     const next = items[index + 1] ?? items[index - 1];
     setActiveId(next?.id);
   }, [active?.id, items]);
@@ -263,7 +278,7 @@ export function InboxPage() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.closest('input, textarea, .ant-select') || target.isContentEditable)) return;
+      if (target && (target.closest('input, textarea, select, button, a, [role="button"], .ant-select') || target.isContentEditable)) return;
       const index = items.findIndex((m) => m.id === active?.id);
       if (event.key === 'j' || event.key === 'J') setActiveId(items[Math.min(items.length - 1, index + 1)]?.id);
       if (event.key === 'k' || event.key === 'K') setActiveId(items[Math.max(0, index - 1)]?.id);
@@ -334,6 +349,9 @@ export function InboxPage() {
                 <li
                   key={m.id}
                   className={`inbox-item${m.id === active?.id ? ' is-active' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={m.id === active?.id ? 'true' : undefined}
                   onClick={() => {
                     setActiveId(m.id);
                     // 窄屏时表单在列表下方，点选后滚过去。
@@ -341,11 +359,18 @@ export function InboxPage() {
                       window.setTimeout(() => document.querySelector('.inbox-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
                     }
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setActiveId(m.id);
+                    }
+                  }}
                 >
                   {stage === 'review' ? (
                     <Checkbox
                       checked={checked.includes(m.id)}
                       onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
                       onChange={(e) => setChecked((list) => (e.target.checked ? [...list, m.id] : list.filter((id) => id !== m.id)))}
                     />
                   ) : null}

@@ -87,5 +87,5 @@ export function NotFoundPage() {
 }
 
 export function InlineError({ error }: { error: unknown }) {
-  return <Alert type="error" showIcon message={describeError(error).title} />;
+  return <Alert type="error" showIcon title={describeError(error).title} />;
 }

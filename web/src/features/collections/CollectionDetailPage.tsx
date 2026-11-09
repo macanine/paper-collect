@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { App, Button, Card, Form, Input, List, Modal, Popconfirm, Space } from 'antd';
+import { App, Button, Card, Form, Input, Modal, Popconfirm, Space } from 'antd';
 import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import { errorMessage } from '../../shared/api/errors';
@@ -87,36 +87,34 @@ export function CollectionDetailPage() {
         }
       />
       <Card styles={{ body: { padding: 0 } }}>
-        <List
-          dataSource={collection.packs}
-          locale={{ emptyText: <EmptyState description="专题还是空的：在资料库勾选套卷，点“加入专题”" /> }}
-          renderItem={(pack, index) => (
-            <List.Item
-              className="px-6"
-              actions={
-                canWrite
-                  ? [
-                      <Button key="up" type="text" size="small" aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, -1)} />,
-                      <Button key="down" type="text" size="small" aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === order.length - 1} onClick={() => move(index, 1)} />,
-                      <Button key="remove" type="link" size="small" danger onClick={() => void setOrder(order.filter((id) => id !== pack.id))}>
-                        移出
-                      </Button>,
-                    ]
-                  : undefined
-              }
-            >
-              <List.Item.Meta
-                title={<Link to={`/packs/${pack.id}`}>{pack.title}</Link>}
-                description={
-                  <span className="flex flex-wrap items-center gap-2">
+        {collection.packs.length === 0 ? (
+          <EmptyState description="专题还是空的：在资料库勾选套卷，点“加入专题”" />
+        ) : (
+          <ul className="collection-pack-list">
+            {collection.packs.map((pack, index) => (
+              <li key={pack.id} className="collection-pack-list__item">
+                <div className="collection-pack-list__content">
+                  <Link to={`/packs/${pack.id}`} className="collection-pack-list__title">
+                    {pack.title}
+                  </Link>
+                  <div className="collection-pack-list__meta">
                     <PackMeta pack={pack} />
                     <Completeness pack={pack} />
-                  </span>
-                }
-              />
-            </List.Item>
-          )}
-        />
+                  </div>
+                </div>
+                {canWrite ? (
+                  <Space size={4} className="collection-pack-list__actions">
+                    <Button type="text" size="small" aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, -1)} />
+                    <Button type="text" size="small" aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === order.length - 1} onClick={() => move(index, 1)} />
+                    <Button type="link" size="small" danger onClick={() => void setOrder(order.filter((id) => id !== pack.id))}>
+                      移出
+                    </Button>
+                  </Space>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
       <Modal open={editing} title="编辑专题" okText="保存" onOk={() => void save()} onCancel={() => setEditing(false)} confirmLoading={update.isPending} destroyOnHidden>
         <Form form={form} layout="vertical">

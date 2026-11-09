@@ -109,7 +109,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
         ]}
       />
 
-      {analysis.status === 'failed' ? <Alert type="error" showIcon className="mt-3" message={analysis.error || '识别失败'} /> : null}
+      {analysis.status === 'failed' ? <Alert type="error" showIcon className="mt-3" title={analysis.error || '识别失败'} /> : null}
 
       {analysis.status === 'succeeded' ? (
         <div className="mt-4 flex flex-col gap-3">

@@ -68,7 +68,7 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
     >
       {compact ? null : <InboxOutlined style={{ fontSize: 28, color: token.colorTextSecondary }} />}
       <span role="status">{reading ? '正在读取…' : compact ? '拖拽或选择文件' : '拖拽文件或文件夹到这里'}</span>
-      {readError ? <Alert type="error" showIcon message="无法读取文件或文件夹，请重新选择" /> : null}
+      {readError ? <Alert type="error" showIcon title="无法读取文件或文件夹，请重新选择" /> : null}
       <Space wrap>
         <Button icon={<FileAddOutlined />} disabled={busy} onClick={() => document.getElementById(fileInputId)?.click()}>
           选择文件

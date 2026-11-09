@@ -37,6 +37,7 @@ export function usePack(id: string) {
     queryFn: () => getPack(id),
     enabled: id !== '',
     refetchInterval: (query) => (query.state.data?.stage === 'processing' ? 3000 : false),
+    refetchIntervalInBackground: false,
   });
 }
 

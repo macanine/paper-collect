@@ -101,10 +101,22 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
         patch(key, { uploadId: upload.id, phase: 'uploading', knownCount: known.length, sentBytes: knownBytes });
 
         const progress = new Map<string, number>();
-        const report = () => {
+        let reportTimer: ReturnType<typeof setTimeout> | null = null;
+        let reportQueued = false;
+        const emitProgress = () => {
+          reportQueued = false;
+          reportTimer = null;
           let sent = knownBytes;
           for (const value of progress.values()) sent += value;
           patch(key, { sentBytes: sent });
+        };
+        // XHR may emit dozens of progress events per second. Batching these
+        // updates keeps the upload tray responsive without making progress
+        // look stale to the user.
+        const report = () => {
+          if (reportQueued) return;
+          reportQueued = true;
+          reportTimer = setTimeout(emitProgress, 100);
         };
         const failures: string[] = [];
         await runPool(pending, UPLOAD_CONCURRENCY, async (entry) => {
@@ -132,6 +144,10 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
             }
           }
         });
+        if (reportTimer !== null) {
+          clearTimeout(reportTimer);
+          emitProgress();
+        }
         if (failures.length > 0) {
           patch(key, { phase: 'failed', error: `${failures.length} 个文件传输失败，可在上传记录中重试。${failures[0]}` });
           return;

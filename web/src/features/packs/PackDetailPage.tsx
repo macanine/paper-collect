@@ -231,12 +231,12 @@ export function PackDetailPage() {
         }
       />
 
-      {trashed ? <Alert type="warning" showIcon message={`已于 ${formatDateTime(pack.deleted_at)} 移入回收站，30 天后自动彻底删除`} /> : null}
+      {trashed ? <Alert type="warning" showIcon title={`已于 ${formatDateTime(pack.deleted_at)} 移入回收站，30 天后自动彻底删除`} /> : null}
       {pack.is_exam && !pack.has_answers && !trashed ? (
         <Alert
           type="info"
           showIcon
-          message="这套试卷还缺答案"
+          title="这套试卷还缺答案"
           description="把答案和试卷放在同一文件夹或用相同名称上传，系统会自动配套；也可以在资料库里勾选两个套卷后“合并为一套”。"
         />
       ) : null}

@@ -40,7 +40,7 @@ export function useListSearch<K extends string>(filterKeys: readonly K[], defaul
           const next = new URLSearchParams(current);
           next.set('page', String(nextPage));
           next.set('page_size', String(nextPageSize));
-          return next;
+          return next.toString() === current.toString() ? current : next;
         },
         { replace: false },
       );
@@ -58,7 +58,7 @@ export function useListSearch<K extends string>(filterKeys: readonly K[], defaul
             else next.set(key, value);
           }
           next.set('page', '1');
-          return next;
+          return next.toString() === current.toString() ? current : next;
         },
         { replace: true },
       );

@@ -37,7 +37,7 @@ function BlobPreview({ target, onClose }: { target: Target; onClose: () => void 
   }, [target.id]);
   return (
     <Modal open title={target.title} footer={null} width={target.mediaType.startsWith('audio/') ? 520 : 960} onCancel={onClose} destroyOnHidden>
-      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {error ? <Alert type="error" showIcon title={error} /> : null}
       {!url && !error ? <Spin /> : null}
       {url && target.mediaType.startsWith('image/') ? <img src={url} alt={target.title} className="max-w-full" /> : null}
       {url && target.mediaType.startsWith('audio/') ? <audio src={url} controls className="w-full" /> : null}

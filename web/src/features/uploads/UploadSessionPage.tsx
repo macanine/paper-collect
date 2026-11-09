@@ -262,7 +262,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
         <Alert
           type="warning"
           showIcon
-          message={`有 ${stats.missingCount} 个文件需要重新选择`}
+          title={`有 ${stats.missingCount} 个文件需要重新选择`}
           description={<FileSelector inputId="resume-upload" compact onSelected={handleAttach} />}
         />
       ) : null}
@@ -368,7 +368,7 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
             className="mt-3"
             type="warning"
             showIcon
-            message="以下文件格式不支持，未归档"
+            title="以下文件格式不支持，未归档"
             description={<Typography.Paragraph className="!mb-0">{upload.skipped.join('、')}</Typography.Paragraph>}
           />
         ) : null}
@@ -378,7 +378,7 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
 
   return (
     <Card title="归档任务">
-      {jobQueryError ? <Alert type="error" showIcon message="任务状态加载失败" className="mb-3" /> : null}
+      {jobQueryError ? <Alert type="error" showIcon title="任务状态加载失败" className="mb-3" /> : null}
       <Descriptions
         size="small"
         column={{ xs: 1, md: 3 }}
@@ -395,7 +395,7 @@ function SubmittedCard({ upload, jobId, jobPending, jobQueryError, jobStatus, jo
           className="mt-3"
           type="error"
           showIcon
-          message="归档失败"
+          title="归档失败"
           description={jobFailure || undefined}
           action={
             canRetryJob ? (

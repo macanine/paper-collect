@@ -11,6 +11,7 @@ export function useLibraryStats(enabled: boolean) {
     queryFn: ({ signal }) => getLibraryStats(signal),
     enabled,
     refetchInterval: REFRESH_MS,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -20,6 +21,7 @@ export function useRecentPacks(enabled: boolean) {
     queryFn: ({ signal }) => listPacks({ page: 1, page_size: 8 }, signal),
     enabled,
     refetchInterval: REFRESH_MS,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -29,5 +31,6 @@ export function useRecentUploads(enabled: boolean) {
     queryFn: ({ signal }) => listUploads({ page: 1, page_size: 6 }, signal),
     enabled,
     refetchInterval: REFRESH_MS,
+    refetchIntervalInBackground: false,
   });
 }

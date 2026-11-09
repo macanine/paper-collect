@@ -133,11 +133,11 @@ export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], c
       confirmLoading={submitting}
       destroyOnHidden
       width={720}
-      maskClosable={!submitting}
+      mask={{ closable: !submitting }}
     >
       <Form<ProviderFormValues> form={form} layout="vertical" requiredMark="optional" disabled={submitting}>
-        {kind === 'onedrive' ? <Alert className="mb-4" type="info" showIcon message="连接国际版 OneDrive" description="共享文件夹须对授权账号开放写入；不填链接时使用自己的 OneDrive。" /> : null}
-        {kind === 's3' ? <Alert className="mb-4" type="info" showIcon message="分享链接在设定时间后失效，可在资料详情中重新生成。" /> : null}
+        {kind === 'onedrive' ? <Alert className="mb-4" type="info" showIcon title="连接国际版 OneDrive" description="共享文件夹须对授权账号开放写入；不填链接时使用自己的 OneDrive。" /> : null}
+        {kind === 's3' ? <Alert className="mb-4" type="info" showIcon title="分享链接在设定时间后失效，可在资料详情中重新生成。" /> : null}
         <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <Form.Item
             name="name"
@@ -181,9 +181,9 @@ export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], c
         </div>
 
         {canRoute && kind !== 'local' ? (
-          <div className="mb-5 rounded-md border border-solid border-[#D9D9D9] bg-[#FAFAFA] p-4">
+          <div className="mb-5 rounded-md border border-solid border-slate-200 bg-gray-50 p-4">
             <div className="mb-3 text-sm font-semibold">上传节点路由</div>
-            <div className="mb-3 text-xs text-[#595959]">优先级数字越小越先上传。首选节点不可用时，优先策略会自动切换到下一个节点；独占策略会保持等待。</div>
+            <div className="mb-3 text-xs text-slate-500">优先级数字越小越先上传。首选节点不可用时，优先策略会自动切换到下一个节点；独占策略会保持等待。</div>
             <Form.Item name="route_mode" label="分配策略">
               <Select<DriveRouteMode>
                 options={[
@@ -265,7 +265,7 @@ export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], c
             className="mb-4"
             type={oneDriveMode === 'openlist' ? 'warning' : 'info'}
             showIcon
-            message={oneDriveMode === 'openlist' ? '使用现成应用获取刷新令牌' : '使用自己的微软应用'}
+            title={oneDriveMode === 'openlist' ? '使用现成应用获取刷新令牌' : '使用自己的微软应用'}
             description={oneDriveMode === 'openlist' ? (
               <div className="flex flex-col gap-2">
                 <span>打开 OpenList 授权页面，选择 OneDrive 个人版或企业版，勾选“使用 OpenList 提供的参数”，点击“获取 Token”并登录微软账号。将页面中的刷新令牌粘贴到下方。</span>

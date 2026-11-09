@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { memo, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { App as AntdApp, Avatar, Badge, Button, Drawer, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
@@ -128,11 +128,11 @@ interface SidebarContentProps {
   onNavigate?: () => void;
 }
 
-function SidebarContent({ sections, activeKey, reviewCount, onNavigate }: SidebarContentProps) {
+const SidebarContent = memo(function SidebarContent({ sections, activeKey, reviewCount, onNavigate }: SidebarContentProps) {
   return (
     <div className="app-sidebar__inner">
       <Link to="/" className="app-brand" onClick={onNavigate} aria-label="返回仪表盘">
-        <span className="app-brand__mark">
+        <span className="app-brand__mark" aria-hidden="true">
           <BookOutlined />
         </span>
         <span className="app-brand__copy">
@@ -155,9 +155,13 @@ function SidebarContent({ sections, activeKey, reviewCount, onNavigate }: Sideba
                     aria-current={active ? 'page' : undefined}
                     onClick={onNavigate}
                   >
-                    <span className="app-nav__icon">{item.icon}</span>
+                    <span className="app-nav__icon" aria-hidden="true">{item.icon}</span>
                     <span className="app-nav__label">{item.label}</span>
-                    {item.badge === 'review' && reviewCount > 0 ? <Badge count={reviewCount} size="small" overflowCount={999} /> : null}
+                    {item.badge === 'review' && reviewCount > 0 ? (
+                      <span className="app-nav__badge" aria-label={`${reviewCount} 个待整理文件`}>
+                        <Badge count={reviewCount} size="small" overflowCount={999} />
+                      </span>
+                    ) : null}
                   </Link>
                 );
               })}
@@ -167,9 +171,9 @@ function SidebarContent({ sections, activeKey, reviewCount, onNavigate }: Sideba
       </nav>
     </div>
   );
-}
+});
 
-function HeaderUploadButton() {
+const HeaderUploadButton = memo(function HeaderUploadButton() {
   const { openDialog } = useUploads();
   return (
     <span className="app-header__upload">
@@ -178,7 +182,7 @@ function HeaderUploadButton() {
       </Button>
     </span>
   );
-}
+});
 
 function AuthenticatedAppLayout() {
   const { can } = useAuth();
@@ -234,15 +238,18 @@ function AppFrame() {
     }
   };
 
-  const accountItems: MenuProps['items'] = [
-    {
-      key: 'identity',
-      disabled: true,
-      label: user ? `${user.username} · ${USER_ROLE_LABELS[user.role]}` : '当前账户',
-    },
-    { type: 'divider' },
-    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
-  ];
+  const accountItems = useMemo<MenuProps['items']>(
+    () => [
+      {
+        key: 'identity',
+        disabled: true,
+        label: user ? `${user.username} · ${USER_ROLE_LABELS[user.role]}` : '当前账户',
+      },
+      { type: 'divider' },
+      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
+    ],
+    [user],
+  );
 
   return (
     <div className="app-shell">

@@ -134,7 +134,7 @@ export function ApiKeysPage() {
         }
       />
 
-      <Alert type="info" showIcon message="密钥默认长期有效，可直接用于 API 和 MCP。" description="在请求头填写 Authorization: Bearer 加上密钥；有效权限由授权范围和所属用户的角色共同决定。管理权限可用于创建用户或密钥。" />
+      <Alert type="info" showIcon title="密钥默认长期有效，可直接用于 API 和 MCP。" description="在请求头填写 Authorization: Bearer 加上密钥；有效权限由授权范围和所属用户的角色共同决定。管理权限可用于创建用户或密钥。" />
 
       {query.isPending ? <LoadingState /> : null}
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : null}
@@ -201,7 +201,7 @@ export function ApiKeysPage() {
         onOk={() => setCreated(null)}
         okText="我已保存"
         cancelButtonProps={{ style: { display: 'none' } }}
-        maskClosable={false}
+        mask={{ closable: false }}
       >
         <Typography.Paragraph>密钥仅在创建时显示一次。请妥善保存，随后可直接作为 Bearer 凭据使用。</Typography.Paragraph>
         <div className="mb-3 rounded-md bg-gray-50 p-3 font-mono text-sm break-all">{created?.secret}</div>

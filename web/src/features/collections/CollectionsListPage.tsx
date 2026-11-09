@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { App, Button, Card, Form, Input, List, Modal } from 'antd';
+import { App, Button, Card, Form, Input, Modal, Pagination, Skeleton } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router';
 import { errorMessage } from '../../shared/api/errors';
@@ -53,17 +53,39 @@ export function CollectionsListPage() {
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : (
         <Card styles={{ body: { padding: 0 } }}>
-          <List
-            loading={query.isPending}
-            dataSource={query.data?.items ?? []}
-            locale={{ emptyText: <EmptyState description="还没有专题" /> }}
-            pagination={{ current: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: list.setPage, hideOnSinglePage: true }}
-            renderItem={(c) => (
-              <List.Item className="px-6" extra={<span className="table-subtext">{formatDateTime(c.updated_at)}</span>}>
-                <List.Item.Meta title={<Link to={`/collections/${c.id}`}>{c.title}</Link>} description={`${c.pack_count} 个套卷${c.description ? ` · ${c.description}` : ''}`} />
-              </List.Item>
-            )}
-          />
+          {query.isPending ? (
+            <div className="collection-list-loading" aria-label="正在加载专题">
+              <Skeleton active title={{ width: '52%' }} paragraph={{ rows: 2 }} />
+            </div>
+          ) : query.data?.items.length ? (
+            <>
+              <ul className="collection-list">
+                {query.data.items.map((collection) => (
+                  <li key={collection.id} className="collection-list__item">
+                    <div className="collection-list__content">
+                      <Link to={`/collections/${collection.id}`} className="collection-list__title">
+                        {collection.title}
+                      </Link>
+                      <span className="collection-list__description">
+                        {collection.pack_count} 个套卷{collection.description ? ` · ${collection.description}` : ''}
+                      </span>
+                    </div>
+                    <span className="table-subtext">{formatDateTime(collection.updated_at)}</span>
+                  </li>
+                ))}
+              </ul>
+              <Pagination
+                className="collection-list__pagination"
+                current={list.page}
+                pageSize={list.pageSize}
+                total={query.data.total}
+                onChange={list.setPage}
+                hideOnSinglePage
+              />
+            </>
+          ) : (
+            <EmptyState description="还没有专题" />
+          )}
         </Card>
       )}
       <Modal open={open} title="新建专题" okText="创建" onOk={() => void submit()} onCancel={() => setOpen(false)} confirmLoading={create.isPending} destroyOnHidden>

@@ -247,7 +247,7 @@ export function JobsListPage() {
         <Alert
           type="info"
           showIcon
-          message="正在查看关联任务"
+          title="正在查看关联任务"
           description={
             <span>
               {list.filters.material_id ? `资料 ${list.filters.material_id.slice(0, 8)}` : ''}

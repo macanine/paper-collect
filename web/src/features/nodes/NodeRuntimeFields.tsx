@@ -57,7 +57,7 @@ export function NodeRuntimeFields({ providers, providersLoading, providersError 
           <Alert
             type="warning"
             showIcon
-            message="OCR 服务列表加载失败"
+            title="OCR 服务列表加载失败"
             description="先修复 AI 解析配置页，再保存节点，避免覆盖现有 OCR 选择。"
           />
         ) : (
