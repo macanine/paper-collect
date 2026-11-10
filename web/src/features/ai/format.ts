@@ -1,4 +1,4 @@
-import type { AISuggestions, AnalysisStatus } from '../../shared/api/types';
+import type { AICard, AnalysisStatus } from '../../shared/api/types';
 import { ANALYSIS_STATUS_LABELS } from '../../shared/lib/labels';
 
 // 纯展示辅助：把分析状态与置信度转成可测试的文案。
@@ -13,9 +13,10 @@ export function analysisStatusCopy(status: AnalysisStatus, error: string): strin
   return ANALYSIS_STATUS_LABELS[status];
 }
 
-export function suggestionFieldCount(suggestions: AISuggestions): number {
-  return Object.entries(suggestions).filter(([key, value]) => {
-    if (key === 'uncertain') return false;
+/** 阅读记录中已填写的字段数（不含证据与内部标记）。 */
+export function cardFieldCount(card: AICard): number {
+  return Object.entries(card).filter(([key, value]) => {
+    if (key === 'evidence' || key === 'metadata_only' || key === 'fingerprint') return false;
     if (Array.isArray(value)) return value.length > 0;
     return value !== undefined && value !== '' && value !== 0;
   }).length;

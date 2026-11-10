@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { MaterialUpdate, ReviewReason, Stage } from '../../shared/api/types';
+import type { MaterialUpdate, Stage } from '../../shared/api/types';
 import { acceptMaterials, getMaterial, listReviewPacks, updateMaterial } from './api';
 
 export const materialKeys = {
@@ -7,14 +7,14 @@ export const materialKeys = {
   detail: (id: string) => ['materials', 'detail', id] as const,
 };
 
-/** 资料、套卷、待确认和仪表盘共享同一批数据，任一写操作后一起刷新。 */
+/** 资料、套卷、需关注和仪表盘共享同一批数据，任一写操作后一起刷新。 */
 export function invalidateLibrary(queryClient: QueryClient) {
   for (const key of ['materials', 'packs', 'collections', 'dashboard', 'uploads']) {
     void queryClient.invalidateQueries({ queryKey: [key] });
   }
 }
 
-export function useReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: ReviewReason }, options: { poll?: boolean | number } = {}) {
+export function useReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: string }, options: { poll?: boolean | number } = {}) {
   const refetchInterval = options.poll === true ? 5000 : typeof options.poll === 'number' ? options.poll : false;
   return useQuery({
     queryKey: ['materials', 'review-packs', params],
@@ -46,7 +46,7 @@ export function useUpdateMaterial(id: string) {
 export function useAcceptMaterials() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ ids, acceptSuggestion }: { ids: string[]; acceptSuggestion?: boolean }) => acceptMaterials(ids, acceptSuggestion),
+    mutationFn: ({ ids }: { ids: string[] }) => acceptMaterials(ids),
     onSuccess: () => invalidateLibrary(queryClient),
   });
 }

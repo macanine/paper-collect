@@ -59,7 +59,7 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 		filter.SyncStatus = status
 	}
 	if reason := c.Query("reason"); reason != "" {
-		if !isOneOf(reason, model.ReviewLowConfidence, model.ReviewPackSuggestion, model.ReviewDuplicate, model.ReviewAnalysisFailed, model.ReviewManual) {
+		if !validReason(reason) {
 			respondError(c, apperr.Validation("reason 不在允许范围内"))
 			return
 		}
@@ -90,14 +90,14 @@ func (s *Server) handleListReviewPacks(c *gin.Context) {
 	}
 	stage := c.Query("stage")
 	if stage == "" {
-		stage = model.StageReview
+		stage = model.StageAttention
 	}
 	if !isOneOf(stage, model.MaterialStages...) {
 		respondError(c, apperr.Validation("stage 不在允许范围内"))
 		return
 	}
 	reason := c.Query("reason")
-	if reason != "" && !isOneOf(reason, model.ReviewLowConfidence, model.ReviewPackSuggestion, model.ReviewDuplicate, model.ReviewAnalysisFailed, model.ReviewManual) {
+	if reason != "" && !validReason(reason) {
 		respondError(c, apperr.Validation("reason 不在允许范围内"))
 		return
 	}
@@ -116,8 +116,8 @@ func (s *Server) handleLibraryStats(c *gin.Context) {
 		return
 	}
 	s.respondData(c, http.StatusOK, libraryStatsDTO{
-		Packs: counts.Packs, Files: counts.Files, Processing: counts.Processing, Review: counts.Review,
-		Ready: counts.Ready, Failed: counts.Failed, MissingAnswers: counts.MissingAnswers, Trashed: counts.Trashed,
+		Packs: counts.Packs, Files: counts.Files, Processing: counts.Processing, WaitingAI: counts.WaitingAI,
+		NeedsAttention: counts.NeedsAttention, Ready: counts.Ready, MissingAnswers: counts.MissingAnswers, Trashed: counts.Trashed,
 		Archived: counts.Archived, Missing: counts.Missing, WaitingCatalog: counts.WaitingCatalog, Syncing: counts.Syncing, Synced: counts.Synced, Attention: counts.Attention, NotRequired: counts.NotRequired,
 	})
 }
@@ -153,14 +153,13 @@ func (s *Server) handlePatchMaterial(c *gin.Context) {
 
 func (s *Server) handleAcceptMaterials(c *gin.Context) {
 	var req struct {
-		IDs              []string `json:"ids"`
-		AcceptSuggestion bool     `json:"accept_suggestion"`
+		IDs []string `json:"ids"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	n, err := s.svc.AcceptMaterials(c.Request.Context(), principal(c), req.IDs, req.AcceptSuggestion)
+	n, err := s.svc.AcceptMaterials(c.Request.Context(), principal(c), req.IDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -286,4 +285,18 @@ func (s *Server) handleDeleteMaterial(c *gin.Context) {
 func isTrueQuery(c *gin.Context, name string) bool {
 	value := strings.ToLower(strings.TrimSpace(c.Query(name)))
 	return value == "true" || value == "1"
+}
+
+// validReason accepts an attention reason or check code: lowercase words
+// joined by underscores, e.g. ai_failed or duplicate_role.
+func validReason(reason string) bool {
+	if len(reason) == 0 || len(reason) > 40 {
+		return false
+	}
+	for _, r := range reason {
+		if !(r >= 'a' && r <= 'z') && r != '_' {
+			return false
+		}
+	}
+	return true
 }

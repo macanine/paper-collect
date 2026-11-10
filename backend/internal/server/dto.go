@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/catalogai"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/service"
 	"github.com/nic/paper-collect/backend/internal/storage"
@@ -39,9 +40,9 @@ type libraryStatsDTO struct {
 	Packs          int64 `json:"packs"`
 	Files          int64 `json:"files"`
 	Processing     int64 `json:"processing"`
-	Review         int64 `json:"review"`
+	WaitingAI      int64 `json:"waiting_ai"`
+	NeedsAttention int64 `json:"needs_attention"`
 	Ready          int64 `json:"ready"`
-	Failed         int64 `json:"failed"`
 	MissingAnswers int64 `json:"missing_answers"`
 	Trashed        int64 `json:"trashed"`
 	WaitingCatalog int64 `json:"waiting_catalog"`
@@ -71,8 +72,9 @@ type materialDTO struct {
 	FileName        string        `json:"file_name"`
 	OriginalName    string        `json:"original_name"`
 	Stage           string        `json:"stage"`
-	ReviewReasons   []string      `json:"review_reasons"`
-	SuggestedPack   *packBriefDTO `json:"suggested_pack"`
+	AIStep          string        `json:"ai_step"`
+	Attention       []string      `json:"attention_reasons"`
+	PartLocked      bool          `json:"part_locked"`
 	Status          string        `json:"status"`
 	SyncStatus      string        `json:"sync_status"`
 	SyncPlannedAt   *time.Time    `json:"sync_planned_at"`
@@ -99,10 +101,9 @@ type materialDetailDTO struct {
 }
 
 type reviewPackItemDTO struct {
-	ID            string        `json:"id"`
-	Stage         string        `json:"stage"`
-	ReviewReasons []string      `json:"review_reasons"`
-	SuggestedPack *packBriefDTO `json:"suggested_pack"`
+	ID        string   `json:"id"`
+	Stage     string   `json:"stage"`
+	Attention []string `json:"attention_reasons"`
 }
 
 type reviewPackDTO struct {
@@ -132,8 +133,7 @@ type packMemberDTO struct {
 type packDTO struct {
 	ID            string          `json:"id"`
 	Title         string          `json:"title"`
-	TitleLocked   bool            `json:"title_locked"`
-	CatalogLocked bool            `json:"catalog_locked"`
+	LockedFields  []string        `json:"locked_fields"`
 	DocType       string          `json:"doc_type"`
 	SubjectCodes  []string        `json:"subject_codes"`
 	Grade         string          `json:"grade"`
@@ -141,6 +141,7 @@ type packDTO struct {
 	Cohort        int             `json:"cohort"`
 	Region        string          `json:"region"`
 	Organization  string          `json:"organization"`
+	OrgID         string          `json:"organization_id"`
 	ExamDate      string          `json:"exam_date"`
 	ExamName      string          `json:"exam_name"`
 	Chapter       string          `json:"chapter"`
@@ -374,12 +375,9 @@ func toMaterial(v service.MaterialView) materialDTO {
 	}
 	out := materialDTO{
 		ID: m.ID, PackID: m.PackID, Position: m.Position, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
-		Title: m.Title, FileName: m.FileName, OriginalName: m.OriginalName, Stage: m.Stage, ReviewReasons: reasons,
-		Status: m.Status, SyncStatus: m.SyncStatus, SyncPlannedAt: m.SyncPlannedAt, MediaType: m.MediaType, SizeBytes: m.SizeBytes, SHA256: m.SHA256,
+		Title: m.Title, FileName: m.FileName, OriginalName: m.OriginalName, Stage: m.Stage, AIStep: m.AIStep,
+		Attention: reasons, PartLocked: m.PartLocked, Status: m.Status, SyncStatus: m.SyncStatus, SyncPlannedAt: m.SyncPlannedAt, MediaType: m.MediaType, SizeBytes: m.SizeBytes, SHA256: m.SHA256,
 		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
-	}
-	if v.Suggested != nil {
-		out.SuggestedPack = &packBriefDTO{ID: v.Suggested.ID, Title: v.Suggested.Title}
 	}
 	if v.Pack != nil {
 		p := toPack(*v.Pack)
@@ -407,11 +405,7 @@ func toReviewPack(v service.ReviewPackView) reviewPackDTO {
 		if reasons == nil {
 			reasons = []string{}
 		}
-		var suggested *packBriefDTO
-		if item.Suggested != nil {
-			suggested = &packBriefDTO{ID: item.Suggested.ID, Title: item.Suggested.Title}
-		}
-		items = append(items, reviewPackItemDTO{ID: item.ID, Stage: item.Stage, ReviewReasons: reasons, SuggestedPack: suggested})
+		items = append(items, reviewPackItemDTO{ID: item.ID, Stage: item.Stage, Attention: reasons})
 	}
 	return reviewPackDTO{Pack: toPack(v.Pack), Items: items}
 }
@@ -445,9 +439,9 @@ func toPack(v service.PackView) packDTO {
 		}
 	}
 	return packDTO{
-		ID: p.ID, Title: p.Title, TitleLocked: p.TitleLocked, CatalogLocked: p.CatalogLocked, DocType: p.DocType,
+		ID: p.ID, Title: p.Title, LockedFields: model.DecodeStrings(p.LockedJSON), DocType: p.DocType,
 		SubjectCodes: subjects, Grade: p.Grade, Term: p.Term, Cohort: p.Cohort, Region: p.Region,
-		Organization: p.Organization, ExamDate: p.ExamDate, ExamName: p.ExamName, Chapter: p.Chapter, Tags: tags,
+		Organization: p.Organization, OrgID: p.OrganizationID, ExamDate: p.ExamDate, ExamName: p.ExamName, Chapter: p.Chapter, Tags: tags,
 		Description: p.Description, Stage: v.Stage, IsExam: v.IsExam, HasQuestions: v.HasQuestions,
 		HasAnswers: v.HasAnswers, HasSheet: v.HasSheet, Members: members, Collections: collections,
 		DeletedAt: deleted, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
@@ -603,13 +597,11 @@ type aiProviderDTO struct {
 }
 
 type aiSettingsDTO struct {
-	AnalysisEnabled bool      `json:"analysis_enabled"`
-	OCRProviderID   string    `json:"ocr_provider_id"`
-	MaxPages        int       `json:"max_pages"`
-	MaxImages       int       `json:"max_images"`
-	AutoAccept      float64   `json:"auto_accept_confidence"`
-	OCRConfigured   bool      `json:"ocr_configured"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	OCRProviderID string    `json:"ocr_provider_id"`
+	MaxPages      int       `json:"max_pages"`
+	MaxImages     int       `json:"max_images"`
+	OCRConfigured bool      `json:"ocr_configured"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type ocrProviderDTO struct {
@@ -625,22 +617,48 @@ type ocrProviderDTO struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
-type materialAnalysisDTO struct {
-	ID              string              `json:"id"`
+type materialCardDTO struct {
 	MaterialID      string              `json:"material_id"`
 	Status          string              `json:"status"`
-	ProviderID      string              `json:"provider_id"`
 	ProviderName    string              `json:"provider_name"`
 	Model           string              `json:"model"`
 	PageCount       int                 `json:"page_count"`
-	ImageCount      int                 `json:"image_count"`
-	Confidence      float64             `json:"confidence"`
-	Suggestions     service.Suggestions `json:"suggestions"`
+	MetadataOnly    bool                `json:"metadata_only"`
+	Card            catalogai.Card      `json:"card"`
+	Problems        []catalogai.Problem `json:"problems"`
 	MarkdownExcerpt string              `json:"markdown_excerpt"`
 	Error           string              `json:"error"`
-	AppliedAt       *time.Time          `json:"applied_at"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
+	UpdatedAt       *time.Time          `json:"updated_at"`
+}
+
+type packAIDTO struct {
+	Status       string                    `json:"status"`
+	ProviderName string                    `json:"provider_name"`
+	Model        string                    `json:"model"`
+	Revision     int                       `json:"revision"`
+	Decision     *catalogai.Decision       `json:"decision"`
+	Problems     []catalogai.Problem       `json:"problems"`
+	Error        string                    `json:"error"`
+	DecidedAt    *time.Time                `json:"decided_at"`
+	Cards        map[string]catalogai.Card `json:"cards"`
+}
+
+type entityDTO struct {
+	ID      string   `json:"id"`
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
+	Region  string   `json:"region"`
+	Source  string   `json:"source"`
+	Locked  bool     `json:"locked"`
+	Aliases []string `json:"aliases"`
+	Usage   int64    `json:"usage"`
+}
+
+type rerunDTO struct {
+	Materials      int64 `json:"materials"`
+	Packs          int64 `json:"packs"`
+	EstimatedCalls int64 `json:"estimated_calls"`
+	Applied        bool  `json:"applied"`
 }
 
 func toAIProvider(v service.AIProviderView) aiProviderDTO {
@@ -659,9 +677,8 @@ func toAIProvider(v service.AIProviderView) aiProviderDTO {
 
 func toAISettings(v service.AISettingsView) aiSettingsDTO {
 	return aiSettingsDTO{
-		AnalysisEnabled: v.Settings.AnalysisEnabled,
-		OCRProviderID:   v.Settings.OCRProviderID,
-		MaxPages:        v.Settings.MaxPages, MaxImages: v.Settings.MaxImages, AutoAccept: v.Settings.AutoAcceptConfidence,
+		OCRProviderID: v.Settings.OCRProviderID,
+		MaxPages:      v.Settings.MaxPages, MaxImages: v.Settings.MaxImages,
 		OCRConfigured: v.OCRConfigured,
 		UpdatedAt:     v.Settings.UpdatedAt,
 	}
@@ -677,15 +694,44 @@ func toOCRProvider(v service.OCRProviderView) ocrProviderDTO {
 	}
 }
 
-func toMaterialAnalysis(v service.AnalysisView) materialAnalysisDTO {
-	return materialAnalysisDTO{
-		ID: v.Analysis.ID, MaterialID: v.Analysis.MaterialID, Status: v.Analysis.Status,
-		ProviderID: v.Analysis.ProviderID, ProviderName: v.ProviderName, Model: v.Analysis.Model,
-		PageCount: v.Analysis.PageCount, ImageCount: v.Analysis.ImageCount,
-		Confidence: v.Confidence, Suggestions: v.Suggestions, MarkdownExcerpt: v.MarkdownExcerpt,
-		Error: v.Analysis.Error, AppliedAt: v.Analysis.AppliedAt,
-		CreatedAt: v.Analysis.CreatedAt, UpdatedAt: v.Analysis.UpdatedAt,
+func toMaterialCard(v service.MaterialCardView) materialCardDTO {
+	problems := v.Problems
+	if problems == nil {
+		problems = []catalogai.Problem{}
 	}
+	return materialCardDTO{
+		MaterialID: v.MaterialID, Status: v.Status, ProviderName: v.ProviderName, Model: v.Model,
+		PageCount: v.PageCount, MetadataOnly: v.MetadataOnly, Card: v.Card, Problems: problems,
+		MarkdownExcerpt: v.MarkdownExcerpt, Error: v.Error, UpdatedAt: v.UpdatedAt,
+	}
+}
+
+func toPackAI(v service.PackAIView) packAIDTO {
+	out := packAIDTO{Status: "none", Problems: v.Problems, Cards: v.Cards}
+	if out.Problems == nil {
+		out.Problems = []catalogai.Problem{}
+	}
+	if out.Cards == nil {
+		out.Cards = map[string]catalogai.Card{}
+	}
+	if d := v.Decision; d != nil {
+		out.Status, out.Model, out.Revision, out.Error, out.DecidedAt = d.Status, d.Model, d.Revision, d.Error, d.DecidedAt
+		out.ProviderName = v.ProviderName
+		if d.Status == model.AnalysisSucceeded {
+			parsed := v.Parsed
+			out.Decision = &parsed
+		}
+	}
+	return out
+}
+
+func toEntity(v service.EntityView) entityDTO {
+	aliases := v.Aliases
+	if aliases == nil {
+		aliases = []string{}
+	}
+	e := v.Entity
+	return entityDTO{ID: e.ID, Kind: e.Kind, Name: e.Name, Region: e.Region, Source: e.Source, Locked: e.Locked, Aliases: aliases, Usage: v.Usage}
 }
 
 type searchHitDTO struct {

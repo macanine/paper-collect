@@ -48,12 +48,31 @@ export type Grade = (typeof GRADES)[number];
 export const TERMS = ['', 'first', 'second'] as const;
 export type Term = (typeof TERMS)[number];
 
-/** 用户唯一需要关心的整理状态。 */
-export const STAGES = ['processing', 'review', 'ready', 'failed'] as const;
+/** 用户唯一需要关心的整理状态：编目全部由 AI 决定，只有 attention 需要人工处理。 */
+export const STAGES = ['processing', 'waiting_ai', 'attention', 'ready'] as const;
 export type Stage = (typeof STAGES)[number];
 
-export const REVIEW_REASONS = ['low_confidence', 'pack_suggestion', 'duplicate_suspect', 'analysis_failed', 'manual'] as const;
-export type ReviewReason = (typeof REVIEW_REASONS)[number];
+/** AI 流程中的步骤：阅读文件 → 分组成套 → 确定编目。 */
+export type AIStep = '' | 'read' | 'group' | 'decide';
+
+/** 需关注原因：流程原因或校验代码（如 duplicate_role:files）。 */
+export const ATTENTION_REASONS = [
+  'ai_failed',
+  'group_unverified',
+  'metadata_only',
+  'duplicate_role',
+  'missing_file',
+  'unknown_file',
+  'duplicate_file',
+  'role_invalid',
+  'answer_page',
+  'doc_type_missing',
+  'doc_type_invalid',
+  'subjects_missing',
+  'grade_missing',
+  'not_json',
+] as const;
+export type AttentionReason = string;
 
 /** 归档状态：原件是否安全存放在本机 CAS。 */
 export const MATERIAL_STATUSES = ['archived', 'missing'] as const;
@@ -78,7 +97,7 @@ export type Verification = (typeof VERIFICATIONS)[number];
 const SHARE_STATUSES = ['pending', 'ready', 'unsupported', 'failed'] as const;
 export type ShareStatus = (typeof SHARE_STATUSES)[number];
 
-export const JOB_KINDS = ['ingest', 'replicate', 'analyze', 'index', 'group'] as const;
+export const JOB_KINDS = ['ingest', 'replicate', 'analyze', 'index', 'group', 'decide', 'entity'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'succeeded', 'failed'] as const;
@@ -125,9 +144,9 @@ export interface LibraryStats {
   packs: number;
   files: number;
   processing: number;
-  review: number;
+  waiting_ai: number;
+  needs_attention: number;
   ready: number;
-  failed: number;
   missing_answers: number;
   trashed: number;
   waiting_catalog: number;
@@ -184,8 +203,8 @@ export interface PackMember {
 export interface Pack {
   id: string;
   title: string;
-  title_locked: boolean;
-  catalog_locked: boolean;
+  /** 人工设定的字段，AI 不再改动。 */
+  locked_fields: string[];
   doc_type: DocType | '';
   subject_codes: SubjectCode[];
   grade: Grade;
@@ -193,6 +212,7 @@ export interface Pack {
   cohort: number;
   region: string;
   organization: string;
+  organization_id: string;
   exam_date: string;
   exam_name: string;
   chapter: string;
@@ -251,8 +271,9 @@ export interface Material {
   file_name: string;
   original_name: string;
   stage: Stage;
-  review_reasons: ReviewReason[];
-  suggested_pack: PackBrief | null;
+  ai_step: AIStep;
+  attention_reasons: AttentionReason[];
+  part_locked: boolean;
   status: MaterialStatus;
   sync_status: SyncStatus;
   sync_planned_at: string | null;
@@ -267,8 +288,7 @@ export interface Material {
 export interface ReviewPackItem {
   id: string;
   stage: Stage;
-  review_reasons: ReviewReason[];
-  suggested_pack: PackBrief | null;
+  attention_reasons: AttentionReason[];
 }
 
 export interface ReviewPack {
@@ -556,21 +576,55 @@ export interface FinalizeResult {
 }
 
 
-export interface AISuggestions {
-  exam_name?: string;
-  doc_type?: DocType;
-  subject_codes?: SubjectCode[];
-  grade?: Grade;
-  term?: Term;
-  cohort?: number;
-  region?: string;
-  organization?: string;
-  exam_date?: string;
-  chapter?: string;
-  tags?: string[];
-  part?: Part;
+/** AI 对单个文件的阅读记录（已校验）。 */
+export interface AICard {
+  role: Part;
   answer_start_page?: number;
-  uncertain?: string[];
+  title_text?: string;
+  doc_type?: DocType;
+  subjects?: SubjectCode[];
+  grade?: Grade;
+  school_year_start?: number;
+  cohort?: number;
+  exam_date?: string;
+  org_mentions?: string[];
+  region_mentions?: string[];
+  chapter?: string;
+  fingerprint?: string[];
+  evidence?: Record<string, string>;
+  metadata_only?: boolean;
+}
+
+/** 一条校验问题；critical 表示该结果需要人工关注。 */
+export interface AIProblem {
+  code: string;
+  field?: string;
+  message: string;
+  critical?: boolean;
+}
+
+export interface AIEntityChoice {
+  id?: string;
+  new?: string;
+  aliases?: string[];
+}
+
+/** AI 为一套资料确定的编目（已校验）。 */
+export interface AIDecision {
+  doc_type: DocType;
+  subjects: SubjectCode[];
+  grade?: Grade;
+  school_year_start?: number;
+  cohort?: number;
+  exam_date?: string;
+  term?: Term;
+  region?: string;
+  organization?: AIEntityChoice;
+  exam_name?: string;
+  chapter?: string;
+  tags?: AIEntityChoice[];
+  files: { id: string; role: Part; answer_start_page?: number }[];
+  evidence?: Record<string, string>;
 }
 
 export interface AIProvider {
@@ -599,11 +653,9 @@ export interface AITestResult {
 }
 
 export interface AISettings {
-  analysis_enabled: boolean;
   ocr_provider_id: string;
   max_pages: number;
   max_images: number;
-  auto_accept_confidence: number;
   ocr_configured: boolean;
   updated_at: string;
 }
@@ -628,29 +680,54 @@ export interface OCRProvider {
   updated_at: string;
 }
 
-export interface MaterialAnalysis {
-  id: string;
+/** GET /materials/:id/analysis：AI 对该文件的阅读记录。 */
+export interface MaterialCard {
   material_id: string;
-  status: AnalysisStatus;
-  provider_id: string;
+  status: 'none' | AnalysisStatus;
   provider_name: string;
   model: string;
   page_count: number;
-  image_count: number;
-  confidence: number;
-  suggestions: AISuggestions;
+  metadata_only: boolean;
+  card: AICard;
+  problems: AIProblem[];
   markdown_excerpt: string;
   error: string;
-  applied_at: string | null;
-  created_at: string;
-  updated_at: string;
+  updated_at: string | null;
 }
 
-export interface AnalysisEnqueueResult {
-  job_id: string;
-  analysis: MaterialAnalysis;
+/** GET /packs/:id/ai：套卷最近一次 AI 编目决定。 */
+export interface PackAI {
+  status: 'none' | AnalysisStatus;
+  provider_name: string;
+  model: string;
+  revision: number;
+  decision: AIDecision | null;
+  problems: AIProblem[];
+  error: string;
+  decided_at: string | null;
+  cards: Record<string, AICard>;
 }
 
+export type EntityKind = 'organization' | 'tag';
+
+/** 名称词典条目：一所学校/联盟或一个标签只有一个规范名称。 */
+export interface Entity {
+  id: string;
+  kind: EntityKind;
+  name: string;
+  region: string;
+  source: 'ai' | 'human';
+  locked: boolean;
+  aliases: string[];
+  usage: number;
+}
+
+export interface RerunResult {
+  materials: number;
+  packs: number;
+  estimated_calls: number;
+  applied: boolean;
+}
 
 interface SearchMaterialRef {
   id: string;

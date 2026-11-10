@@ -728,7 +728,7 @@ func (s *Service) handlePrepareError(ctx context.Context, job model.Job, err err
 		message = redact(ae.Message)
 	}
 	s.logf("prepare %s job failed: %s", job.Kind, message)
-	s.recordFailure(job, message, extra)
+	s.recordFailure(job, jobexec.Classify(err), message, extra)
 }
 
 // nodeJob loads a job that the node must currently own.
@@ -774,7 +774,7 @@ func (s *Service) NodeComplete(ctx context.Context, n model.Node, jobID string, 
 			return apperr.Conflict("任务租约已失效")
 		}
 		s.logf("commit %s job from node %s: %v", job.Kind, n.Name, err)
-		s.recordFailure(job, "写入任务结果失败", nil)
+		s.recordFailure(job, jobexec.ClassTransient, "写入任务结果失败", nil)
 		return nil
 	}
 	s.notify()
@@ -783,7 +783,7 @@ func (s *Service) NodeComplete(ctx context.Context, n model.Node, jobID string, 
 
 // NodeFail records a failure reported by a node. An interrupted job (for
 // example a node shutting down) returns to the queue instead.
-func (s *Service) NodeFail(ctx context.Context, n model.Node, jobID, message string, extra map[string]int, interrupted bool) error {
+func (s *Service) NodeFail(ctx context.Context, n model.Node, jobID, message, class string, extra map[string]int, interrupted bool) error {
 	job, err := s.nodeJob(ctx, n, jobID)
 	if err != nil {
 		return err
@@ -796,7 +796,12 @@ func (s *Service) NodeFail(ctx context.Context, n model.Node, jobID, message str
 	if message == "" {
 		message = "节点执行失败"
 	}
-	s.recordFailure(job, message, extra)
+	switch class {
+	case jobexec.ClassConfig, jobexec.ClassTransient, jobexec.ClassPermanent:
+	default:
+		class = jobexec.ClassPermanent
+	}
+	s.recordFailure(job, class, message, extra)
 	return nil
 }
 

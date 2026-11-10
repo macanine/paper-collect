@@ -106,7 +106,7 @@ web/src/
 - 仪表盘资料/任务统计卡直接进入对应状态筛选；文件按 SHA-256 精确查找同内容记录（唯一），重复上传表现为来源追加而非新文件。
 - 套卷、文件、任务列表及仪表盘最近记录使用整行点击导航；移动端卡片空白区域同样可点击。导航忽略行内链接、按钮、表单控件和下拉触发器，标题链接仍保留原生语义与可访问性。
 - 套卷详情返回 `members`、`collections` 和最多 5 个关联任务，可进入文件详情、专题详情或完整任务筛选；专题列表支持 `pack_id` 反查，资料库支持 `material_id` 反查所属套卷。
-- 待确认收件箱读取 `stage=review` 的文件并按套卷聚合，一套资料只确认一次，可同时接受配套建议；回收站按套卷恢复或彻底删除，保留期 30 天。
+- 需关注收件箱读取 `stage=attention` 的文件并按套卷聚合，显示 AI 编目与未通过的校验，一套资料只确认一次；回收站按套卷恢复或彻底删除，保留期 30 天。
 - 任务列表支持 `upload_id`、`material_id`、`replica_id` 精确筛选；文件详情的副本可回到所属网盘，任务详情保留上传、文件和副本入口。
 - 浏览器网络遥测只保存在内存，最多保留最近 100 次采样；展示 P95/平均/中位延迟、成功率、传输字节、在途数量、请求耗时、响应大小和 request ID。采样不含请求正文、响应正文、凭据或查询参数；清空会重置历史聚合，但保留仍在途的请求。
 - 后端对 `/api/*` 与 `/mcp` 输出一行结构化请求日志：method、path、status、duration_ms、response_bytes、request_id。日志不记录查询参数、请求正文、凭据或响应内容。
@@ -161,13 +161,15 @@ web/src/
 | MaterialSource | `material_sources` | 每次到达一行；重复内容只追加来源（`duplicate=true`），不新建文件 |
 | Collection / CollectionItem | `collections`、`collection_items` | 专题只收套卷；`(collection_id, pack_id)` 唯一；`position` 显式排序；无父子层级 |
 | Upload / UploadEntry | `uploads`、`upload_entries` | 清单先声明；条目 `received` 需字节数、SHA、真实格式和 CAS 全部通过 |
-| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index/group；租约领取，`lease_owner` 为节点 ID |
+| Job | `jobs` | 持久化队列；`kind` 为 ingest/replicate/analyze/index/group/decide/entity；`next_attempt_at` 控制退避重试；租约领取，`lease_owner` 为节点 ID |
 | Drive | `storage_drives` | kind 不可改；secret 只写不读；local 根目录由服务端固定；只描述连接，不含策略 |
 | Rule / RuleTarget | `sync_rules`、`sync_rule_targets` | 有序、命中第一条；唯一兜底规则 `is_default`；`(rule_id, drive_id)` 唯一 |
 | Replica | `replicas` | `(blob_id, drive_id)` 唯一；`desired_path` 与 `remote_path` 分开；上传与分享状态分离；规则外副本保留 |
 | ClusterSettings / Node | `cluster_settings`、`nodes` | 主端保存调度策略；从端保存主端期望的槽位、缓存上限、OCR 服务和配置修订号，心跳回报实际运行状态与已应用修订 |
 | AIProvider / OCRProvider / AISettings | `ai_providers`、`ocr_providers`、`ai_settings` | API Key/OCR 令牌加密；端点没有物理删除，只能停用；设置保存当前 OCR provider |
-| MaterialAnalysis | `material_analyses` | 每资料一行；`applied_at` 记录自动/手动应用时间；图片不落盘 |
+| FileCard | `file_cards` | 每资料一行；AI 阅读记录与校验问题；图片不落盘 |
+| PackDecision | `pack_decisions` | 每套卷一行；最近一次 AI 编目（含对应 revision）与校验问题 |
+| Entity / EntityAlias | `entities` / `entity_aliases` | 名称词典：学校、联盟、标签的规范名称与归一化写法 |
 | SearchSettings | `search_settings` | 单例；默认启用、500 页、10 页/批、12000 字/批 |
 | MaterialText | `material_texts` | 每资料一行；按文件 SHA + 解析器地址/缓存版本校验 |
 | QuestionBlock / QuestionTerm | `question_blocks`、`question_terms` | 题目带页码和文档顺序；倒排主键 `(term, question_id)` |
@@ -175,15 +177,15 @@ web/src/
 
 ### 6.1 文件、Blob 与副本
 
-- 已归档文件的权威内容在 `DATA_DIR/blobs/<sha[2]>/<sha>`；普通上传和 ZIP 成员先写入 CAS，ZIP 原件暂存，随后在一个数据库事务中发布套卷、文件、来源记录和任务（未开启自动识别时同时生成同步计划）。
+- 已归档文件的权威内容在 `DATA_DIR/blobs/<sha[2]>/<sha>`；普通上传和 ZIP 成员先写入 CAS，ZIP 原件暂存，随后在一个数据库事务中发布文件、来源记录和 AI 阅读任务；套卷由 AI 分组后建立。
 - 一份 SHA-256 只对应一个 Material 和一个 Blob；重复上传只追加 `MaterialSource`，因此副本、解析和题目索引天然共享。
 - Material 的 `file_name` 由「套卷标题 + part 标签」派生，是下载名和路径模板中的 `{文件名}`；套卷人工改名、改编目或改 part 后同步成员文件名并重新规划副本，`on_path_change=move` 的网盘随之移动，`keep` 的网盘标记路径偏离。
 
 ### 6.2 套卷、文件与专题
 
 - 套卷是编目和浏览的单位：学科、年级、届别、地区、机构、类型、标签、描述都在套卷上；文件只保存 `part`、`answer_start_page`、`position`。
-- 套卷标题在没有 `title_locked` 时自动生成（类型 + 学科 + 届别等，缺字段时退回考试名或到达文件名）；人工 PATCH 设置 `title_locked`/`catalog_locked`，自动识别不再覆盖。
-- 待确认收件箱里的文件 `stage=review`，可带 `suggested_pack`；确认后置为 `ready` 并可选并入建议套卷。套卷 stage 取成员中最靠后者（ready < processing < review < failed）。
+- 套卷标题在 `locked_json` 不含 title 时自动生成（类型 + 学科 + 届别等，缺字段时退回考试名或 AI 读到的首页标题）；人工修改的字段写入 `locked_json`，AI 编目不再覆盖。
+- 需关注的文件 `stage=attention`，`attention_json` 记录原因；人工确认后置为 `ready` 并生成同步计划。套卷 stage 取成员中最靠后者（ready < processing < waiting_ai < attention）。
 - 专题只存放套卷引用，替换接口整体替换收录关系，不删除套卷或文件；`position` 显式保存，追加接口放在末尾。
 
 ### 6.3 状态机
@@ -225,7 +227,7 @@ Eligible: part in (questions, full); other parts are not_applicable
   → POST /uploads/{id}/finalize（幂等，创建 ingest Job）
   → worker：展开 ZIP 成员到 CAS → 按目录 + 文件名主干分组
   → 单个数据库事务：Pack/Material/MaterialSource/PackSubject/
-                     同步计划（未开启自动识别时）/analyze/index 自动任务/
+                     analyze 阅读任务/
                      Upload 状态与 results/Job 状态/审计
       同 SHA 已存在时只追加 MaterialSource（duplicate=true），不新建文件
   → 成功后清理临时 ZIP，复制任务按同步规则异步上传各网盘
@@ -263,7 +265,7 @@ Eligible: part in (questions, full); other parts are not_applicable
 - ZIP 成员记录 `source_path = ZIP 相对路径 + "/" + 成员路径`；不存在 ZIP 容器资料。
 - 套卷标题优先用类型 + 学科 + 届别等编目字段生成；字段不足时退回清单 `title`、考试名或到达文件名。学科、年级、届别、地区、机构、标签来自清单 hints，服务端不从文件名推断学科。
 - `part` 有 8 类：questions（试题）、answers（答案）、full（题目+答案同文件）、teacher（教师版）、answer_sheet（答题卡）、listening（听力）、main（单文档正文）、other（无法判断）。归档时按文件名关键词给出初始 part，AI 自动应用与人工修改走同一校验；文件名按「套卷标题 + part 标签」生成。
-- 同一事务中还写入：未开启自动识别时的同步计划（副本与 replicate Job；开启时文件保持 `waiting_catalog`，识别成功后再规划）、自动 analyze/index 任务（若启用）、Upload 的 `results`/`new_count`/`duplicate_count`、ingest Job 成功状态和系统审计。单文件试卷由独立的 `group` 任务在 AI 识别后尝试并入已有套卷，归档事务本身不创建该任务。
+- 同一事务中还写入：每个新文件的 analyze 阅读任务（文件保持 `waiting_catalog`，AI 编目后再规划同步）、Upload 的 `results`/`new_count`/`duplicate_count`、ingest Job 成功状态和系统审计。分组（group）在同批文件读完后由阅读任务的提交入队，编目（decide）由分组或成员变化入队。
 
 ## 8. 网盘同步
 
@@ -291,7 +293,7 @@ Eligible: part in (questions, full); other parts are not_applicable
 
 - 正在 uploading/moving 的副本保留当前状态；worker 完成后若发现期望字段已变化，会在同一事务内重新规划。
 - 所有规划路径（单文件规划、预览、保存、reconcile、副本管理、worker 完成）先获取同步锁：PostgreSQL 用事务级 advisory lock，SQLite 依赖单连接立即事务。
-- **等待编目**：新文件 `sync_status=waiting_catalog`。未开启自动识别时，归档事务内立即规划；开启时，在文件被置为 ready（识别成功并自动应用、人工确认或人工编辑）时规划。`POST /materials/{id}/sync` 可强制规划。已规划文件在改名、改编目或改部件后自动重新规划。
+- **等待编目**：新文件 `sync_status=waiting_catalog`。AI 编目提交时为套卷全部成员规划（需关注的套卷也按当前编目规划，编目失败的套卷除外），人工确认需关注文件时也会规划。`POST /materials/{id}/sync` 可强制规划。已规划文件在改名、改编目或改部件后自动重新规划。
 - **预览与保存**：`POST /storage/rules/preview` 用同一套计算逻辑对全部已编目文件生成动作统计和明细，不写库，并签发用 `MASTER_KEY` 加密的 `preview_token`（绑定用户、草稿摘要、当前规则/目标/网盘摘要，15 分钟过期）。`PUT /storage/rules` 校验令牌后在一个事务中替换规则并重新规划全部已编目文件；任一绑定项变化返回 409。
 - `POST /storage/reconcile` 按当前规则重新规划全部已编目文件，修改网盘设置后用它让已有文件生效。
 
@@ -330,14 +332,16 @@ Eligible: part in (questions, full); other parts are not_applicable
 
 适配器把失败归类为稳定 `CloudError`（config/auth/timeout/network/unavailable/quota/size/hash/link/unsupported/conflict 等）；存储错误写入 Job/Replica 前会脱敏。OneDrive 对冲突、限流和 5xx 做有限重试，并在上传会话冲突时清理中断留下的 0 字节占位文件；蓝奏有内部重试，S3 使用 SDK 自带的请求重试；服务层没有自动重试循环。
 
-## 9. AI 识别
+## 9. AI 编目
+
+编目只由模型决定；`internal/catalogai` 只负责提示词、回答解析、校验与一致性推算，不做任何猜测。同一套代码在主端和从端运行，同一个回答在哪里都按相同规则判断。
 
 ```
 ingest 事务
-  └─(analysis_enabled) 为每个非 ZIP Material 创建 analyze Job + pending Analysis
+  └─ 新文件 stage=processing、ai_step=read、batch_id=upload_id，pack_id 为空
+     并创建 analyze Job + pending FileCard（不按文件名分组、不写入提示、不猜部件）
 
-worker RunAnalyze
-  → 读取 AISettings / Material
+analyze（READ，可在从端执行）
   → 取原件：本地 CAS 优先，否则从可读副本下载（≤256 MiB）
   → 不需要图片且 material_texts 命中（SHA + parse key）：复用解析文本
   → 否则按 ai_settings.ocr_provider_id（空则 priority 最小的启用项）：
@@ -357,30 +361,47 @@ worker RunAnalyze
          → 轮询 /api/v1/ocr/jobs/{id}（默认 15 分钟）
          → 下载 result_url JSONL，按页提取 texts；也可接收有序正文/公式 blocks
   → 写 material_texts（Markdown + 逐页文本）
-  → 写 DATA_DIR/analysis/<materialID>/document.md（截断 2 MiB）
-  → 按 max_pages/max_images 限制图片；图片只在内存中传给视觉模型
-  → 按 priority 尝试启用的模型端点；有视觉模型时发 image_url，否则纯文本
-  → 严格解析 JSON、校验字段枚举/长度/置信度，写 suggestions_json
-  → 同一数据库事务自动应用白名单字段、同步 file_name、写 applied_at 和审计；文件置为 ready 时生成同步计划
-  → 事务提交后按新文件名重新规划副本路径；人工可 PATCH 或 POST analysis/apply 纠偏
+  → 无法解析正文的文件（音频、表格、损坏、无文字）只凭文件名与路径阅读，标记 metadata_only
+  → 模型输出 Card：部件、首页标题、学科、年级、学年、届别、考试年月、文中机构/地区写法、题目指纹
+  → 校验：枚举、页码范围、关键字段必须附可在材料中逐字找到的摘录，否则剔除
+  → 主端用同一校验重算并保存 file_cards；文件进入 group（或已在套卷中时进入 decide）
+
+group（主端，全局互斥）
+  → 同批文件读完后按来源路径取最多 80 个（同文件夹可延伸到 120 个）
+  → 候选套卷：文件当前所在、本批已建、学科相同且年级/届别相同的已有套卷（按相似度取前 40）
+  → 模型分组；校验每个文件恰好一次、只引用候选、同套部件不重复、学科不混杂
+  → 写 pack_id，新套卷为空编目；套卷 revision+1 并入队 decide；剩余文件继续下一批
+
+decide（主端，按套卷互斥）
+  → 成员仍在阅读/分组时推迟；输入全部成员的 Card、正文摘录、人工锁定字段、机构候选、常用标签
+  → 校验 doc_type、试卷类必须有学科与年级；学年与届别一致（由一者推算另一者）；
+    考试年月落在学年内、学期由月份推算；地区取固定列表；关键字段需原文依据；
+    机构优先选候选、新机构须为完整全称、与已知别名相同的“新名称”映射到已有条目；
+    标签最多 5 个（新建不超过 2 个）；每个文件恰好一个部件且唯一部件不重复；锁定值原样保留
+  → revision 已变化则丢弃并重新入队；否则写套卷字段、规范名称、成员部件、标题与文件名，
+    写 pack_decisions，生成同步计划，按部件入队题目索引，新名称入队 entity
+
+entity（主端，全局互斥）
+  → 新建的机构/标签与相近条目（附使用它的套卷标题）交给模型判断是否同一对象，确认后合并
 ```
 
-- 自动分析只对非 ZIP 容器入队；ZIP 展开成员各自入队，避免对容器重复付费。
-- 分页/图片限制：`max_pages` 1..10，`max_images` 0..4；`max_pages` 限制送入视觉模型的页面图片数，OCR 仍解析全文；文本提示另有 12000 字符级别上限。长文档取样保留开头约 2/3 与末尾约 1/3，并显式标注中间省略，确保卷末答案区能参与 part 判断。RapidOCR/PaddleOCR 不返回持久化页面图，因此视觉模型只收到文本。
+- 每次模型调用都先校验回答；不通过时把问题清单发回同一模型修正一次，再按 priority 尝试下一个端点。选择结果的顺序是：无问题 → 无关键问题 → 问题最少。关键问题仍存在时，分组退回“每个文件单独成套”并标记 group_unverified，编目把套卷置为 attention 并记录校验代码；非关键问题只剔除对应值。
+- 模型自报的置信度不参与判断，也不保存。
+- 失败分类：缺少模型/OCR、密钥被拒属于配置问题，文件进入 waiting_ai，任务每 15 分钟再试且不计次数，保存 AI 设置、模型端点或 OCR 服务商时立即唤醒；限流、超时、服务不可用、网络错误按 1 分钟到 12 小时退避重试，最多 6 次；其余为永久失败。重试用尽后阅读失败的文件按文件名继续，分组失败的文件单独成套，编目失败的套卷进入 attention（ai_failed）且暂不同步。租约多次过期的任务（含复制、索引、归档）达到上限后停止重试，防止崩溃任务无限循环。
+- 人工修改的编目字段写入 `packs.locked_json`、人工修改的部件置 `materials.part_locked`；AI 把它们作为固定值输入，提交时也不会覆盖。移动文件、拆分、合并或把文件移入回收站会让相关套卷 revision+1 并重新编目。
+- 名称词典：`entities` 保存规范名称，`entity_aliases` 以归一化写法（全半角、大小写、空白、标点、“省/市”统一）为主键映射到条目。归一化只用于精确匹配和候选排序，缩写与全称是否同一机构由模型判断。人工修改或合并的条目锁定，AI 不会自动改动或合并锁定条目。
+- 分页/图片限制：`max_pages` 1..10，`max_images` 0..4；`max_pages` 限制送入视觉模型的页面图片数，OCR 仍解析全文。阅读时文本取样上限 8000 字、编目时每个文件 3000 字（最多 8 个文件），都保留开头约 2/3 与末尾约 1/3 并标注中间省略，确保卷末答案区能参与部件判断。RapidOCR/PaddleOCR 不返回持久化页面图，因此视觉模型只收到文本。
 - 题目索引按 `batch_pages`/`batch_chars` 分组后最多 3 个批次并发调用，结果再按原页码顺序去重合并。切题模型使用 128000 输出 token 上限和 `reasoning_effort=high`；只有空响应或非法 JSON 才二分降级重试，上游 5xx/限流最多额外重试一次，超时、鉴权等错误立即失败，避免错误重试倍增调用量。
-- 归类必须基于正文或页面图像：提示明确禁止仅凭文件名判断，正文与文件名冲突时以正文为准；若 OCR/解析既没有得到正文也没有页面图像，任务失败而不会退回文件名猜测。归档阶段仍会按文件名写入初始 part 建议，启用自动识别后会被基于正文的 AI 结果覆盖。
-- `analysis_enabled` 只控制归档后的自动入队；手动触发不依赖它。
-- 解析出的独立页面图片不落盘、不提供图片读取接口；`image_count` 恒为 0。数据库里的 `images_json` 只保留空数组。DOCX 生成的 PDF 预览缓存可能包含文档原有图片，应按原件保护。
+- 解析出的独立页面图片不落盘、不提供图片读取接口。DOCX 生成的 PDF 预览缓存可能包含文档原有图片，应按原件保护。
 - 解析缓存按文件 SHA + `sha256("ocr-text-v2:<kind>:<base_url>:<model>")` 校验；切换 OCR 服务商、地址或模型会自然失效。MinerU 需要视觉图片时会重新解析，因为图片没有缓存。RapidOCR 的 DOCX 原生解析另含 `docx-native-v2` 版本标记，避免复用旧的公式文本缓存。
 - DOCX 原生解析由 `internal/docx` 完成：读取 `word/document.xml` 与关系表，按段落/表格/文本框/公式生成 Markdown 和逐页文本，识别显式分页与 `lastRenderedPageBreak`；常见 OMML 分式、上下标、根号、求和/积分、括号、上下限、横线和矩阵保留为 LaTeX，其他结构尽量保留文本。嵌入的 PNG/JPEG/GIF/BMP/TIFF/WebP 按引用顺序记录，最多 20 张、单张 12 MiB、总计 64 MiB，图片 OCR 失败只记录日志，不影响正文。页码依赖文档保存的分页提示，连续文档没有提示时按第 1 页处理。自建 RapidOCR 的 DOCX 不经过 LibreOffice 转换或 OCR 文字层，因此分析/搜题不依赖 `soffice`，也不依赖 RapidOCR 镜像版本同步。MinerU/PaddleOCR 接收的 DOCX，以及所有服务接收的 DOC/PPT/PPTX 会先由 LibreOffice 输出 PDF，再交给统一 OCR 协议。
 - DOCX 原生解析器不会读取外部关系目标；外部图片、模板、OLE 对象和数据源只作为关系元数据跳过。送入 LibreOffice 前，DOCX/PPTX 的临时副本会移除这些可能触发网络访问的外部关系，保留 inert 超链接，避免渲染器拉取外部资源。
 - RapidOCR 结果接收端支持 `page_no` + `texts` 旧格式，也支持有序 `text`、`inline_formula`、`display_formula` 内容块并保留 LaTeX。现有自建 OCR 进程仍只输出 `texts`，并未接入扫描件公式识别模型。
 - Office 转换由 `internal/office` 调用 LibreOffice 生成 PDF，使用独立配置、最高宏安全级别、外部关系清理和进程级并发限制。DOCX 预览缓存改为 `renders/office-v1/<sha前两位>/<sha>.pdf`，转换任务在独立临时目录中处理并清理；Word 使用 Writer PDF 过滤器，PPT/PPTX 使用 Impress PDF 过滤器。非容器部署需自行安装 LibreOffice Writer、Impress 和所需字体；预览排版受渲染器和字体限制，公式、图文顺序及表格结构不保证与 Word 完全一致。
-- 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受白名单字段，非法值被丢弃。通过同一套校验的非空字段自动应用；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
-- 配套建议只处理“套卷恰好一个文件、该文件是可配套的试卷类 part、套卷 doc_type 属于试卷类”的文件；候选为其他试卷类套卷，按学科、年级、届别、地区、机构、标题和成员评分。达到建议阈值时只置为 `review` 并写 `pack_suggestion`/`suggested_pack` 等待人工确认，系统不会跨套卷自动合并。分数不足或学科/年级/届别冲突时不改动，任务仍以 succeeded 结束并记录原因。
-- 失败写回 Analysis 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。模型 provider 按 priority 故障切换；没有可用模型或 OCR 令牌时任务明确失败。
+- 模型输出是不可信数据：提示中明确要求忽略文档内指令；服务端只接受通过校验的值，模型原文不落库；不执行模型生成的指令，也不允许改 Blob、SHA、来源路径或状态。
+- 失败写回 FileCard/PackDecision 和 Job 的脱敏错误；不影响已完成的归档、下载和副本。
 - PaddleOCR 明确返回“任务提交队列已满”时，提交阶段最多尝试 6 次，并按 2、4、8、16、30 秒退避；其他提交错误不盲目重试，避免生成重复远端任务。
-- 关键超时：OCR 单次解析默认 15 分钟，分析外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
+- 关键超时：OCR 单次解析默认 15 分钟，阅读外层 16 分钟；单次模型对话 120 秒；模型探测/最小对话 30 秒；OCR 健康检查 20 秒。
 
 ## 10. 题目索引与搜题
 
@@ -438,10 +459,11 @@ RunIndex
 | --- | --- | --- |
 | `/login` | 登录 | 公开 |
 | `/` | 工作台（统计、最近套卷、上传入口） | 登录 |
-| `/inbox` | 待确认收件箱（按套卷确认、接受配套建议） | materials:write |
+| `/inbox` | 需关注收件箱（AI 编目、校验问题、按套卷确认；AI 整理中、等待 AI） | materials:write |
+| `/entities` | 名称词典（学校、联盟、标签的规范名称、别名、合并与锁定） | materials:read |
 | `/library` | 资料库（套卷列表与筛选） | materials:read |
 | `/packs/:packId` | 套卷详情（文件、齐全度、专题、下载） | materials:read |
-| `/materials/:materialId` | 文件详情（AI 识别、题目索引、归档与同步状态、副本） | materials:read |
+| `/materials/:materialId` | 文件详情（AI 阅读记录、题目索引、归档与同步状态、副本） | materials:read |
 | `/search` | 搜题 | materials:read |
 | `/collections`、`/collections/:collectionId` | 专题列表/详情 | collections:read |
 | `/imports`、`/imports/:uploadId` | 导入中心/传输与归档进度 | uploads:write |
@@ -548,12 +570,12 @@ DATA_DIR/
 
 - **事务**：套卷与文件发布、专题收录替换、回收站/恢复、同步规则替换与副本计划/状态刷新、分析/索引最终写入、密钥更新均在数据库事务中；网络上传、OCR、模型调用不在事务内。
 - **非事务副作用**：CAS、临时文件、远端对象和数据库更新不能原子提交。失败可能留下孤儿 CAS 或已上传但未记库的远端对象（重试时按「同内容接管」处理）；当前没有自动 GC，远端文件只在人工 `delete_remote` 时删除。
-- **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；副本规划按 `(blob_id, drive_id)` 复用已有行，可重复执行；Analysis/Index 重跑覆盖自身结果；group 任务不会重复追加同一资料。
+- **幂等**：finalize 对同一上传返回同一 Job；ingest 发布是单事务；副本规划按 `(blob_id, drive_id)` 复用已有行，可重复执行；FileCard/PackDecision/Index 重跑覆盖自身结果；同一批次、同一套卷最多一个待执行的 group/decide 任务，过期 revision 的编目被丢弃。
 - **恢复与领取**：SQLite 启动时将遗留 `running` 改回 `pending`；PostgreSQL 仅回收过期租约。worker 按类型领取 pending Job，`attempts` 递增。
-- **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index/group 由 `job_locks` 串行化，不同资料可并行。
-- **取消**：ingest/replicate/analyze/group 在进程 context 取消时回到 pending（uploading 副本回到 pending）；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
+- **租约与并发**：心跳续租；终态更新必须匹配 `lease_owner`，过期任务的旧执行者写入会被拒绝。同一资料的 analyze/index、同一套卷的 decide 由 `job_locks` 串行化；group 与 entity 全局串行，避免两次分组为同一场考试各建一套或并发合并名称。
+- **取消**：ingest/replicate/analyze/group/decide/entity 在进程 context 取消时回到 pending（uploading 副本回到 pending）；index 取消当前记为 failed（可重建）。HTTP 客户端断开只取消对应的上传请求，不影响已入队任务；远端请求受适配器自身超时约束。
 - **部署边界**：主端只有一个实例，SQLite 单连接、单 writer、WAL，PostgreSQL 为可选数据库；从端没有数据库和共享磁盘（见第 18 节）。schema 由一次性 `migrate` 服务创建，应用设置 `DB_AUTO_MIGRATE=false`。RapidOCR 容器与 PostgreSQL 一样只在 Compose 内网监听，不直接暴露公网；其默认 CPU 上限为 1 核，推理线程数为 1，避免 OCR 长时间挤占应用和数据库资源。
-- **增长**：`material_texts`、`question_terms`、`material_analyses`、`audits`、`jobs` 和孤儿 CAS 会持续增长；没有保留期/清理任务。`AutoMigrate` 不会删除旧表/旧列。
+- **增长**：`material_texts`、`question_terms`、`file_cards`、`audits`、`jobs` 和孤儿 CAS 会持续增长；没有保留期/清理任务。`AutoMigrate` 不会删除旧表/旧列。
 - **迁移**：没有版本化 migration；升级前先备份，启动时由 `AutoMigrate` 增量建表/加列。已删除功能留下的表和列不会自动清理。
 
 ## 16. 验证状态
@@ -583,13 +605,13 @@ make test-all                   # 全量：go test、go vet、前端测试与构
 
 - **后端单元/协议测试**：归档编码、存储适配器（local/WebDAV/蓝奏/OneDrive/S3；local/WebDAV/OneDrive/S3 的不覆盖接管、移动与删除），同步规则（条件匹配、路径模板渲染与校验、规则列表结构校验），AI、MinerU、PaddleOCR、RapidOCR 协议，DOCX 原生解析与图片 OCR，数学公式规范化与检索，搜索文本与高亮，迁移幂等。
 - **后端集成测试**（临时 SQLite + httptest 模拟上游）：
-  - 上传：单文件直传生成单个套卷且不建合集；文件夹与嵌套 ZIP 展开为套卷；ZIP 中的不支持成员单独上报；恶意 ZIP 与路径被拒且不发布；并发 ZIP 上传不覆盖已胜出的内容。
-  - 去重与副本：内容去重与秒传；通过「添加本地网盘 → 预览规则 → 保存规则」生成副本并上传；云端副本拉取缓存及损坏副本拒绝。
+  - 上传（`server/direct_upload_integration_test.go`、`integration_test.go`）：单文件直传生成单个套卷且不建合集，编辑编目后改名并锁定字段，删除唯一文件使套卷进回收站；已知内容秒传只追加来源；文件夹与嵌套 ZIP 展开为套卷并列出不支持成员；路径穿越 ZIP 失败且不发布；并发 ZIP 上传不覆盖已胜出的内容。
+  - 副本：损坏的云端副本在拉取时被拒绝，不生成缓存、不恢复永久 CAS。
   - 网盘同步（`service/sync_rules_test.go`，真实 `local` 网盘）：命中第一条规则且停用规则被跳过；预览不写库，令牌绑定草稿、用户、网盘与过期时间；同路径追加 sha8 后缀且重新规划不漂移；超限/扩展名跳过不算失败；改名后 move 网盘远端移动、keep 网盘记为路径偏离；规则变化转规则外且保留文件，`delete_remote`/`forget`/非规则外拒绝；从未上传的副本撤销；等待编目直到置为 ready 或强制同步；同路径不同内容不覆盖、需处理后重试恢复；停用网盘跳过但仍可读取；彻底删除时云端副本转规则外并保留 Blob。对规划代码做的 7 处故意破坏（去掉首条命中、去掉路径后缀、令牌不校验草稿、keep 当作 move、忽略大小上限、规则外直接删除、忽略等待编目）均被这些测试捕获。
-  - 套卷整理：配套建议确认；拆分、合并（保留专题归属）与批量编辑套卷；专题收录；回收站恢复与彻底删除。
-  - AI 与搜题：AI 识别端到端与白名单字段；分析与索引共享解析；搜题索引与公式检索。
-  - 权限与 MCP：Agent Bearer、作用域与撤销；MCP 工具目录与路由、权限、文档一致；未鉴权返回 401。
-  - 节点：租约竞争、过期租约回收与资料锁；从端崩溃、排空、停用和主端重启由真实进程场景覆盖。
+  - AI 与搜题（`server/ai_integration_test.go`）：AI 识别端到端、白名单字段自动应用、人工锁定字段不被重新决策覆盖；错误密钥不回显；搜题索引、页码、公式检索与重建索引幂等。
+  - 权限与 MCP：API 密钥直连 REST、作用域与撤销；MCP 工具按 scope 可见、参数校验、非法 JSON 帧与超大请求被拒、委派管理不能越权、网盘密钥不回显；MCP 工具目录覆盖全部业务路由；未鉴权返回 401。
+  - 节点（`server/node_integration_test.go`，`service/nodes_test.go`、`jobs_concurrency_test.go`）：从端无数据库执行副本任务、节点令牌与用户令牌隔离、只能上报自己租约的任务；租约竞争、过期租约回收与资料锁；从端崩溃、排空、停用和主端重启由真实进程场景覆盖。
+  - 重复或只校验实现细节的端到端用例已删除，相应行为由 `service`、`jobexec`、`worker` 包的单元测试覆盖（公式转义修复、补建索引、DOCX 预览、本地网盘副本只在主端执行等）。
 - **前端**：上传清单与文件匹配、二进制上传、API 客户端与遥测、网盘表单字段、API 密钥表单、AI 权限与格式化、搜题页与高亮、路径工具。
 
 ### 本次未重新验证（沿用重构前结论，需在套卷模型上复测）
@@ -656,7 +678,7 @@ OCR 配置不使用按引擎写死的从端地址。节点只声明自己能访�
 | 执行 | 任意节点，不访问数据库 | `jobexec.Run` 通过 `Env` 取原件、写进度、回写 token |
 | 提交 | 主端，单个事务 | `CommitJob` 校验租约后写库；AI 输出照旧走白名单 |
 
-`ingest`、`group` 和 `local` 网盘的复制只在主端运行。`local` 网盘的目录在主端 `DATA_DIR` 内，如果交给从端，从端会写到自己的磁盘，主端却记录副本就绪，所以领取时用 `claimer.RemoteOnly` 按网盘类型过滤。
+`ingest`、`group`、`decide`、`entity` 和 `local` 网盘的复制只在主端运行（分组、编目和名称去重需要读取资料库候选）。`local` 网盘的目录在主端 `DATA_DIR` 内，如果交给从端，从端会写到自己的磁盘，主端却记录副本就绪，所以领取时用 `claimer.RemoteOnly` 按网盘类型过滤。
 
 ### 18.3 租约
 

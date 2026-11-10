@@ -354,11 +354,11 @@ mark {
 
 .app-account {
   display: flex;
-  height: 40px;
+  height: var(--control-height);
   align-items: center;
   gap: 8px;
-  padding: 4px 8px 4px 4px;
-  border-radius: 6px;
+  padding: 0;
+  border-radius: 50%;
   text-align: left;
   transition: background-color var(--ant-motion-fast) var(--ant-motion-ease);
 }
@@ -1135,10 +1135,11 @@ a.compact-entity:hover {
 /* Browser network telemetry */
 .app-observe-button {
   display: inline-flex;
-  height: 38px;
+  height: var(--control-height);
   align-items: center;
-  gap: 8px;
-  padding: 3px 10px 3px 6px;
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 14px;
   border: 1px solid var(--ant-border);
   border-radius: 6px;
   background: var(--ant-container);
@@ -1153,13 +1154,10 @@ a.compact-entity:hover {
 }
 
 .app-observe-button__icon {
-  display: grid;
-  width: 26px;
-  height: 26px;
+  display: inline-grid;
   flex: 0 0 auto;
   place-items: center;
   border-radius: 6px;
-  background: var(--ant-primary-bg);
   color: var(--ant-primary);
 }
 
@@ -1168,23 +1166,22 @@ a.compact-entity:hover {
 }
 
 .app-observe-button__copy {
-  display: flex;
-  min-width: 62px;
-  flex-direction: column;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .app-observe-button__copy > span {
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 15px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .app-observe-button__copy small {
   color: var(--ant-text-tertiary);
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 14px;
-  white-space: nowrap;
+  font-size: 12px;
+  line-height: 20px;
 }
 
 @keyframes observe-pulse {
@@ -1394,7 +1391,8 @@ a.compact-entity:hover {
 
   .app-observe-button {
     width: var(--control-height);
-    padding: 3px;
+    justify-content: center;
+    padding: 0;
   }
 
   .app-observe-button__copy {

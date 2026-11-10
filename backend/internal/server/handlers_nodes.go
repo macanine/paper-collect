@@ -136,12 +136,13 @@ func (s *Server) handleNodeFail(c *gin.Context) {
 		Error       string         `json:"error"`
 		Extra       map[string]int `json:"extra"`
 		Interrupted bool           `json:"interrupted"`
+		Class       string         `json:"class"`
 	}
 	if ae := decodeJSON(c, &req, "extra"); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	if err := s.svc.NodeFail(c.Request.Context(), currentNode(c), c.Param("id"), req.Error, req.Extra, req.Interrupted); err != nil {
+	if err := s.svc.NodeFail(c.Request.Context(), currentNode(c), c.Param("id"), req.Error, req.Class, req.Extra, req.Interrupted); err != nil {
 		respondError(c, err)
 		return
 	}

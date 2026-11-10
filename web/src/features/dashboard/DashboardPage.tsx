@@ -48,9 +48,9 @@ export function DashboardPage() {
 
       {canRead ? (
         <div className="stat-grid">
-          <StatCard to="/inbox" title="待确认" value={s?.review} icon={<InboxOutlined />} tone={s && s.review > 0 ? 'warning' : undefined} />
-          <StatCard to="/inbox?stage=processing" title="识别中" value={s?.processing} icon={<SyncOutlined />} />
-          <StatCard to="/inbox?stage=failed" title="识别失败" value={s?.failed} icon={<ExclamationCircleOutlined />} tone={s && s.failed > 0 ? 'error' : undefined} />
+          <StatCard to="/inbox" title="需关注" value={s?.needs_attention} icon={<InboxOutlined />} tone={s && s.needs_attention > 0 ? 'warning' : undefined} />
+          <StatCard to="/inbox?stage=processing" title="AI 整理中" value={s?.processing} icon={<SyncOutlined />} />
+          <StatCard to="/inbox?stage=waiting_ai" title="等待 AI" value={s?.waiting_ai} icon={<ExclamationCircleOutlined />} tone={s && s.waiting_ai > 0 ? 'error' : undefined} />
           <StatCard to="/library?missing=answers" title="缺答案的试卷" value={s?.missing_answers} icon={<FileSearchOutlined />} />
           <StatCard to="/library" title="套卷" value={s?.packs} icon={<FolderOpenOutlined />} />
           <StatCard to="/library" title="已入库文件" value={s?.ready} icon={<CheckCircleOutlined />} />

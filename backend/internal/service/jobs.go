@@ -109,16 +109,8 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 				Updates(map[string]any{"status": model.UploadProcessing, "updated_at": now}).Error; err != nil {
 				return err
 			}
-		case model.JobAnalyze:
-			if job.MaterialID == "" {
-				return apperr.Conflict("分析任务缺少资料")
-			}
-			var analysis model.MaterialAnalysis
-			if err := tx.Where("material_id = ?", job.MaterialID).First(&analysis).Error; err != nil {
-				return apperr.Conflict("分析记录不存在")
-			}
-			if err := tx.Model(&model.MaterialAnalysis{}).Where("id = ?", analysis.ID).
-				Updates(map[string]any{"status": model.AnalysisPending, "error": "", "job_id": job.ID, "updated_at": now}).Error; err != nil {
+		case model.JobAnalyze, model.JobGroup, model.JobDecide, model.JobEntity:
+			if err := s.resetAIProjectionTx(tx, job, now); err != nil {
 				return err
 			}
 		case model.JobIndex:
@@ -128,10 +120,6 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 			if err := tx.Model(&model.MaterialIndexState{}).Where("material_id = ?", job.MaterialID).
 				Updates(map[string]any{"status": "pending", "error": "", "job_id": job.ID, "updated_at": now}).Error; err != nil {
 				return err
-			}
-		case model.JobGroup:
-			if job.MaterialID == "" {
-				return apperr.Conflict("归类任务缺少资料")
 			}
 		case model.JobReplicate:
 			if job.ReplicaID == "" {
@@ -152,6 +140,7 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 		}
 		if err := tx.Model(&model.Job{}).Where("id = ?", job.ID).
 			Updates(map[string]any{"status": model.JobPending, "error": "", "progress_message": "已重新排队，等待执行", "progress_current": 0, "progress_total": 0,
+				"attempts": 0, "next_attempt_at": nil,
 				"started_at": nil, "finished_at": nil, "duration_ms": 0,
 				"log_json": appendJobLog(job.LogJSON, model.JobLog{Time: now, Level: "info", Message: "已重新排队，等待执行"}), "updated_at": now}).Error; err != nil {
 			return err
@@ -208,9 +197,12 @@ func (s *Service) restartLocalRunnersLocked() {
 		model.JobReplicate: settings.ReplicateConcurrency,
 		model.JobAnalyze:   settings.AnalyzeConcurrency,
 		model.JobIndex:     settings.IndexConcurrency,
-		model.JobGroup:     settings.AnalyzeConcurrency,
+		model.JobGroup:     1,
+		model.JobDecide:    max(settings.AnalyzeConcurrency, 1),
+		model.JobEntity:    1,
 	}
-	kinds := []string{model.JobIngest, model.JobGroup, model.JobReplicate}
+	// Group, decide and entity jobs need the database, so the master always runs them.
+	kinds := []string{model.JobIngest, model.JobGroup, model.JobDecide, model.JobEntity, model.JobReplicate}
 	for _, kind := range settings.Kinds {
 		if kind != model.JobReplicate {
 			kinds = append(kinds, kind)
@@ -290,7 +282,7 @@ func (s *Service) workerLoop(loopCtx, jobCtx context.Context, kind string) {
 // for operational smoke checks and tests.
 func (s *Service) ProcessNext(ctx context.Context) bool {
 	settings := s.workerSettings()
-	kinds := append([]string{model.JobIngest, model.JobGroup}, settings.Kinds...)
+	kinds := append([]string{model.JobIngest, model.JobGroup, model.JobDecide, model.JobEntity}, settings.Kinds...)
 	job, err := s.claimJobFor(ctx, claimer{ID: settings.InstanceID, Name: settings.NodeName}, kinds)
 	if errors.Is(err, errNoJob) && !slices.Contains(settings.Kinds, model.JobReplicate) {
 		job, err = s.claimJob(ctx, model.JobReplicate)
@@ -515,7 +507,7 @@ func (s *Service) claimJobPostgres(tx *gorm.DB, owner claimer, kinds []string, c
 	tried := make([]string, 0, claimAttempts)
 	for attempts := 0; attempts < claimAttempts; attempts++ {
 		var job model.Job
-		query := owner.scope(tx.Where("status = ?", model.JobPending))
+		query := owner.scope(tx.Where("status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)", model.JobPending, s.now()))
 		if len(kinds) > 0 {
 			query = query.Where("kind IN ?", kinds)
 		}
@@ -552,7 +544,7 @@ func (s *Service) claimJobSQLite(tx *gorm.DB, owner claimer, kinds []string, cla
 	tried := make([]string, 0, claimAttempts)
 	for attempts := 0; attempts < claimAttempts; attempts++ {
 		var job model.Job
-		query := owner.scope(tx.Where("status = ?", model.JobPending))
+		query := owner.scope(tx.Where("status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)", model.JobPending, s.now()))
 		if len(kinds) > 0 {
 			query = query.Where("kind IN ?", kinds)
 		}
@@ -636,11 +628,26 @@ var (
 	errJobClaimed = errors.New("job claimed by another worker")
 )
 
+// jobLockKey names the resource a job must hold alone. Reading and indexing
+// one file are serialised; decisions are per set; grouping and dictionary
+// clean-up each run one at a time so two jobs never build the same set or
+// merge the same names concurrently.
 func jobLockKey(job model.Job) string {
-	if job.MaterialID == "" || (job.Kind != model.JobAnalyze && job.Kind != model.JobIndex && job.Kind != model.JobGroup) {
-		return ""
+	switch job.Kind {
+	case model.JobAnalyze, model.JobIndex:
+		if job.MaterialID != "" {
+			return "material:" + job.MaterialID
+		}
+	case model.JobDecide:
+		if job.PackID != "" {
+			return "pack:" + job.PackID
+		}
+	case model.JobGroup:
+		return "group"
+	case model.JobEntity:
+		return "entity"
 	}
-	return "material:" + job.MaterialID
+	return ""
 }
 
 func acquireJobLock(tx *gorm.DB, key, jobID string, now, until time.Time) (bool, error) {
@@ -685,10 +692,8 @@ func (s *Service) executeJob(ctx context.Context, job model.Job) {
 	switch job.Kind {
 	case model.JobIngest:
 		s.RunIngest(runCtx, job.ID)
-	case model.JobReplicate, model.JobAnalyze, model.JobIndex:
+	case model.JobReplicate, model.JobAnalyze, model.JobIndex, model.JobGroup, model.JobDecide, model.JobEntity:
 		s.runLocal(runCtx, job)
-	case model.JobGroup:
-		s.RunGroup(runCtx, job.ID)
 	default:
 		s.failJob(job.ID, job.LeaseOwner, "未知任务类型")
 	}
@@ -712,12 +717,12 @@ func (s *Service) runLocal(ctx context.Context, job model.Job) {
 		}
 		message, extra := jobexec.Failure(job.Kind, err)
 		s.logf("%s job failed: %s", job.Kind, message)
-		s.recordFailure(job, message, extra)
+		s.recordFailure(job, jobexec.Classify(err), message, extra)
 		return
 	}
 	if err := s.CommitJob(ctx, job, out); err != nil && !errors.Is(err, errLeaseLost) {
 		s.logf("commit %s job: %v", job.Kind, err)
-		s.recordFailure(job, "写入任务结果失败", nil)
+		s.recordFailure(job, jobexec.ClassTransient, "写入任务结果失败", nil)
 	}
 }
 
@@ -747,6 +752,12 @@ func (s *Service) prepareJob(ctx context.Context, job model.Job, ocrProviderID s
 		in.Analyze, err = s.prepareAnalyze(ctx, job, ocrProviderID)
 	case model.JobIndex:
 		in.Index, err = s.prepareIndex(ctx, job, ocrProviderID)
+	case model.JobGroup:
+		in.Group, err = s.prepareGroup(ctx, job)
+	case model.JobDecide:
+		in.Decide, err = s.prepareDecide(ctx, job)
+	case model.JobEntity:
+		in.Entity, err = s.prepareEntity(ctx, job)
 	default:
 		err = fmt.Errorf("任务类型 %s 不能交给节点执行", job.Kind)
 	}
@@ -762,18 +773,36 @@ func (s *Service) CommitJob(ctx context.Context, job model.Job, out jobexec.Resu
 		return s.commitAnalyze(ctx, job, out.Analyze)
 	case model.JobIndex:
 		return s.commitIndex(ctx, job, out.Index)
+	case model.JobGroup:
+		return s.commitGroup(ctx, job, out.Group)
+	case model.JobDecide:
+		return s.commitDecide(ctx, job, out.Decide)
+	case model.JobEntity:
+		return s.commitEntity(ctx, job, out.Entity)
 	}
 	return fmt.Errorf("未知任务类型 %s", job.Kind)
 }
 
-// recordFailure marks a job failed together with its kind's projection.
-func (s *Service) recordFailure(job model.Job, message string, extra map[string]int) {
+// recordFailure applies a failure. AI jobs follow the AI failure policy;
+// other jobs retry temporary failures with backoff before they fail.
+func (s *Service) recordFailure(job model.Job, class, message string, extra map[string]int) {
 	message = redact(message)
+	if class == "" {
+		class = jobexec.ClassPermanent
+	}
+	if isAIKind(job.Kind) {
+		s.failAIJob(job, class, message)
+		return
+	}
+	if class == jobexec.ClassTransient && job.Attempts < maxJobAttempts && job.Kind != model.JobIngest {
+		delay := backoffFor(job.Attempts)
+		if s.retryLater(job, s.now().Add(delay), fmt.Sprintf("%s（%s 后自动重试）", message, delay), true) {
+			return
+		}
+	}
 	switch job.Kind {
 	case model.JobReplicate:
 		s.failReplicaJob(job.ID, job.LeaseOwner, job.ReplicaID, message)
-	case model.JobAnalyze:
-		s.failJob(job.ID, job.LeaseOwner, message, func(tx *gorm.DB) error { return s.failAnalyzeTx(tx, job, message) })
 	case model.JobIndex:
 		values := map[string]any{}
 		for k, v := range extra {
@@ -997,7 +1026,7 @@ func (s *Service) succeedJob(jobID, owner string) bool {
 
 func releaseJobLockTx(tx *gorm.DB, jobID string) error {
 	var job model.Job
-	if err := tx.Select("material_id", "kind").Where("id = ?", jobID).First(&job).Error; err != nil {
+	if err := tx.Select("material_id", "pack_id", "kind").Where("id = ?", jobID).First(&job).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}

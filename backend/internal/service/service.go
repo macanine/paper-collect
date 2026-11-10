@@ -231,8 +231,10 @@ func (s *Service) reserveWorkerSlot(kind string) bool {
 	switch kind {
 	case model.JobIngest:
 		limit = settings.IngestConcurrency
-	case model.JobGroup:
-		limit = settings.AnalyzeConcurrency
+	case model.JobGroup, model.JobEntity:
+		limit = 1
+	case model.JobDecide:
+		limit = max(settings.AnalyzeConcurrency, 1)
 	case model.JobReplicate:
 		limit = settings.ReplicateConcurrency
 	case model.JobAnalyze:

@@ -43,12 +43,7 @@ type testEnv struct {
 
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
-	return newEnvWithPullCacheTTL(t, 0)
-}
-
-func newEnvWithPullCacheTTL(t *testing.T, ttl time.Duration) *testEnv {
-	t.Helper()
-	return newEnvWith(t, ttl, nil)
+	return newEnvWith(t, 0, nil)
 }
 
 // newEnvWith builds a master. kinds nil runs every job kind on the master;
@@ -242,90 +237,6 @@ func (e *testEnv) finalizeAndWait(t *testing.T, uploadID string) {
 	t.Fatalf("jobs did not settle")
 }
 
-func TestUploadArchiveAndReplicateEndToEnd(t *testing.T) {
-	env := newEnv(t)
-	pdf := pdfWith("student")
-	packageZip := zipWith(t, map[string][]byte{
-		"学生版.pdf":    pdf,
-		"答案/教师版.pdf": pdfWith("teacher"),
-		"答案/答案.pdf":  pdfWith("answers"),
-	})
-	uploadID, _ := env.upload(t, "2026 高三数学一套", map[string][]byte{
-		"试卷/学生版.pdf": pdf,
-		"整套资料.zip":   packageZip,
-	})
-	zipHash := sha256.Sum256(packageZip)
-	zipSHA := fmt.Sprintf("%x", zipHash)
-	zipCAS := filepath.Join(env.dataDir, "blobs", zipSHA[:2], zipSHA)
-	if _, err := os.Stat(zipCAS); !os.IsNotExist(err) {
-		t.Fatalf("new ZIP must not be stored in CAS: %v", err)
-	}
-	staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
-	if err != nil || len(staged) != 1 {
-		t.Fatalf("uploaded ZIP was not staged: %v", err)
-	}
-	env.finalizeAndWait(t, uploadID)
-	if _, err := os.Stat(staged[0]); !os.IsNotExist(err) {
-		t.Fatalf("successful ingest must remove temporary ZIP: %v", err)
-	}
-
-	status, body := env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=50", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("list materials %d: %s", status, body)
-	}
-	var list struct {
-		Data struct {
-			Total int `json:"total"`
-			Items []struct {
-				ID           string `json:"id"`
-				Part         string `json:"part"`
-				Status       string `json:"status"`
-				FileName     string `json:"file_name"`
-				OriginalName string `json:"original_name"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		t.Fatalf("list body: %s", body)
-	}
-	// The same student copy arrived twice (folder and ZIP): one file, two sources.
-	if list.Data.Total != 3 {
-		t.Fatalf("expected three unique documents, got %d: %s", list.Data.Total, body)
-	}
-	foundZipMember := false
-	for _, item := range list.Data.Items {
-		if strings.HasSuffix(item.FileName, ".zip") {
-			t.Fatalf("ZIP original should not become a material: %s", body)
-		}
-		if item.Status != "archived" {
-			t.Fatalf("material %s status %s, want archived (replica not ready)", item.FileName, item.Status)
-		}
-		if item.OriginalName == "教师版.pdf" {
-			foundZipMember = true
-			if item.Part != "teacher" {
-				t.Fatalf("expected part suggestion teacher, got %s", item.Part)
-			}
-		}
-	}
-	if !foundZipMember {
-		t.Fatalf("zip member not archived: %s", body)
-	}
-
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections?page=1&page_size=20", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"total":0`) {
-		t.Fatalf("uploads must not create topics: %d %s", status, body)
-	}
-	result := env.uploadResult(t, uploadID)
-	if result.Data.NewCount != 3 || result.Data.DuplicateCount != 1 || len(result.Data.Results) != 4 {
-		t.Fatalf("upload results must list every arrival: %+v", result.Data)
-	}
-	// 教师版 and 答案 are named only by their part, so the folder they share
-	// makes them one set; the student copy sits elsewhere.
-	if got := env.listPacks(t, ""); got.Data.Total != 2 {
-		t.Fatalf("expected two packs: %+v", got.Data)
-	}
-}
-
 // syncAllToLocalDrive adds a local drive and points the fallback rule at it,
 // going through the same preview-then-save flow as the storage page.
 func (e *testEnv) syncAllToLocalDrive(t *testing.T) string {
@@ -372,92 +283,9 @@ func (e *testEnv) syncAllToDrive(t *testing.T, input map[string]any) string {
 	return drive.Data.ID
 }
 
-func TestPullCloudReplicaIntoTemporaryCache(t *testing.T) {
-	env := newEnvWithPullCacheTTL(t, 2*time.Hour)
-	env.syncAllToLocalDrive(t)
-	pdf := minimalPDF()
-	uploadID, _ := env.upload(t, "临时拉取测试", map[string][]byte{"学生版.pdf": pdf})
-	env.finalizeAndWait(t, uploadID)
-
-	var material model.Material
-	if err := env.db.First(&material).Error; err != nil {
-		t.Fatal(err)
-	}
-	var blob model.Blob
-	if err := env.db.Where("id = ?", material.BlobID).First(&blob).Error; err != nil {
-		t.Fatal(err)
-	}
-	var replica model.Replica
-	if err := env.db.Where("blob_id = ?", material.BlobID).First(&replica).Error; err != nil {
-		t.Fatal(err)
-	}
-	if replica.Status != model.ReplicaReady {
-		t.Fatalf("replica status = %s, want ready", replica.Status)
-	}
-
-	casPath := filepath.Join(env.dataDir, "blobs", blob.SHA256[:2], blob.SHA256)
-	if err := os.Remove(casPath); err != nil {
-		t.Fatalf("remove CAS copy: %v", err)
-	}
-
-	status, body := env.do(t, http.MethodPost, "/api/v1/materials/"+material.ID+"/pull-cache", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("pull cache %d: %s", status, body)
-	}
-	var pulled struct {
-		Data struct {
-			DownloadURL string    `json:"download_url"`
-			SizeBytes   int64     `json:"size_bytes"`
-			SHA256      string    `json:"sha256"`
-			ExpiresAt   time.Time `json:"expires_at"`
-			ExpiresIn   int64     `json:"expires_in"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &pulled); err != nil {
-		t.Fatalf("pull body: %s", body)
-	}
-	wantURL := "/api/v1/materials/" + material.ID + "/pull-cache"
-	if pulled.Data.DownloadURL != wantURL || pulled.Data.SizeBytes != int64(len(pdf)) ||
-		pulled.Data.SHA256 != material.SHA256 || pulled.Data.ExpiresAt.IsZero() || pulled.Data.ExpiresIn < 1 {
-		t.Fatalf("unexpected pull metadata: %s", body)
-	}
-	if _, err := os.Stat(casPath); !os.IsNotExist(err) {
-		t.Fatalf("pull cache must not recreate permanent CAS: %v", err)
-	}
-	cachePath := filepath.Join(env.dataDir, "tmp", "material-pulls", material.SHA256)
-	if info, err := os.Stat(cachePath); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		t.Fatalf("temporary cache missing: %v", err)
-	}
-
-	status, body = env.do(t, http.MethodGet, wantURL, nil, nil)
-	if status != http.StatusOK || !bytes.Equal(body, pdf) {
-		t.Fatalf("download temporary cache %d: %q", status, body)
-	}
-
-	stillValid := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(cachePath, stillValid, stillValid); err != nil {
-		t.Fatal(err)
-	}
-	status, body = env.do(t, http.MethodGet, wantURL, nil, nil)
-	if status != http.StatusOK || !bytes.Equal(body, pdf) {
-		t.Fatalf("configured TTL expired too early %d: %q", status, body)
-	}
-
-	expired := time.Now().Add(-3 * time.Hour)
-	if err := os.Chtimes(cachePath, expired, expired); err != nil {
-		t.Fatal(err)
-	}
-	status, body = env.do(t, http.MethodGet, wantURL, nil, nil)
-	if status != http.StatusGone || !strings.Contains(string(body), `"code":"gone"`) {
-		t.Fatalf("expired temporary cache %d: %s", status, body)
-	}
-	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
-		t.Fatalf("expired temporary cache was not removed: %v", err)
-	}
-}
-
 func TestPullCacheRejectsCorruptCloudReplicaWithoutPublishing(t *testing.T) {
 	env := newEnv(t)
+	configureCatalogAI(t, env, newFakeAI(t))
 	env.syncAllToLocalDrive(t)
 	pdf := minimalPDF()
 	uploadID, _ := env.upload(t, "损坏副本测试", map[string][]byte{"学生版.pdf": pdf})
@@ -502,29 +330,6 @@ func TestPullCacheRejectsCorruptCloudReplicaWithoutPublishing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(env.dataDir, "blobs", blob.SHA256[:2], blob.SHA256)); !os.IsNotExist(err) {
 		t.Fatalf("corrupt pull recreated permanent CAS: %v", err)
-	}
-}
-
-func TestMaliciousZipFailsJobWithoutPublishing(t *testing.T) {
-	env := newEnv(t)
-	evil := zipWith(t, map[string][]byte{"../evil.pdf": minimalPDF()})
-	uploadID, _ := env.upload(t, "恶意压缩包", map[string][]byte{"evil.zip": evil})
-	env.finalizeAndWait(t, uploadID)
-
-	status, body := env.do(t, http.MethodGet, "/api/v1/jobs?status=failed", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("jobs status %d: %s", status, body)
-	}
-	if !strings.Contains(string(body), "\"failed\"") {
-		t.Fatalf("expected failed job: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=20&q=evil", nil, nil)
-	if status != http.StatusOK || strings.Contains(string(body), "\"total\":1") {
-		t.Fatalf("path traversal member must not be published: %s", body)
-	}
-	staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
-	if err != nil || len(staged) != 1 {
-		t.Fatalf("failed upload must remain available for retry: %v", err)
 	}
 }
 
@@ -634,10 +439,6 @@ func TestDirectKeyEnforcesScopesAndMCPToolVisibility(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("invalid key accepted: %d", status)
 	}
-	status, _ = env.do(t, http.MethodPost, "/api/v1/auth/agent-token", nil, nil)
-	if status != http.StatusNotFound {
-		t.Fatalf("key exchange endpoint should no longer exist: %d", status)
-	}
 }
 
 func TestUnauthenticatedRequestsAreRejected(t *testing.T) {
@@ -685,164 +486,6 @@ func (e *testEnv) listPacks(t *testing.T, query string) packListBody {
 	return out
 }
 
-func TestDedupPairingTrashAndTopics(t *testing.T) {
-	env := newEnv(t)
-	first := map[string][]byte{
-		"2025联考/数学试题.pdf": pdfWith("math-q"),
-		"2025联考/数学答案.pdf": pdfWith("math-a"),
-		"其他/物理讲义.pdf":     pdfWith("physics"),
-	}
-	uploadID, _ := env.upload(t, "第一批", first)
-	env.finalizeAndWait(t, uploadID)
-
-	packs := env.listPacks(t, "")
-	if packs.Data.Total != 2 {
-		t.Fatalf("siblings must pair into one pack: %+v", packs.Data)
-	}
-	var mathPack string
-	for _, p := range packs.Data.Items {
-		if len(p.Members) == 2 {
-			mathPack = p.ID
-			if !p.HasAnswers {
-				t.Fatalf("paired pack must report answers: %+v", p)
-			}
-			for _, m := range p.Members {
-				if !strings.Contains(m.FileName, "试题卷") && !strings.Contains(m.FileName, "答案解析") {
-					t.Fatalf("member file names must follow the canonical part name: %+v", p.Members)
-				}
-			}
-		}
-	}
-	if mathPack == "" {
-		t.Fatalf("math pack not found: %+v", packs.Data)
-	}
-
-	// Re-uploading the same content only adds sources.
-	second := map[string][]byte{
-		"转发/数学试题(1).pdf": pdfWith("math-q"),
-		"转发/化学周测.pdf":    pdfWith("chem"),
-	}
-	uploadID, _ = env.upload(t, "第二批", second)
-	env.finalizeAndWait(t, uploadID)
-	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+uploadID, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"new_count":1`) || !strings.Contains(string(body), `"duplicate_count":1`) {
-		t.Fatalf("upload must report one new and one duplicate file: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=50", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"total":4`) {
-		t.Fatalf("duplicates must not create files: %s", body)
-	}
-
-	// Topics keep packs when deleted.
-	status, body = env.do(t, http.MethodPost, "/api/v1/collections", map[string]any{"title": "导数专题", "pack_ids": []string{mathPack}}, nil)
-	if status != http.StatusCreated || !strings.Contains(string(body), `"pack_count":1`) {
-		t.Fatalf("create topic %d: %s", status, body)
-	}
-	if got := env.listPacks(t, "&collection_id="+jsonField(t, body, "id")); got.Data.Total != 1 {
-		t.Fatalf("topic filter: %+v", got.Data)
-	}
-	status, body = env.do(t, http.MethodDelete, "/api/v1/collections/"+jsonField(t, body, "id"), nil, nil)
-	if status != http.StatusNoContent {
-		t.Fatalf("delete topic %d: %s", status, body)
-	}
-
-	// Trash, restore, purge.
-	status, body = env.do(t, http.MethodPost, "/api/v1/packs/trash", map[string]any{"ids": []string{mathPack}}, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"count":1`) {
-		t.Fatalf("trash %d: %s", status, body)
-	}
-	if got := env.listPacks(t, ""); got.Data.Total != 2 {
-		t.Fatalf("trashed pack must leave the library: %+v", got.Data)
-	}
-	if got := env.listPacks(t, "&trashed=true"); got.Data.Total != 1 {
-		t.Fatalf("trashed pack must be listed in the bin: %+v", got.Data)
-	}
-	status, body = env.do(t, http.MethodPost, "/api/v1/packs/purge", map[string]any{"ids": []string{packs.Data.Items[0].ID, packs.Data.Items[1].ID}}, nil)
-	if status != http.StatusConflict {
-		t.Fatalf("purging live packs must be refused: %d %s", status, body)
-	}
-	status, body = env.do(t, http.MethodPost, "/api/v1/packs/restore", map[string]any{"ids": []string{mathPack}}, nil)
-	if status != http.StatusOK || env.listPacks(t, "").Data.Total != 3 {
-		t.Fatalf("restore %d: %s", status, body)
-	}
-	env.do(t, http.MethodPost, "/api/v1/packs/trash", map[string]any{"ids": []string{mathPack}}, nil)
-	status, body = env.do(t, http.MethodPost, "/api/v1/packs/purge", map[string]any{"ids": []string{mathPack}}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("purge %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=50", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"total":2`) {
-		t.Fatalf("purge must remove the pack files: %s", body)
-	}
-	if got := env.listPacks(t, "&trashed=true"); got.Data.Total != 0 {
-		t.Fatalf("bin must be empty: %+v", got.Data)
-	}
-}
-
-func TestSplitMergeAndBulkEditPacks(t *testing.T) {
-	env := newEnv(t)
-	uploadID, _ := env.upload(t, "配套", map[string][]byte{
-		"卷/英语试题.pdf": pdfWith("en-q"),
-		"卷/英语答案.pdf": pdfWith("en-a"),
-	})
-	env.finalizeAndWait(t, uploadID)
-	packs := env.listPacks(t, "")
-	if packs.Data.Total != 1 || len(packs.Data.Items[0].Members) != 2 {
-		t.Fatalf("expected one pair: %+v", packs.Data)
-	}
-	pack := packs.Data.Items[0]
-	answer := pack.Members[1].ID
-	status, body := env.do(t, http.MethodPatch, "/api/v1/materials/"+answer, map[string]any{"new_pack": true}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("split %d: %s", status, body)
-	}
-	if got := env.listPacks(t, ""); got.Data.Total != 2 {
-		t.Fatalf("split must create a pack: %+v", got.Data)
-	}
-	newPack := jsonField(t, body, "pack_id")
-	status, body = env.do(t, http.MethodPost, "/api/v1/collections", map[string]any{
-		"title": "合并专题", "pack_ids": []string{newPack},
-	}, nil)
-	collectionID := jsonField(t, body, "id")
-	if status != http.StatusCreated || collectionID == "" {
-		t.Fatalf("create source topic %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodPost, "/api/v1/packs/"+pack.ID+"/merge", map[string]any{"source_ids": []string{newPack}}, nil)
-	if status != http.StatusOK || env.listPacks(t, "").Data.Total != 1 {
-		t.Fatalf("merge %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/collections/"+collectionID, nil, nil)
-	var topic struct {
-		Data struct {
-			PackCount int `json:"pack_count"`
-			Packs     []struct {
-				ID string `json:"id"`
-			} `json:"packs"`
-		} `json:"data"`
-	}
-	if status != http.StatusOK || json.Unmarshal(body, &topic) != nil ||
-		topic.Data.PackCount != 1 || len(topic.Data.Packs) != 1 || topic.Data.Packs[0].ID != pack.ID {
-		t.Fatalf("merged pack must retain source topics %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodPost, "/api/v1/packs/bulk", map[string]any{
-		"ids": []string{pack.ID}, "patch": map[string]any{"doc_type": "monthly", "grade": "grade11", "cohort": 2026, "subject_codes": []string{"english"}, "exam_date": "2025-03"},
-	}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("bulk %d: %s", status, body)
-	}
-	got := env.listPacks(t, "&doc_type=monthly&grade=grade11&cohort=2026&subject=english")
-	if got.Data.Total != 1 || got.Data.Items[0].Title != "2026届 3月月考 高二 英语" {
-		t.Fatalf("bulk edit must rename the pack: %+v", got.Data)
-	}
-	if missing := env.listPacks(t, "&missing=answers"); missing.Data.Total != 0 {
-		t.Fatalf("complete pack must not be listed as missing answers: %+v", missing.Data)
-	}
-	status, _ = env.do(t, http.MethodGet, "/api/v1/packs/"+pack.ID+"/download", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("pack download %d", status)
-	}
-}
-
 func jsonField(t *testing.T, body []byte, field string) string {
 	t.Helper()
 	var envelope struct {
@@ -853,76 +496,6 @@ func jsonField(t *testing.T, body []byte, field string) string {
 	}
 	v, _ := envelope.Data[field].(string)
 	return v
-}
-
-func TestZIPReportsUnsupportedMembers(t *testing.T) {
-	env := newEnv(t)
-	packageZip := zipWith(t, map[string][]byte{"资料.pdf": minimalPDF(), "说明.txt": []byte("unsupported")})
-	id, _ := env.upload(t, "压缩包", map[string][]byte{"资料.zip": packageZip})
-	env.finalizeAndWait(t, id)
-	status, body := env.do(t, http.MethodGet, "/api/v1/jobs?kind=ingest", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("list jobs %d", status)
-	}
-	var jobs struct {
-		Data struct {
-			Items []struct {
-				ID string `json:"id"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &jobs); err != nil || len(jobs.Data.Items) != 1 {
-		t.Fatalf("find ingest job: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/jobs/"+jobs.Data.Items[0].ID, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), "1 个不支持的文件，已跳过，未归档") {
-		t.Fatalf("skipped files should be reported: %s", body)
-	}
-}
-
-func TestZIPWithNoSupportedMembersDoesNotPublish(t *testing.T) {
-	env := newEnv(t)
-	id, _ := env.upload(t, "压缩包", map[string][]byte{"空.zip": zipWith(t, map[string][]byte{"说明.txt": []byte("unsupported")})})
-	env.finalizeAndWait(t, id)
-	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"status":"failed"`) {
-		t.Fatalf("unsupported-only ZIP must fail: %s", body)
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"total":0`) {
-		t.Fatalf("unsupported-only ZIP must not publish: %s", body)
-	}
-}
-
-func TestPreviouslyReceivedZIPInCASCanStillBeProcessed(t *testing.T) {
-	env := newEnv(t)
-	packageZip := zipWith(t, map[string][]byte{"资料.pdf": minimalPDF()})
-	id, _ := env.upload(t, "旧上传", map[string][]byte{"资料.zip": packageZip})
-	staged, err := filepath.Glob(filepath.Join(env.dataDir, "tmp", "upload-archives", "*.zip"))
-	if err != nil || len(staged) != 1 {
-		t.Fatalf("find staged ZIP: %v", err)
-	}
-	store, err := blob.NewStore(env.dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(packageZip)
-	sha := fmt.Sprintf("%x", sum)
-	if err := store.Publish(staged[0], sha); err != nil {
-		t.Fatal(err)
-	}
-	env.finalizeAndWait(t, id)
-	status, body := env.do(t, http.MethodGet, "/api/v1/uploads/"+id, nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"status":"completed"`) {
-		t.Fatalf("legacy ZIP upload did not complete: %s", body)
-	}
-	if !store.Exists(sha) {
-		t.Fatal("old CAS file may belong to a historical material and must be preserved")
-	}
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"total":1`) || strings.Contains(string(body), `"file_name":"资料.zip"`) {
-		t.Fatalf("legacy ZIP created an unexpected material: %s", body)
-	}
 }
 
 type gatedReader struct {

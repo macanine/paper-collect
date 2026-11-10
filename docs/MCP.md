@@ -109,9 +109,15 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `ocr_providers_test` | `POST /api/v1/ocr/providers/:id/test` | `ai:write` |
 | `ai_settings_get` | `GET /api/v1/ai/settings` | `ai:read` |
 | `ai_settings_update` | `PUT /api/v1/ai/settings` | `ai:write` |
+| `ai_rerun` | `POST /api/v1/ai/rerun` | `ai:write` |
+| `entities_list` | `GET /api/v1/entities` | `materials:read` |
+| `entities_update` | `PATCH /api/v1/entities/:id` | `materials:write` |
+| `entities_merge` | `POST /api/v1/entities/:id/merge` | `materials:write` |
 | `packs_search` | `GET /api/v1/packs` | `materials:read` |
 | `packs_facets` | `GET /api/v1/packs/facets` | `materials:read` |
 | `packs_get` | `GET /api/v1/packs/:id` | `materials:read` |
+| `packs_ai_get` | `GET /api/v1/packs/:id/ai` | `materials:read` |
+| `packs_ai_redecide` | `POST /api/v1/packs/:id/ai/redecide` | `materials:write` |
 | `packs_update` | `PATCH /api/v1/packs/:id` | `materials:write` |
 | `packs_bulk_update` | `POST /api/v1/packs/bulk` | `materials:write` |
 | `packs_merge` | `POST /api/v1/packs/:id/merge` | `materials:write` |
@@ -136,7 +142,6 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `material_questions_list` | `GET /api/v1/materials/:id/questions` | `materials:read` |
 | `material_index_get` | `GET /api/v1/materials/:id/index` | `materials:read` |
 | `material_index_enqueue` | `POST /api/v1/materials/:id/index` | `materials:write` |
-| `material_analysis_apply` | `POST /api/v1/materials/:id/analysis/apply` | `materials:write` |
 | `collections_list` | `GET /api/v1/collections` | `collections:read` |
 | `collections_create` | `POST /api/v1/collections` | `collections:write` |
 | `collections_get` | `GET /api/v1/collections/:id` | `collections:read` |
@@ -154,6 +159,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `jobs_stats` | `GET /api/v1/jobs/stats` | `jobs:read` |
 | `jobs_get` | `GET /api/v1/jobs/:id` | `jobs:read` |
 | `jobs_retry` | `POST /api/v1/jobs/:id/retry` | `jobs:write` |
+| `jobs_retry_failed` | `POST /api/v1/jobs/retry-failed` | `jobs:write` |
 | `storage_drives_list` | `GET /api/v1/storage/drives` | `storage:read` |
 | `storage_drives_create` | `POST /api/v1/storage/drives` | `storage:write` |
 | `storage_drives_update` | `PATCH /api/v1/storage/drives/:id` | `storage:write` |
@@ -168,7 +174,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `storage_reconcile` | `POST /api/v1/storage/reconcile` | `storage:write` |
 | `storage_replica_share` | `POST /api/v1/storage/replicas/:id/share` | `storage:write` |
 
-资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。`materials_search` 的 `stage=review` 就是待确认收件箱，`materials_accept` 批量确认；`status` 按归档状态、`sync_status` 按网盘同步状态筛选。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
+资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。编目全部由 AI 完成：`materials_search` 的 `stage=attention` 是需关注的文件（`materials_review_packs` 按套卷列出），`materials_accept` 按当前编目确认；`packs_ai_get` 查看 AI 编目与校验问题，`packs_ai_redecide` 让 AI 重新编目，`packs_update` 修改的字段会被锁定；学校、联盟和标签的规范名称用 `entities_*` 维护；`status` 按归档状态、`sync_status` 按网盘同步状态筛选。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
 
 网盘同步分三步：先用 `storage_drives_create` 添加网盘，再用 `storage_rules_list` 取得当前规则、修改后调用 `storage_rules_preview` 查看影响并拿到 `preview_token`，最后把同一份规则和令牌交给 `storage_rules_replace`。令牌 15 分钟有效，期间规则或网盘被修改需重新预览。`storage_rules_explain` 说明某个文件为什么去了哪个网盘；规则外副本用 `storage_replicas_list`（`status=orphaned`）查看，再用 `storage_replicas_bulk` 删除远端或只移除记录。
 

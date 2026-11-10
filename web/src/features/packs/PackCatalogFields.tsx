@@ -23,11 +23,18 @@ export type CatalogField = Exclude<keyof CatalogFormValues, 'title'>;
 
 const ALL_FIELDS: CatalogField[] = ['doc_type', 'subject_codes', 'grade', 'cohort', 'term', 'region', 'organization', 'exam_date', 'exam_name', 'chapter', 'tags'];
 
-const COMMON_REGIONS = ['全国甲卷', '全国乙卷', '新高考I卷', '新高考II卷', '北京', '天津', '上海', '重庆', '浙江', '江苏', '广东', '山东', '湖北', '湖南', '河北', '河南', '福建', '安徽', '江西', '四川', '辽宁', '黑龙江', '吉林', '山西', '陕西'];
+/** 固定地区列表，与服务端 catalogai.Regions 一致；地区只能从中选择。 */
+export const REGIONS = [
+  '全国甲卷', '全国乙卷', '新高考I卷', '新高考II卷', '全国卷',
+  '北京', '天津', '河北', '山西', '内蒙古', '辽宁', '吉林', '黑龙江', '上海', '江苏',
+  '浙江', '安徽', '福建', '江西', '山东', '河南', '湖北', '湖南', '广东', '广西',
+  '海南', '重庆', '四川', '贵州', '云南', '西藏', '陕西', '甘肃', '青海', '宁夏',
+  '新疆', '香港', '澳门', '台湾',
+];
 
 export function packToForm(pack: Pack): CatalogFormValues {
   return {
-    title: pack.title_locked ? pack.title : undefined,
+    title: pack.locked_fields.includes('title') ? pack.title : undefined,
     doc_type: pack.doc_type || undefined,
     subject_codes: pack.subject_codes,
     grade: pack.grade || undefined,
@@ -78,15 +85,14 @@ export function formToUpdate(values: CatalogFormValues, fields: (CatalogField | 
 interface Props {
   fields?: CatalogField[];
   facets?: PackFacets;
-  /** AI 不确定的字段，表单项以警告色提示。 */
-  uncertain?: string[];
+  /** 人工锁定的字段，表单项附注“已锁定”。 */
+  locked?: string[];
   columns?: 1 | 2 | 3;
 }
 
-export function PackCatalogFields({ fields = ALL_FIELDS, facets, uncertain = [], columns = 2 }: Props) {
-  const warn = (name: string) =>
-    uncertain.includes(name) ? { validateStatus: 'warning' as const, help: 'AI 不确定，请核对' } : {};
-  const regionOptions = Array.from(new Set([...(facets?.regions.map((f) => f.value) ?? []), ...COMMON_REGIONS])).map((value) => ({ value }));
+export function PackCatalogFields({ fields = ALL_FIELDS, facets, locked = [], columns = 2 }: Props) {
+  const warn = (name: string) => (locked.includes(name) ? { help: '人工设定，AI 不会改动' } : {});
+  const regionOptions = REGIONS.map((value) => ({ value, label: value }));
   const orgOptions = (facets?.organizations ?? []).map((f) => ({ value: f.value }));
   const tagOptions = (facets?.tags ?? []).map((f) => ({ value: f.value, label: f.value }));
   const has = (field: CatalogField) => fields.includes(field);
@@ -119,12 +125,12 @@ export function PackCatalogFields({ fields = ALL_FIELDS, facets, uncertain = [],
       ) : null}
       {has('region') ? (
         <Form.Item name="region" label={FIELD_LABELS.region} {...warn('region')}>
-          <AutoComplete allowClear options={regionOptions} placeholder="如 浙江、新高考I卷" filterOption />
+          <Select allowClear showSearch optionFilterProp="label" options={regionOptions} placeholder="如 浙江、新高考I卷" />
         </Form.Item>
       ) : null}
       {has('organization') ? (
         <Form.Item name="organization" label={FIELD_LABELS.organization} {...warn('organization')}>
-          <AutoComplete allowClear options={orgOptions} placeholder="学校或联盟，如 Z20 联盟" filterOption />
+          <AutoComplete allowClear options={orgOptions} placeholder="学校或联盟的规范全称" filterOption />
         </Form.Item>
       ) : null}
       {has('exam_date') ? (
@@ -139,7 +145,7 @@ export function PackCatalogFields({ fields = ALL_FIELDS, facets, uncertain = [],
       ) : null}
       {has('exam_name') ? (
         <Form.Item name="exam_name" label={FIELD_LABELS.exam_name} {...warn('exam_name')}>
-          <Input allowClear placeholder="试卷上印的名称，用于配套建议" maxLength={255} />
+          <Input allowClear placeholder="试卷上印的考试名称" maxLength={255} />
         </Form.Item>
       ) : null}
       {has('chapter') ? (

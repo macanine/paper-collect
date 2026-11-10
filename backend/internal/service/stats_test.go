@@ -18,10 +18,10 @@ func TestStatusStatistics(t *testing.T) {
 	if err != nil || jobs != (JobStats{}) {
 		t.Fatalf("empty job stats: %+v %v", jobs, err)
 	}
-	stages := []string{model.StageReady, model.StageReady, model.StageReview, model.StageProcessing, model.StageFailed}
+	stages := []string{model.StageReady, model.StageReady, model.StageAttention, model.StageProcessing, model.StageWaitingAI}
 	syncs := []string{model.SyncSynced, model.SyncSyncing, model.SyncWaitingCatalog, model.SyncAttention, model.SyncNotRequired}
 	for i, status := range []string{model.StatusArchived, model.StatusArchived, model.StatusMissing, model.StatusMissing, "future_status"} {
-		if err := db.Create(&model.Material{ID: newID(), Status: status, SyncStatus: syncs[i], Stage: stages[i], SHA256: testSHA(), ReviewReasonsJSON: "[]"}).Error; err != nil {
+		if err := db.Create(&model.Material{ID: newID(), Status: status, SyncStatus: syncs[i], Stage: stages[i], SHA256: testSHA(), AttentionJSON: "[]"}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,7 +37,7 @@ func TestStatusStatistics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (LibraryStats{Packs: 1, Files: 5, Processing: 1, Review: 1, Ready: 2, Failed: 1, MissingAnswers: 1,
+	if want := (LibraryStats{Packs: 1, Files: 5, Processing: 1, NeedsAttention: 1, Ready: 2, WaitingAI: 1, MissingAnswers: 1,
 		Archived: 2, Missing: 2, WaitingCatalog: 1, Syncing: 1, Synced: 1, Attention: 1, NotRequired: 1}); materials != want {
 		t.Fatalf("material stats: got %+v, want %+v", materials, want)
 	}

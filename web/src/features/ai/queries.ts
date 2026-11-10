@@ -1,16 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  applyMaterialAnalysis,
   createAIProvider,
   createOCRProvider,
   getAISettings,
-  getMaterialAnalysis,
-  enqueueMaterialAnalysis,
+  getMaterialCard,
+  getPackAI,
   listAIProviders,
   listOCRProviders,
   probeAIProviders,
   probeSavedProvider,
   putAISettings,
+  redecidePack,
+  rereadMaterial,
   testAIProvider,
   testOCRProvider,
   updateOCRProvider,
@@ -24,6 +25,7 @@ const aiKeys = {
   ocrProviders: ['ai', 'ocr-providers'] as const,
   settings: ['ai', 'settings'] as const,
   analysis: (materialId: string) => ['materials', materialId, 'analysis'] as const,
+  packAI: (packId: string) => ['packs', packId, 'ai'] as const,
 };
 
 export function useAIProviders(enabled = true) {
@@ -96,10 +98,11 @@ export function useTestOCRProvider() {
   return useMutation({ mutationFn: (id: string) => testOCRProvider(id) });
 }
 
-export function useMaterialAnalysis(materialId: string, enabled = true) {
+/** AI 对单个文件的阅读记录；处理中时轮询。 */
+export function useMaterialCard(materialId: string, enabled = true) {
   return useQuery({
     queryKey: aiKeys.analysis(materialId),
-    queryFn: () => getMaterialAnalysis(materialId),
+    queryFn: () => getMaterialCard(materialId),
     enabled: enabled && materialId !== '',
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
     refetchInterval: (query) => {
@@ -109,21 +112,38 @@ export function useMaterialAnalysis(materialId: string, enabled = true) {
   });
 }
 
-export function useEnqueueAnalysis(materialId: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (force: boolean) => enqueueMaterialAnalysis(materialId, force),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: aiKeys.analysis(materialId) }),
+/** 套卷最近一次 AI 编目决定；处理中时轮询。 */
+export function usePackAI(packId: string, enabled = true) {
+  return useQuery({
+    queryKey: aiKeys.packAI(packId),
+    queryFn: () => getPackAI(packId),
+    enabled: enabled && packId !== '',
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === 'pending' || status === 'running' ? 3000 : false;
+    },
   });
 }
 
-export function useApplyAnalysis(materialId: string) {
+export function useRereadMaterial(materialId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => applyMaterialAnalysis(materialId),
+    mutationFn: () => rereadMaterial(materialId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['materials'] });
       void queryClient.invalidateQueries({ queryKey: aiKeys.analysis(materialId) });
+    },
+  });
+}
+
+export function useRedecidePack(packId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => redecidePack(packId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['packs'] });
+      void queryClient.invalidateQueries({ queryKey: ['materials'] });
+      void queryClient.invalidateQueries({ queryKey: aiKeys.packAI(packId) });
     },
   });
 }

@@ -33,9 +33,6 @@ func (s *Service) TrashPacks(ctx context.Context, p auth.Principal, ids []string
 		if err := tx.Where("pack_id IN ?", ids).Delete(&model.Material{}).Error; err != nil {
 			return wrap("trash materials", err)
 		}
-		if err := tx.Model(&model.Material{}).Where("suggested_pack_id IN ?", ids).Update("suggested_pack_id", "").Error; err != nil {
-			return wrap("clear suggestions", err)
-		}
 		return s.audit(tx, p, "pack.trash", strings.Join(ids, ","))
 	})
 	return int(n), err
@@ -61,6 +58,10 @@ func (s *Service) TrashMaterial(ctx context.Context, p auth.Principal, id string
 				return err
 			}
 			if _, err := s.refreshPackNamesTx(tx, m.PackID); err != nil {
+				return err
+			}
+			// The remaining files form a different set now; the AI decides it again.
+			if err := s.membersChangedTx(tx, m.PackID, s.now()); err != nil {
 				return err
 			}
 			if _, err := s.refreshPackNamesTx(tx, fresh); err != nil {
@@ -151,6 +152,12 @@ func (s *Service) purgePacks(ctx context.Context, packIDs []string) error {
 		if err := tx.Where("pack_id IN ?", packIDs).Delete(&model.CollectionItem{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("pack_id IN ?", packIDs).Delete(&model.PackDecision{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("kind = ? AND pack_id IN ? AND status = ?", model.JobDecide, packIDs, model.JobPending).Delete(&model.Job{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Where("id IN ?", packIDs).Delete(&model.Pack{}).Error
 	})
 }
@@ -182,17 +189,17 @@ func (s *Service) purgeMaterials(ctx context.Context, ids []string) error {
 		if err := tx.Where("material_id IN ?", ids).Delete(&model.MaterialSource{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("material_id IN ?", ids).Delete(&model.MaterialAnalysis{}).Error; err != nil {
+		if err := tx.Where("material_id IN ?", ids).Delete(&model.FileCard{}).Error; err != nil {
 			return err
 		}
 		// Remove file-scoped work together with its lease locks.
 		materialJobs := tx.Model(&model.Job{}).
 			Select("id").
-			Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobIndex, model.JobGroup}, ids)
+			Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobIndex}, ids)
 		if err := tx.Where("job_id IN (?)", materialJobs).Delete(&model.JobLock{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobIndex, model.JobGroup}, ids).
+		if err := tx.Where("kind IN ? AND material_id IN ?", []string{model.JobAnalyze, model.JobIndex}, ids).
 			Delete(&model.Job{}).Error; err != nil {
 			return err
 		}

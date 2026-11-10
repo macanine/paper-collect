@@ -1,4 +1,4 @@
-import type { SubjectCode, Part, DocType, Term, Stage, ReviewReason, Grade, MaterialStatus, SyncStatus, UserRole, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus,
+import type { SubjectCode, Part, DocType, Term, Stage, AIStep, Grade, MaterialStatus, SyncStatus, UserRole, ReplicaStatus, Verification, ShareStatus, JobKind, JobStatus, UploadStatus, Scope, AnalysisStatus, IndexStatus,
   NodeStatus,
 } from '../api/types';
 
@@ -65,19 +65,42 @@ export const TERM_LABELS: Record<Term, string> = {
 };
 
 export const STAGE_LABELS: Record<Stage, string> = {
-  processing: '识别中',
-  review: '待确认',
+  processing: 'AI 整理中',
+  waiting_ai: '等待 AI',
+  attention: '需关注',
   ready: '已入库',
-  failed: '识别失败',
 };
 
-export const REVIEW_REASON_LABELS: Record<ReviewReason, string> = {
-  low_confidence: 'AI 把握不足',
-  pack_suggestion: '配套待确认',
-  duplicate_suspect: '疑似重复',
-  analysis_failed: '识别失败',
-  manual: '需人工编目',
+export const AI_STEP_LABELS: Record<AIStep, string> = {
+  '': '',
+  read: '阅读文件',
+  group: '分组成套',
+  decide: '确定编目',
 };
+
+/** 需关注原因（流程原因与校验代码，代码后的 :字段 部分单独显示）。 */
+export const ATTENTION_REASON_LABELS: Record<string, string> = {
+  ai_failed: 'AI 多次失败',
+  group_unverified: '分组未能确认',
+  metadata_only: '未读到正文',
+  duplicate_role: '部件重复',
+  missing_file: '编目漏掉文件',
+  unknown_file: '编目含未知文件',
+  duplicate_file: '文件重复列出',
+  role_invalid: '部件无效',
+  answer_page: '缺答案起始页',
+  doc_type_missing: '缺资料类型',
+  doc_type_invalid: '资料类型无效',
+  subjects_missing: '缺学科',
+  grade_missing: '缺年级',
+  not_json: '模型输出无效',
+};
+
+/** 显示一条需关注原因，例如 duplicate_role:files → 部件重复。 */
+export function attentionReasonLabel(reason: string): string {
+  const code = reason.split(':')[0] ?? reason;
+  return ATTENTION_REASON_LABELS[code] ?? code;
+}
 
 /** AI 返回的不确定字段名 → 中文。 */
 export const FIELD_LABELS: Record<string, string> = {
@@ -140,9 +163,11 @@ export const SHARE_STATUS_LABELS: Record<ShareStatus, string> = {
 export const JOB_KIND_LABELS: Record<JobKind, string> = {
   ingest: '归档入库',
   replicate: '副本复制',
-  analyze: 'AI 识别',
+  analyze: 'AI 阅读',
   index: '题目索引',
-  group: '配套建议',
+  group: 'AI 分组',
+  decide: 'AI 编目',
+  entity: '名称去重',
 };
 
 export const ANALYSIS_STATUS_LABELS: Record<AnalysisStatus, string> = {

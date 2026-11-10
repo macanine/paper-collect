@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,14 +18,10 @@ import (
 )
 
 type fakeAI struct {
-	server      *httptest.Server
-	mu          sync.Mutex
-	lastChat    map[string]any
-	visionHit   bool
-	visionSeen  bool
-	bodySeen    bool
-	minerUCalls int
-	paddleCalls int
+	server     *httptest.Server
+	mu         sync.Mutex
+	visionSeen bool
+	bodySeen   bool
 }
 
 func newFakeAI(t *testing.T) *fakeAI {
@@ -38,9 +35,6 @@ func newFakeAI(t *testing.T) *fakeAI {
 			_, _ = w.Write([]byte(`{"code":401,"msg":"bad token"}`))
 			return
 		}
-		f.mu.Lock()
-		f.minerUCalls++
-		f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"code": 0,
 			"data": map[string]any{"batch_id": "batch-1", "file_urls": []string{f.server.URL + "/upload/one"}},
@@ -62,36 +56,6 @@ func newFakeAI(t *testing.T) *fakeAI {
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = w.Write(zipBytes)
 	})
-	mux.HandleFunc("/api/v2/ocr/jobs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer paddle-token" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"code":401,"msg":"bad token"}`))
-			return
-		}
-		if err := r.ParseMultipartForm(8 << 20); err != nil {
-			t.Fatalf("paddle multipart: %v", err)
-		}
-		f.mu.Lock()
-		f.paddleCalls++
-		f.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"code": 0, "data": map[string]any{"jobId": "ocr-job-1"},
-		})
-	})
-	mux.HandleFunc("/api/v2/ocr/jobs/ocr-job-1", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"code": 0,
-			"data": map[string]any{
-				"state": "done", "resultUrl": map[string]string{"jsonUrl": f.server.URL + "/result.jsonl"},
-			},
-		})
-	})
-	mux.HandleFunc("/result.jsonl", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(strings.Join([]string{
-			`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["1. 已知函数 f(x)=x^2+2x，求最小值。"]}}]}}`,
-			`{"result":{"ocrResults":[{"prunedResult":{"rec_texts":["2. 求函数 f(x)=x^2 的导数。"]}}]}}`,
-		}, "\n")))
-	})
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer sk-test" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -103,24 +67,31 @@ func newFakeAI(t *testing.T) *fakeAI {
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&payload)
+		messages, _ := json.Marshal(payload["messages"])
+		text := fakeChatText(messages)
 		f.mu.Lock()
-		f.lastChat = payload
-		raw, _ := json.Marshal(payload["messages"])
-		f.visionHit = bytes.Contains(raw, []byte("image_url"))
-		if f.visionHit {
+		if bytes.Contains(messages, []byte("image_url")) {
 			f.visionSeen = true
 		}
-		if bytes.Contains(raw, []byte("学生版，函数与导数。")) {
+		if strings.Contains(text, "学生版，函数与导数。") {
 			f.bodySeen = true
 		}
 		f.mu.Unlock()
-		content := `{"exam_name":"2026 高三数学一轮练习","doc_type":"topic","subject_codes":["math"],"grade":"grade12","cohort":2026,"part":"questions","tags":["一轮复习","函数"],"confidence":0.87}`
-		if bytes.Contains(raw, []byte("[PAGE")) {
+		content := `{"same_as":"","reason":"没有重复"}`
+		switch {
+		case strings.Contains(text, "旁证信息："):
+			content = fakeCatalogCard(text)
+		case strings.Contains(text, "待分组的文件："):
+			content = fakeCatalogGroup(text)
+			t.Logf("fake group reply: %s", content)
+		case strings.Contains(text, "本套文件（card 为已校验的阅读记录）："):
+			content = fakeCatalogDecision(text)
+		case strings.Contains(text, "试卷题目结构化助手"):
 			pageRe := regexp.MustCompile(`\[PAGE (\d+)\]`)
-			matches := pageRe.FindAllSubmatch(raw, -1)
+			matches := pageRe.FindAllStringSubmatch(text, -1)
 			questions := make([]map[string]any, 0, len(matches))
 			for _, match := range matches {
-				pageNo, _ := strconv.Atoi(string(match[1]))
+				pageNo, _ := strconv.Atoi(match[1])
 				text := "1. 已知函数 f(x)=x^2+2x，求最小值。"
 				if pageNo == 2 {
 					text = "2. 求函数 f(x)=x^2 的导数。"
@@ -139,6 +110,181 @@ func newFakeAI(t *testing.T) *fakeAI {
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
 	return f
+}
+
+func fakeChatText(raw []byte) string {
+	var messages []struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &messages) != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		var text string
+		if json.Unmarshal(message.Content, &text) == nil {
+			parts = append(parts, text)
+			continue
+		}
+		var content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(message.Content, &content) == nil {
+			for _, part := range content {
+				if part.Text != "" {
+					parts = append(parts, part.Text)
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func fakeCatalogCard(text string) string {
+	context := text
+	if marker := strings.Index(context, "旁证信息：\n"); marker >= 0 {
+		context = context[marker:]
+	}
+	if marker := strings.Index(context, "同一文件夹的其他文件："); marker >= 0 {
+		context = context[:marker]
+	}
+	role, docType := "questions", "topic"
+	subjects := []string{"math"}
+	switch {
+	case strings.Contains(context, "化学") || strings.Contains(strings.ToLower(context), "chem"):
+		subjects = []string{"chemistry"}
+	case strings.Contains(context, "物理") || strings.Contains(strings.ToLower(context), "phys"):
+		subjects = []string{"physics"}
+	case strings.Contains(context, "英语") || strings.Contains(strings.ToLower(context), "english") || strings.Contains(strings.ToLower(context), "en-q"):
+		subjects = []string{"english"}
+	}
+	switch {
+	case strings.Contains(context, "教师版") || strings.Contains(context, "教师"):
+		role = "teacher"
+	case strings.Contains(context, "答案") || strings.Contains(strings.ToLower(context), "answers"):
+		role = "answers"
+	case strings.Contains(context, "答题卡"):
+		role = "answer_sheet"
+	case strings.Contains(context, "讲义") || strings.Contains(context, "导学案"):
+		role, docType = "main", "lecture"
+	}
+	card := map[string]any{
+		"role": role, "doc_type": docType, "subjects": subjects,
+		"title_text": "2026 高三数学一轮练习",
+		"grade":      "grade12",
+		"cohort":     2026,
+		"evidence": map[string]string{
+			"title_text": "2026 高三数学一轮练习",
+			"grade":      "高三",
+			"cohort":     "2026 高三数学一轮练习",
+		},
+	}
+	encoded, _ := json.Marshal(card)
+	return string(encoded)
+}
+
+func fakeCatalogGroup(text string) string {
+	start := strings.Index(text, "待分组的文件：\n")
+	if start < 0 {
+		return `{"groups":[]}`
+	}
+	raw := text[start+len("待分组的文件：\n"):]
+	var files []struct {
+		ID   string `json:"id"`
+		Path string `json:"path"`
+		Card struct {
+			Subjects []string `json:"subjects"`
+		} `json:"card"`
+	}
+	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&files); err != nil {
+		return `{"groups":[]}`
+	}
+	type group struct {
+		Files  []string `json:"files"`
+		Reason string   `json:"reason"`
+	}
+	byKey := map[string]*group{}
+	order := []string{}
+	for _, file := range files {
+		subjects := append([]string{}, file.Card.Subjects...)
+		if len(subjects) == 0 {
+			subjects = []string{"math"}
+		}
+		key := path.Dir(file.Path) + "\x00" + strings.Join(subjects, ",")
+		if byKey[key] == nil {
+			byKey[key] = &group{Reason: "同目录、同学科，按同一份资料处理"}
+			order = append(order, key)
+		}
+		byKey[key].Files = append(byKey[key].Files, file.ID)
+	}
+	groups := make([]group, 0, len(order))
+	for _, key := range order {
+		groups = append(groups, *byKey[key])
+	}
+	encoded, _ := json.Marshal(map[string]any{"groups": groups})
+	return string(encoded)
+}
+
+func fakeCatalogDecision(text string) string {
+	start := strings.Index(text, "本套文件（card 为已校验的阅读记录）：\n")
+	if start < 0 {
+		return `{}`
+	}
+	raw := text[start+len("本套文件（card 为已校验的阅读记录）：\n"):]
+	var members []struct {
+		ID       string `json:"id"`
+		FileName string `json:"file_name"`
+		Card     struct {
+			Role     string   `json:"role"`
+			Subjects []string `json:"subjects"`
+			Grade    string   `json:"grade"`
+			Cohort   int      `json:"cohort"`
+		} `json:"card"`
+	}
+	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&members); err != nil {
+		return `{}`
+	}
+	docType := "topic"
+	for _, member := range members {
+		if strings.Contains(member.FileName, "讲义") || strings.Contains(member.FileName, "导学案") {
+			docType = "lecture"
+			break
+		}
+	}
+	subjectSet := map[string]bool{}
+	cohort := 0
+	files := make([]map[string]any, 0, len(members))
+	for _, member := range members {
+		for _, subject := range member.Card.Subjects {
+			subjectSet[subject] = true
+		}
+		if cohort == 0 {
+			cohort = member.Card.Cohort
+		}
+		role := member.Card.Role
+		if role == "" {
+			role = "other"
+		}
+		files = append(files, map[string]any{"id": member.ID, "role": role})
+	}
+	subjects := make([]string, 0, len(subjectSet))
+	for _, subject := range []string{"chinese", "math", "english", "physics", "chemistry", "biology", "politics", "history", "geography"} {
+		if subjectSet[subject] {
+			subjects = append(subjects, subject)
+		}
+	}
+	decision := map[string]any{
+		"doc_type": docType,
+		"subjects": subjects,
+		"cohort":   cohort,
+		"files":    files,
+	}
+	if docType == "topic" {
+		decision["grade"] = "grade12"
+	}
+	encoded, _ := json.Marshal(decision)
+	return string(encoded)
 }
 
 func configureOCRProvider(t *testing.T, env *testEnv, baseURL, kind, token string) string {
@@ -160,16 +306,23 @@ func configureOCRProvider(t *testing.T, env *testEnv, baseURL, kind, token strin
 	return out.Data.ID
 }
 
-func (f *fakeAI) parseCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.minerUCalls
-}
-
-func (f *fakeAI) paddleParseCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.paddleCalls
+func configureCatalogAI(t *testing.T, env *testEnv, fake *fakeAI) string {
+	t.Helper()
+	ocrID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
+	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
+		"name": "测试网关", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
+		"models": []string{"text-model"}, "default_model": "text-model", "enabled": true, "priority": 1,
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("catalog AI provider %d: %s", status, body)
+	}
+	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
+		"ocr_provider_id": ocrID, "max_pages": 3, "max_images": 0,
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("catalog AI settings %d: %s", status, body)
+	}
+	return ocrID
 }
 
 func (f *fakeAI) classificationSawBody() bool {
@@ -248,7 +401,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	}
 
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true, "ocr_provider_id": ocrID, "max_pages": 3, "max_images": 2,
+		"ocr_provider_id": ocrID, "max_pages": 3, "max_images": 2,
 	}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("put settings %d: %s", status, body)
@@ -283,16 +436,19 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	}
 	var analysis struct {
 		Data struct {
-			Status       string  `json:"status"`
-			ProviderName string  `json:"provider_name"`
-			ImageCount   int     `json:"image_count"`
-			Confidence   float64 `json:"confidence"`
-			AppliedAt    *string `json:"applied_at"`
-			Suggestions  struct {
-				ExamName string   `json:"exam_name"`
-				Subjects []string `json:"subject_codes"`
-				Part     string   `json:"part"`
-			} `json:"suggestions"`
+			Status          string `json:"status"`
+			ProviderName    string `json:"provider_name"`
+			PageCount       int    `json:"page_count"`
+			MetadataOnly    bool   `json:"metadata_only"`
+			MarkdownExcerpt string `json:"markdown_excerpt"`
+			Card            struct {
+				Role     string            `json:"role"`
+				Title    string            `json:"title_text"`
+				Subjects []string          `json:"subjects"`
+				Grade    string            `json:"grade"`
+				Cohort   int               `json:"cohort"`
+				Evidence map[string]string `json:"evidence"`
+			} `json:"card"`
 			Error string `json:"error"`
 		} `json:"data"`
 	}
@@ -302,11 +458,17 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	if analysis.Data.Status != "succeeded" || analysis.Data.Error != "" {
 		t.Fatalf("analysis failed: %s", body)
 	}
-	if analysis.Data.Suggestions.ExamName == "" || analysis.Data.Suggestions.Part != "questions" {
-		t.Fatalf("unexpected suggestions: %s", body)
+	if analysis.Data.Card.Role != "questions" || analysis.Data.Card.Title == "" ||
+		len(analysis.Data.Card.Subjects) != 1 || analysis.Data.Card.Subjects[0] != "math" ||
+		analysis.Data.Card.Grade != "grade12" || analysis.Data.Card.Cohort != 2026 {
+		t.Fatalf("unexpected verified card: %s", body)
 	}
-	if analysis.Data.ImageCount != 0 || analysis.Data.ProviderName != "测试网关" {
-		t.Fatalf("image/provider mismatch: %s", body)
+	if analysis.Data.PageCount == 0 || analysis.Data.MetadataOnly || analysis.Data.MarkdownExcerpt == "" ||
+		analysis.Data.Card.Evidence["grade"] == "" {
+		t.Fatalf("read evidence mismatch: %s", body)
+	}
+	if analysis.Data.ProviderName != "测试网关" {
+		t.Fatalf("provider mismatch: %s", body)
 	}
 	if !fake.visionSeen {
 		t.Fatalf("vision model did not receive image_url parts")
@@ -314,11 +476,8 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	if !fake.classificationSawBody() {
 		t.Fatalf("document body was not sent to the classification model")
 	}
-	if analysis.Data.AppliedAt == nil {
-		t.Fatalf("successful suggestions were not auto-applied: %s", body)
-	}
 
-	// Automatic application is part of job completion; no manual apply is needed.
+	// Grouping and DECIDE run after READ; completion goes straight to ready.
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+materialID, nil, nil)
 	if status != http.StatusOK {
 		t.Fatalf("material %d: %s", status, body)
@@ -331,33 +490,39 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 			Pack     struct {
 				Cohort   int      `json:"cohort"`
 				Subjects []string `json:"subject_codes"`
-				ExamName string   `json:"exam_name"`
+				DocType  string   `json:"doc_type"`
+				Grade    string   `json:"grade"`
 			} `json:"pack"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &automatic); err != nil {
 		t.Fatalf("automatic apply body: %s", body)
 	}
-	// Confidence 0.87 is above the default 0.8 threshold: straight to ready.
 	if automatic.Data.Title != "2026届 专题练习 高三 数学 试题卷" ||
 		automatic.Data.FileName != "2026届 专题练习 高三 数学 试题卷.pdf" ||
-		automatic.Data.Pack.Cohort != 2026 || automatic.Data.Stage != "ready" {
+		automatic.Data.Pack.Cohort != 2026 || automatic.Data.Pack.DocType != "topic" ||
+		automatic.Data.Pack.Grade != "grade12" || automatic.Data.Stage != "ready" {
 		t.Fatalf("automatic AI metadata not applied: %s", body)
 	}
 
-	// A manual edit locks the catalogue; re-applying is an explicit override.
+	// A manual edit locks the field. Re-deciding keeps the person's value.
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+materialID, nil, nil)
 	packID := jsonField(t, body, "pack_id")
 	status, body = env.do(t, http.MethodPatch, "/api/v1/packs/"+packID, map[string]any{"cohort": 2025}, nil)
 	if status != http.StatusOK || !strings.Contains(string(body), `"cohort":2025`) {
 		t.Fatalf("manual edit %d: %s", status, body)
 	}
-	status, body = env.do(t, http.MethodPost, "/api/v1/materials/"+materialID+"/analysis/apply", map[string]any{}, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"cohort":2026`) {
-		t.Fatalf("suggestions could not be reapplied: %d %s", status, body)
+	status, body = env.do(t, http.MethodPost, "/api/v1/packs/"+packID+"/ai/redecide", map[string]any{}, nil)
+	if status != http.StatusAccepted {
+		t.Fatalf("redecide %d: %s", status, body)
+	}
+	env.processJobs(t)
+	status, body = env.do(t, http.MethodGet, "/api/v1/packs/"+packID, nil, nil)
+	if status != http.StatusOK || !strings.Contains(string(body), `"cohort":2025`) {
+		t.Fatalf("re-decide overwrote a locked field %d: %s", status, body)
 	}
 
-	// Idempotent second enqueue returns the existing analysis, not a new job.
+	// Re-reading queues the file while preserving its already created set.
 	status, body = env.do(t, http.MethodPost, "/api/v1/materials/"+materialID+"/analysis", map[string]any{}, nil)
 	if status != http.StatusAccepted {
 		t.Fatalf("re-enqueue %d: %s", status, body)
@@ -366,7 +531,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	// Reanalysis must not wait for another SQLite connection inside a transaction.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, env.base+"/api/v1/materials/"+materialID+"/analysis", strings.NewReader(`{"force":true}`))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, env.base+"/api/v1/materials/"+materialID+"/analysis", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,86 +561,6 @@ func TestAIProviderRejectsBadKeyWithoutLeaking(t *testing.T) {
 	}
 }
 
-func TestOCRProviderSelection(t *testing.T) {
-	fake := newFakeAI(t)
-	env := newEnv(t)
-	mineruID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
-
-	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
-		"name": "文本模型", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
-		"models": []string{"text-model"}, "default_model": "text-model", "enabled": true, "priority": 1,
-	}, nil)
-	if status != http.StatusCreated {
-		t.Fatalf("model provider %d: %s", status, body)
-	}
-
-	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": false, "ocr_provider_id": mineruID, "max_pages": 3, "max_images": 0,
-	}, nil)
-	if status != http.StatusOK || strings.Contains(string(body), "mineru-token") {
-		t.Fatalf("settings %d: %s", status, body)
-	}
-	var settings struct {
-		Data struct {
-			OCRProviderID string `json:"ocr_provider_id"`
-			OCRConfigured bool   `json:"ocr_configured"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &settings); err != nil || settings.Data.OCRProviderID == "" || !settings.Data.OCRConfigured {
-		t.Fatalf("OCR provider missing: %s", body)
-	}
-
-	status, body = env.do(t, http.MethodPost, "/api/v1/ocr/providers", map[string]any{
-		"name": "PaddleOCR v6", "kind": "paddleocr", "base_url": fake.server.URL,
-		"model": "PP-OCRv6", "token": "paddle-token", "enabled": true, "priority": 1,
-	}, nil)
-	if status != http.StatusCreated || strings.Contains(string(body), "paddle-token") {
-		t.Fatalf("paddle provider %d: %s", status, body)
-	}
-	var paddle struct {
-		Data struct {
-			ID              string `json:"id"`
-			TokenConfigured bool   `json:"token_configured"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &paddle); err != nil || paddle.Data.ID == "" || !paddle.Data.TokenConfigured {
-		t.Fatalf("paddle response: %s", body)
-	}
-
-	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true, "ocr_provider_id": paddle.Data.ID,
-		"max_pages": 3, "max_images": 0,
-	}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("select paddle %d: %s", status, body)
-	}
-	// Omitting the provider keeps the current selection.
-	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true,
-		"max_pages":        3, "max_images": 0,
-	}, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), paddle.Data.ID) {
-		t.Fatalf("update cleared OCR provider %d: %s", status, body)
-	}
-
-	uploadID, _ := env.upload(t, "Paddle 识别", map[string][]byte{"试题.pdf": minimalPDF()})
-	env.finalizeAndWait(t, uploadID)
-	env.processJobs(t)
-	if fake.paddleParseCalls() != 1 || fake.parseCalls() != 0 {
-		t.Fatalf("expected PaddleOCR only, paddle=%d mineru=%d", fake.paddleParseCalls(), fake.parseCalls())
-	}
-
-	status, body = env.do(t, http.MethodGet, "/api/v1/ai/settings", nil, nil)
-	if status != http.StatusOK || strings.Contains(string(body), "paddle-token") || strings.Contains(string(body), "mineru-token") {
-		t.Fatalf("token leaked: %d %s", status, body)
-	}
-
-	status, body = env.do(t, http.MethodPost, "/api/v1/ocr/providers/"+paddle.Data.ID+"/test", nil, nil)
-	if status != http.StatusOK || !strings.Contains(string(body), `"healthy":true`) {
-		t.Fatalf("paddle health %d: %s", status, body)
-	}
-}
-
 func TestQuestionSearchIndexAndPages(t *testing.T) {
 	fake := newFakeAI(t)
 	env := newEnv(t)
@@ -488,7 +573,7 @@ func TestQuestionSearchIndexAndPages(t *testing.T) {
 		t.Fatalf("provider %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": false, "ocr_provider_id": ocrID, "max_pages": 10, "max_images": 0,
+		"ocr_provider_id": ocrID, "max_pages": 10, "max_images": 0,
 	}, nil)
 	if status != http.StatusOK {
 		t.Fatalf("ai settings %d: %s", status, body)

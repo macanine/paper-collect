@@ -125,6 +125,17 @@ func (s *Service) RecoverExpiredLeases(ctx context.Context) (int, error) {
 		if len(ids) == 0 {
 			return nil
 		}
+		// A job that keeps losing its lease (for example by crashing the
+		// process) is stopped instead of being requeued forever.
+		var poisoned []model.Job
+		if err := tx.Where("id IN ? AND attempts >= ?", ids, maxJobAttempts).Find(&poisoned).Error; err != nil {
+			return wrap("find poisoned jobs", err)
+		}
+		for _, job := range poisoned {
+			if err := s.poisonJob(tx, job, now); err != nil {
+				return wrap("stop poisoned job", err)
+			}
+		}
 		res := tx.Model(&model.Job{}).
 			Where("id IN ? AND status = ? AND (lease_until IS NULL OR lease_until < ?)",
 				ids, model.JobRunning, now).
@@ -179,11 +190,17 @@ func (s *Service) resetProjectionTx(tx *gorm.DB, jobIDs []string, now time.Time)
 		Updates(map[string]any{"status": model.ReplicaPending, "updated_at": now}).Error; err != nil {
 		return wrap("recover replicas", err)
 	}
-	if err := tx.Model(&model.MaterialAnalysis{}).
-		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.id = material_analyses.job_id)",
+	if err := tx.Model(&model.FileCard{}).
+		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.id = file_cards.job_id)",
 			model.AnalysisRunning, jobIDs, model.JobAnalyze, model.JobPending).
 		Updates(map[string]any{"status": model.AnalysisPending, "updated_at": now}).Error; err != nil {
-		return wrap("recover analyses", err)
+		return wrap("recover cards", err)
+	}
+	if err := tx.Model(&model.PackDecision{}).
+		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.id = pack_decisions.job_id)",
+			model.AnalysisRunning, jobIDs, model.JobDecide, model.JobPending).
+		Updates(map[string]any{"status": model.AnalysisPending, "updated_at": now}).Error; err != nil {
+		return wrap("recover decisions", err)
 	}
 	if err := tx.Model(&model.MaterialIndexState{}).
 		Where("status = ? AND EXISTS (SELECT 1 FROM jobs WHERE jobs.id IN ? AND jobs.kind = ? AND jobs.status = ? AND jobs.id = material_index_states.job_id)",

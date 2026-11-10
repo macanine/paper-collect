@@ -311,10 +311,10 @@ function SubmittedCard({ upload, jobPending, jobQueryError, jobStatus, jobFailur
         <Result
           status="success"
           title={`新增 ${upload.new_count} 个文件，${upload.duplicate_count} 个已存在`}
-          subTitle={upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : '新文件正在识别，把握不足的会出现在待确认里'}
+          subTitle={upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : 'AI 正在阅读、分组并编目新文件；没能通过校验的会出现在“需关注”里'}
           extra={[
             <LinkButton key="inbox" type="primary" to="/inbox">
-              去待确认
+              查看需关注
             </LinkButton>,
             <LinkButton key="library" to="/library">
               打开资料库

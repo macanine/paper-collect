@@ -19,7 +19,7 @@ func TestQuestionIndexOnlyAppliesToQuestionParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	material := model.Material{
-		ID: newID(), PackID: pack.ID, Title: "讲义", OriginalName: "讲义.pdf", ReviewReasonsJSON: "[]",
+		ID: newID(), PackID: pack.ID, Title: "讲义", OriginalName: "讲义.pdf", AttentionJSON: "[]",
 		Part: model.PartMain, Stage: model.StageReady, Status: model.StatusArchived, BlobID: "blob",
 		FileName: "讲义.pdf", MediaType: "application/pdf", SizeBytes: 1,
 		SHA256: strings.Repeat("a", 64), CreatedAt: now, UpdatedAt: now,

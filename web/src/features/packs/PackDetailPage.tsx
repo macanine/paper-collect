@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Alert, App, Button, Card, Descriptions, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Descriptions, Dropdown, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowDownOutlined, ArrowUpOutlined, DownloadOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons';
+import { DownloadOutlined, DownOutlined, EyeOutlined, MoreOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useParams } from 'react-router';
 import type { Pack, PackMember, Part } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
@@ -13,6 +13,7 @@ import { BackLink } from '../../shared/ui/BackLink';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { StageTag } from '../../shared/ui/StatusTags';
+import { PackAIPanel } from '../ai/AnalysisPanel';
 import { useAuth } from '../auth/AuthContext';
 import { downloadMaterial, updateMaterial } from '../materials/api';
 import { invalidateLibrary } from '../materials/queries';
@@ -55,7 +56,7 @@ export function PackDetailPage() {
   const canWrite = can('materials:write');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const query = usePack(packId);
   const facets = usePackFacets();
   const update = useUpdatePack(packId);
@@ -141,7 +142,7 @@ export function PackDetailPage() {
       key: 'part',
       width: 150,
       render: (_: unknown, member) =>
-        canWrite && !trashed ? (
+        canWrite && !trashed && editing ? (
           <Select size="small" value={member.part} options={PART_OPTIONS} onChange={(part) => void changePart(member, part)} style={{ width: 128 }} />
         ) : (
           PART_OPTIONS.find((o) => o.value === member.part)?.label
@@ -164,23 +165,32 @@ export function PackDetailPage() {
     {
       title: '',
       key: 'actions',
-      width: 260,
+      width: 120,
       align: 'right',
       render: (_: unknown, member, index) => (
-        <Space size={0} wrap>
+        <Space size={0}>
           {canPreview(member.media_type) ? (
             <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setPreview(member)}>
               预览
             </Button>
           ) : null}
           {canWrite && !trashed ? (
-            <>
-              <Button type="link" size="small" onClick={() => setMoving(member)}>
-                移动
-              </Button>
-              <Button type="text" size="small" aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => void move(index, -1)} />
-              <Button type="text" size="small" aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === pack.members.length - 1} onClick={() => void move(index, 1)} />
-            </>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'move', label: '移到其他套卷' },
+                  { key: 'up', label: '上移', disabled: index === 0 },
+                  { key: 'down', label: '下移', disabled: index === pack.members.length - 1 },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'move') setMoving(member);
+                  else void move(index, key === 'up' ? -1 : 1);
+                },
+              }}
+            >
+              <Button type="text" size="small" aria-label="更多操作" icon={<MoreOutlined />} />
+            </Dropdown>
           ) : null}
         </Space>
       ),
@@ -216,15 +226,34 @@ export function PackDetailPage() {
                 {pack.members.length > 1 ? '下载整套' : '下载'}
               </Button>
               {canWrite ? (
-                <>
-                  <Button icon={<EditOutlined />} onClick={startEdit} disabled={editing}>
-                    编辑
+                <Dropdown
+                  trigger={['click']}
+                  menu={{
+                    items: [
+                      { key: 'edit', label: '编辑编目与部件', disabled: editing },
+                      { key: 'topic', label: '加入专题' },
+                      { type: 'divider' },
+                      { key: 'trash', label: '移入回收站', danger: true },
+                    ],
+                    onClick: ({ key }) => {
+                      if (key === 'edit') startEdit();
+                      else if (key === 'topic') setTopicOpen(true);
+                      else
+                        modal.confirm({
+                          title: '移入回收站？',
+                          content: '30 天内可以恢复。',
+                          okText: '移入',
+                          okButtonProps: { danger: true },
+                          cancelText: '取消',
+                          onOk: () => run(() => trash.mutateAsync([pack.id]), '已移入回收站', () => navigate('/library', { replace: true })),
+                        });
+                    },
+                  }}
+                >
+                  <Button>
+                    更多 <DownOutlined />
                   </Button>
-                  <Button onClick={() => setTopicOpen(true)}>加入专题</Button>
-                  <Popconfirm title="移入回收站？30 天内可恢复" onConfirm={() => void run(() => trash.mutateAsync([pack.id]), '已移入回收站', () => navigate('/library', { replace: true }))}>
-                    <Button danger>移入回收站</Button>
-                  </Popconfirm>
-                </>
+                </Dropdown>
               ) : null}
             </Space>
           )
@@ -237,20 +266,24 @@ export function PackDetailPage() {
           type="info"
           showIcon
           title="这套试卷还缺答案"
-          description="把答案和试卷放在同一文件夹或用相同名称上传，系统会给出配套建议；确认后才会合并，也可以在资料库里勾选两个套卷后“合并为一套”。"
+          description="上传答案后，AI 会判断它是否属于这套试卷并自动归入；也可以在资料库里勾选两个套卷后“合并为一套”，合并后 AI 会重新编目。"
         />
       ) : null}
 
       <Card
         title="编目信息"
-        extra={<Typography.Text type="secondary">{pack.catalog_locked ? '已人工确认，AI 只补全空字段' : pack.stage === 'processing' ? 'AI 识别中' : '尚未人工确认'}</Typography.Text>}
+        extra={
+          <Typography.Text type="secondary">
+            {pack.stage === 'processing' ? 'AI 整理中' : pack.locked_fields.length > 0 ? `${pack.locked_fields.length} 个字段由人工设定，AI 不会改动` : '由 AI 编目'}
+          </Typography.Text>
+        }
       >
         {editing ? (
           <Form form={form} layout="vertical">
             <Form.Item name="title" label="自定义标题" tooltip="留空则按编目信息自动命名">
               <Input allowClear placeholder={pack.title} maxLength={255} />
             </Form.Item>
-            <PackCatalogFields facets={facets.data} columns={3} />
+            <PackCatalogFields facets={facets.data} columns={3} locked={pack.locked_fields} />
             <Form.Item name="description" label="备注">
               <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} maxLength={4000} />
             </Form.Item>
@@ -269,6 +302,8 @@ export function PackDetailPage() {
       <Card title={`文件（${pack.members.length}）`} styles={{ body: { padding: 0 } }}>
         <Table<PackMember> rowKey="id" size="middle" columns={columns} dataSource={pack.members} pagination={false} scroll={{ x: 720 }} />
       </Card>
+
+      {!trashed ? <PackAIPanel packId={pack.id} canWrite={canWrite} /> : null}
 
       {pack.collections && pack.collections.length > 0 ? (
         <Card title="所在专题">

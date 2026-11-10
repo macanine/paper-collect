@@ -12,6 +12,7 @@ import {
   Switch,
   Table,
   Tag,
+  Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined } from '@ant-design/icons';
@@ -19,6 +20,7 @@ import { useAuth } from '../auth/AuthContext';
 import { describeError } from '../../shared/api/errors';
 import type { OCRProvider, OCRProviderKind } from '../../shared/api/types';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { RerunCard } from './RerunCard';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import {
   useAISettings,
@@ -30,11 +32,9 @@ import {
 } from './queries';
 
 interface SettingsFormValues {
-  analysis_enabled: boolean;
   ocr_provider_id: string;
   max_pages: number;
   max_images: number;
-  auto_accept_percent: number;
 }
 
 interface OCRFormValues {
@@ -98,11 +98,9 @@ export function AiSettingsPage() {
   useEffect(() => {
     if (!settings.data) return;
     form.setFieldsValue({
-      analysis_enabled: settings.data.analysis_enabled,
       ocr_provider_id: settings.data.ocr_provider_id,
       max_pages: settings.data.max_pages,
       max_images: settings.data.max_images,
-      auto_accept_percent: Math.round((settings.data.auto_accept_confidence ?? 0.8) * 100),
     });
   }, [settings.data, form]);
 
@@ -110,13 +108,11 @@ export function AiSettingsPage() {
     const values = await form.validateFields();
     try {
       await save.mutateAsync({
-        analysis_enabled: values.analysis_enabled,
         ocr_provider_id: values.ocr_provider_id ?? '',
         max_pages: values.max_pages,
         max_images: values.max_images,
-        auto_accept_confidence: values.auto_accept_percent / 100,
       });
-      message.success('AI 解析设置已保存');
+      message.success('AI 解析设置已保存，等待 AI 的文件会自动继续');
     } catch (error) {
       const { title, detail } = describeError(error);
       message.error(detail ? `${title}：${detail}` : title);
@@ -281,14 +277,9 @@ export function AiSettingsPage() {
       {settings.isSuccess ? (
         <Card title="解析设置" className="max-w-[760px]">
           <Form form={form} layout="vertical">
-            <Form.Item
-              name="analysis_enabled"
-              label="自动识别并应用"
-              valuePropName="checked"
-              extra="识别成功后自动更新标题、文件名和编目字段；仍可人工修改。"
-            >
-              <Switch />
-            </Form.Item>
+            <Typography.Paragraph type="secondary">
+              每个新文件都由 AI 阅读、分组成套并确定编目，结果通过校验后自动入库；没有可用的模型或 OCR 时文件会等待，配置好后自动继续。
+            </Typography.Paragraph>
             <Form.Item
               name="ocr_provider_id"
               label="OCR 服务商"
@@ -304,20 +295,14 @@ export function AiSettingsPage() {
                 <InputNumber min={0} max={4} className="w-full" />
               </Form.Item>
             </div>
-            <Form.Item
-              name="auto_accept_percent"
-              label="自动入库把握度"
-              extra="AI 整体把握度达到此值且没有不确定字段时直接入库，否则进入待确认。调高更稳妥，调低更省事。"
-              rules={[{ required: true }]}
-            >
-              <InputNumber min={0} max={100} addonAfter="%" className="w-full" />
-            </Form.Item>
-            <Button type="primary" onClick={() => void handleSave()} loading={save.isPending} disabled={!canWrite}>
+            <Button onClick={() => void handleSave()} loading={save.isPending} disabled={!canWrite}>
               保存设置
             </Button>
           </Form>
         </Card>
       ) : null}
+
+      <RerunCard canWrite={canWrite} />
 
       {providers.isPending ? <LoadingState /> : null}
       {providers.isSuccess ? (

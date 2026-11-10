@@ -6,8 +6,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
-	"unicode"
 
+	"github.com/nic/paper-collect/backend/internal/catalogai"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -41,13 +41,9 @@ func subjectLabel(code string) string {
 	return ""
 }
 
-// examDocTypes are pack types whose files are exam papers (pairing and
-// completeness apply). Other types are single-document resources.
-var examDocTypes = map[string]bool{
-	"gaokao_real": true, "gaokao_mock": true, "zhongkao_real": true, "zhongkao_mock": true,
-	"joint": true, "monthly": true, "midterm": true, "final": true, "opening": true,
-	"unit": true, "weekly": true, "topic": true,
-}
+// examDocTypes are pack types whose files are exam papers (completeness
+// applies). Other types are single-document resources.
+var examDocTypes = catalogai.ExamDocTypes
 
 // canonicalPackTitle builds the display name from catalogue fields, for example
 // "2025届 浙江 Z20联盟 9月联考 高三 数学". It returns "" when nothing is known.
@@ -116,10 +112,10 @@ func (s *Service) refreshPackNamesTx(tx *gorm.DB, packID string) ([]string, erro
 		return nil, wrap("load pack members", err)
 	}
 	title := pack.Title
-	if !pack.TitleLocked {
+	if !pack.Locked()[catalogai.FieldTitle] {
 		// The field-built name is only used once it says what the pack is
-		// (type and subject); until then the exam name or the name the files
-		// arrived with identifies it far better than "2025届 浙江 高三".
+		// (type and subject); until then the exam name, or the title the AI
+		// read from the first page, identifies it far better.
 		title = ""
 		if pack.DocType != "" && len(model.DecodeStrings(pack.SubjectsJSON)) > 0 {
 			title = canonicalPackTitle(pack)
@@ -128,7 +124,20 @@ func (s *Service) refreshPackNamesTx(tx *gorm.DB, packID string) ([]string, erro
 			title = truncateRunes(pack.ExamName, maxTitleRunes)
 		}
 		if title == "" && len(members) > 0 {
-			title = s.arrivalTitleTx(tx, members[0])
+			ids := make([]string, 0, len(members))
+			for _, m := range members {
+				ids = append(ids, m.ID)
+			}
+			cards := loadCards(tx, ids)
+			for _, m := range members {
+				if t := cards[m.ID].TitleText; t != "" {
+					title = truncateRunes(t, maxTitleRunes)
+					break
+				}
+			}
+		}
+		if title == "" && pack.Title != "" {
+			title = pack.Title
 		}
 		if title == "" {
 			title = "未命名资料"
@@ -176,7 +185,6 @@ func (s *Service) renameMaterialFiles(ctx context.Context, ids []string) {
 	s.notify()
 }
 
-var emptyBrackets = regexp.MustCompile(`\(\s*\)|（\s*）|【\s*】|\[\s*\]`)
 
 var unsafeFileChars = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]+`)
 
@@ -187,100 +195,6 @@ func sanitizeFileName(name string) string {
 		return "资料"
 	}
 	return name
-}
-
-// partKeywords map file-name hints to a part; checked in order.
-var partKeywords = []struct {
-	part     string
-	keywords []string
-}{
-	{model.PartAnswerSheet, []string{"答题卡", "答题纸", "answer sheet"}},
-	{model.PartTeacher, []string{"教师版", "老师版", "教师用", "teacher"}},
-	{model.PartListening, []string{"听力", "录音", "listening"}},
-	{model.PartFull, []string{"含答案", "附答案", "带答案", "试卷+答案", "试题+答案", "答案版", "解析版", "详解版"}},
-	{model.PartAnswers, []string{"参考答案", "答案", "解析", "详解", "评分标准", "评分细则", "answer", "key", "solution"}},
-	{model.PartQuestions, []string{"原卷", "试卷", "试题", "学生版", "考试卷", "exam", "paper"}},
-	{model.PartMain, []string{"讲义", "学案", "导学案", "教案", "课件", "笔记", "知识点", "复习"}},
-}
-
-// suggestPart guesses a part from a file name before analysis runs.
-func suggestPart(fileName, mediaType string) string {
-	if strings.HasPrefix(mediaType, "audio/") {
-		return model.PartListening
-	}
-	lower := strings.ToLower(fileName)
-	for _, rule := range partKeywords {
-		for _, kw := range rule.keywords {
-			if strings.Contains(lower, kw) {
-				return rule.part
-			}
-		}
-	}
-	return model.PartOther
-}
-
-// stemNoise is stripped from file names before comparing them for pairing:
-// part words, edition words, bracket decorations and separators.
-var stemNoise = regexp.MustCompile(`(?i)(参考答案|答案及解析|答案与解析|答案解析|答案|解析版|解析|详解|评分标准|评分细则|答题卡|答题纸|原卷版|原卷|学生版|教师版|老师版|试题卷|试题|试卷|含听力|听力原文|听力音频|听力|录音|word版|pdf版|版|answer(s)?|key|solution(s)?|paper|exam)`)
-
-// pairingStem reduces a file name to the part shared by all files of one set,
-// e.g. "2025浙江9月联考数学（答案）.pdf" and "2025浙江9月联考数学-试题.docx"
-// both become "2025浙江9月联考数学".
-func pairingStem(fileName string) string {
-	base := path.Base(fileName)
-	base = strings.TrimSuffix(base, path.Ext(base))
-	base = stemNoise.ReplaceAllString(base, "")
-	var b strings.Builder
-	for _, r := range strings.ToLower(base) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// arrivalTitleTx names a pack after the folder and file it arrived as, e.g.
-// "2025届浙江9月联考/数学试题.pdf" becomes "2025届浙江9月联考 数学".
-func (s *Service) arrivalTitleTx(tx *gorm.DB, m model.Material) string {
-	stem := packStemTitle(m.OriginalName)
-	var src model.MaterialSource
-	if err := tx.Where("material_id = ?", m.ID).Order("created_at ASC").First(&src).Error; err != nil {
-		return stem
-	}
-	dir := path.Base(path.Dir(src.Path))
-	if dir == "." || dir == "/" || dir == "" {
-		return stem
-	}
-	dir = strings.TrimSuffix(dir, path.Ext(dir))
-	if strings.Contains(stem, dir) {
-		return stem
-	}
-	if raw := strings.TrimSuffix(path.Base(m.OriginalName), path.Ext(m.OriginalName)); pairingStem(raw) == "" || strings.Contains(dir, stem) {
-		return truncateRunes(dir, maxTitleRunes)
-	}
-	return truncateRunes(dir+" "+stem, maxTitleRunes)
-}
-
-// partRank orders files inside a pack: questions first, then answers, sheets, audio.
-var partRank = map[string]int{
-	model.PartQuestions: 0, model.PartFull: 1, model.PartTeacher: 2, model.PartAnswers: 3,
-	model.PartAnswerSheet: 4, model.PartListening: 5, model.PartMain: 6, model.PartOther: 7,
-}
-
-// packStemTitle turns an original file name into a readable fallback title.
-func packStemTitle(fileName string) string {
-	base := path.Base(fileName)
-	base = strings.TrimSuffix(base, path.Ext(base))
-	base = stemNoise.ReplaceAllString(base, "")
-	// Brackets emptied by the noise removal ("数学（答案）" → "数学（）") go;
-	// balanced ones such as "周测（一）" stay.
-	base = emptyBrackets.ReplaceAllString(base, "")
-	base = strings.Trim(base, " -_·.+")
-	base = strings.Join(strings.Fields(base), " ")
-	if base == "" {
-		base = strings.TrimSuffix(path.Base(fileName), path.Ext(fileName))
-	}
-	return truncateRunes(base, maxTitleRunes)
 }
 
 // packCompleteness reports which exam parts a pack has. Questions are present

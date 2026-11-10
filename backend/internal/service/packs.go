@@ -9,6 +9,7 @@ import (
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/catalogai"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -62,8 +63,8 @@ type PackView struct {
 	Collections  []model.Collection
 }
 
-// PackPatch is a partial catalogue update. Nil means "leave unchanged". Any
-// manual edit locks the catalogue so later analysis only fills empty fields.
+// PackPatch is a partial catalogue update. Nil means "leave unchanged". A
+// manual edit locks exactly the fields it sets; AI decisions keep them.
 type PackPatch struct {
 	Title        *string // "" unlocks and returns to the canonical name
 	DocType      *string
@@ -236,7 +237,7 @@ func buildPackView(p model.Pack, members []model.Material) PackView {
 		Members: make([]PackMember, 0, len(members)), Stage: model.StageReady, IsExam: examDocTypes[p.DocType],
 	}
 	parts := make([]string, 0, len(members))
-	rank := map[string]int{model.StageReady: 0, model.StageProcessing: 1, model.StageReview: 2, model.StageFailed: 3}
+	rank := map[string]int{model.StageReady: 0, model.StageProcessing: 1, model.StageWaitingAI: 2, model.StageAttention: 3}
 	for _, m := range members {
 		view.Members = append(view.Members, PackMember{
 			ID: m.ID, Title: m.Title, FileName: m.FileName, Part: m.Part, AnswerStartPage: m.AnswerStartPage,
@@ -341,21 +342,43 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 		return nil, apperr.NotFound("套卷不存在")
 	}
 	updates := map[string]any{"updated_at": now}
-	if manual {
-		updates["catalog_locked"] = true
+	locked := pack.Locked()
+	lock := func(field string, isSet bool) {
+		if manual && isSet {
+			locked[field] = true
+		}
 	}
 	if pt.Title != nil {
 		t := strings.TrimSpace(*pt.Title)
 		if t == "" {
-			updates["title_locked"] = false
+			delete(locked, catalogai.FieldTitle)
 		} else {
 			v, err := validateTitle(t)
 			if err != nil {
 				return nil, err
 			}
-			updates["title"], updates["title_locked"] = v, true
+			updates["title"] = v
+			lock(catalogai.FieldTitle, true)
 		}
 	}
+	lock(catalogai.FieldDocType, pt.DocType != nil)
+	lock(catalogai.FieldSubjects, pt.SubjectCodes != nil)
+	lock(catalogai.FieldGrade, pt.Grade != nil)
+	lock(catalogai.FieldTerm, pt.Term != nil)
+	lock(catalogai.FieldCohort, pt.Cohort != nil)
+	lock(catalogai.FieldRegion, pt.Region != nil)
+	lock(catalogai.FieldOrganization, pt.Organization != nil)
+	lock(catalogai.FieldExamDate, pt.ExamDate != nil)
+	lock(catalogai.FieldExamName, pt.ExamName != nil)
+	lock(catalogai.FieldChapter, pt.Chapter != nil)
+	lock(catalogai.FieldTags, pt.Tags != nil)
+	lockedList := make([]string, 0, len(locked))
+	for _, f := range catalogai.LockableFields {
+		if locked[f] {
+			lockedList = append(lockedList, f)
+		}
+	}
+	updates["locked_json"] = model.EncodeStrings(lockedList)
 	if pt.DocType != nil {
 		if err := validateDocType(*pt.DocType); err != nil {
 			return nil, err
@@ -389,13 +412,39 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 		}
 		updates["cohort"] = *pt.Cohort
 	}
+	if pt.Region != nil {
+		r := strings.TrimSpace(*pt.Region)
+		if !catalogai.IsRegion(r) {
+			return nil, apperr.Validation("地区必须从固定地区列表中选择")
+		}
+		updates["region"] = r
+	}
+	if pt.Organization != nil {
+		name := strings.TrimSpace(*pt.Organization)
+		if runeLen(name) > 128 {
+			return nil, apperr.Validation("来源机构过长")
+		}
+		updates["organization"], updates["organization_id"] = "", ""
+		if name != "" {
+			source := model.EntitySourceAI
+			if manual {
+				source = model.EntitySourceHuman
+			}
+			entity, _, err := s.ensureEntityTx(tx, model.EntityOrganization, name, nil, pack.Region, source, now)
+			if err != nil {
+				return nil, err
+			}
+			if entity.ID != "" {
+				updates["organization"], updates["organization_id"] = entity.Name, entity.ID
+			}
+		}
+	}
 	texts := []struct {
 		value  *string
 		column string
 		label  string
 		limit  int
 	}{
-		{pt.Region, "region", "地区", 64}, {pt.Organization, "organization", "来源机构", 128},
 		{pt.ExamName, "exam_name", "考试名称", 255}, {pt.Chapter, "chapter", "章节", 255},
 	}
 	for _, t := range texts {
@@ -419,7 +468,22 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 		if err != nil {
 			return nil, err
 		}
-		updates["tags_json"] = model.EncodeStrings(tags)
+		// Tags go through the dictionary so one meaning keeps one spelling.
+		canonical := []string{}
+		for _, t := range tags {
+			source := model.EntitySourceAI
+			if manual {
+				source = model.EntitySourceHuman
+			}
+			entity, _, err := s.ensureEntityTx(tx, model.EntityTag, t, nil, "", source, now)
+			if err != nil {
+				return nil, err
+			}
+			if entity.ID != "" {
+				canonical = appendUnique(canonical, entity.Name)
+			}
+		}
+		updates["tags_json"] = model.EncodeStrings(canonical)
 	}
 	if pt.Description != nil {
 		d, err := validateDescription(*pt.Description)
@@ -451,8 +515,8 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 	return ids, nil
 }
 
-// MergePacks moves every file of the source packs into the target pack. Empty
-// catalogue fields of the target are filled from the sources.
+// MergePacks moves every file of the source packs into the target pack and
+// lets the AI decide the merged set again.
 func (s *Service) MergePacks(ctx context.Context, p auth.Principal, targetID string, sourceIDs []string) (PackView, error) {
 	if len(sourceIDs) == 0 || len(sourceIDs) > 100 {
 		return PackView{}, apperr.Validation("一次需要合并 1 到 100 个套卷")
@@ -478,7 +542,6 @@ func (s *Service) mergePacksTx(tx *gorm.DB, targetID string, sourceIDs []string,
 	if err := tx.Where("id = ?", targetID).First(&target).Error; err != nil {
 		return nil, apperr.NotFound("目标套卷不存在")
 	}
-	fill := PackPatch{}
 	for _, sourceID := range sourceIDs {
 		if sourceID == targetID {
 			continue
@@ -487,7 +550,6 @@ func (s *Service) mergePacksTx(tx *gorm.DB, targetID string, sourceIDs []string,
 		if err := tx.Where("id = ?", sourceID).First(&source).Error; err != nil {
 			return nil, apperr.NotFound("待合并的套卷不存在")
 		}
-		fillEmptyPackFields(&fill, target, source)
 		// Topic placements must follow the files before moving the last member
 		// removes the now-empty source pack.
 		var placements []model.CollectionItem
@@ -523,37 +585,12 @@ func (s *Service) mergePacksTx(tx *gorm.DB, targetID string, sourceIDs []string,
 			return nil, err
 		}
 	}
-	if !fill.empty() {
-		return s.applyPackPatchTx(tx, targetID, fill, false, now)
+	// The merged set is a new set as far as its catalogue goes: the AI decides
+	// it again with every file in view (fields a person locked stay).
+	if err := s.membersChangedTx(tx, targetID, now); err != nil {
+		return nil, err
 	}
 	return s.refreshPackNamesTx(tx, targetID)
-}
-
-// fillEmptyPackFields copies fields the target lacks from source into patch.
-func fillEmptyPackFields(patch *PackPatch, target, source model.Pack) {
-	setStr := func(dst **string, have, from string) {
-		if have == "" && from != "" && *dst == nil {
-			v := from
-			*dst = &v
-		}
-	}
-	setStr(&patch.DocType, target.DocType, source.DocType)
-	setStr(&patch.Grade, target.Grade, source.Grade)
-	setStr(&patch.Term, target.Term, source.Term)
-	setStr(&patch.Region, target.Region, source.Region)
-	setStr(&patch.Organization, target.Organization, source.Organization)
-	setStr(&patch.ExamDate, target.ExamDate, source.ExamDate)
-	setStr(&patch.ExamName, target.ExamName, source.ExamName)
-	setStr(&patch.Chapter, target.Chapter, source.Chapter)
-	if target.Cohort == 0 && source.Cohort != 0 && patch.Cohort == nil {
-		v := source.Cohort
-		patch.Cohort = &v
-	}
-	if len(model.DecodeStrings(target.SubjectsJSON)) == 0 && patch.SubjectCodes == nil {
-		if codes := model.DecodeStrings(source.SubjectsJSON); len(codes) > 0 {
-			patch.SubjectCodes = &codes
-		}
-	}
 }
 
 // ReorderPack sets the order of files inside a pack.

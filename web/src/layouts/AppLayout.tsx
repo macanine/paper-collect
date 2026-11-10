@@ -12,8 +12,8 @@ import {
   CloudUploadOutlined,
   DashboardOutlined,
   DeleteOutlined,
-  DownOutlined,
   ExperimentOutlined,
+  TagsOutlined,
   FolderOpenOutlined,
   InboxOutlined,
   KeyOutlined,
@@ -56,10 +56,11 @@ const NAVIGATION: NavigationSection[] = [
     items: [
       { key: '/', path: '/', label: '工作台', icon: <DashboardOutlined /> },
       { key: '/imports', path: '/imports', label: '导入中心', icon: <CloudUploadOutlined />, scope: 'uploads:write' },
-      { key: '/inbox', path: '/inbox', label: '待确认', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
+      { key: '/inbox', path: '/inbox', label: '需关注', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
       { key: '/library', path: '/library', label: '资料库', icon: <FolderOpenOutlined />, scope: 'materials:read' },
       { key: '/search', path: '/search', label: '搜题', icon: <SearchOutlined />, scope: 'materials:read' },
       { key: '/collections', path: '/collections', label: '专题', icon: <AppstoreOutlined />, scope: 'collections:read' },
+      { key: '/entities', path: '/entities', label: '名称词典', icon: <TagsOutlined />, scope: 'materials:read' },
     ],
   },
   {
@@ -158,7 +159,7 @@ const SidebarContent = memo(function SidebarContent({ sections, activeKey, revie
                     <span className="app-nav__icon" aria-hidden="true">{item.icon}</span>
                     <span className="app-nav__label">{item.label}</span>
                     {item.badge === 'review' && reviewCount > 0 ? (
-                        <span className="app-nav__badge" aria-label={`${reviewCount} 个待确认文件`}>
+                        <span className="app-nav__badge" aria-label={`${reviewCount} 个需关注文件`}>
                         <Badge count={reviewCount} size="small" overflowCount={999} />
                       </span>
                     ) : null}
@@ -181,14 +182,6 @@ const HeaderUploadButton = memo(function HeaderUploadButton() {
         <span className="app-header__upload-label">导入资料</span>
       </Button>
     </span>
-  );
-});
-
-const HeaderImportLink = memo(function HeaderImportLink() {
-  return (
-    <Link to="/imports" className="app-header__import">
-      导入中心
-    </Link>
   );
 });
 
@@ -215,7 +208,7 @@ function AppFrame() {
     enabled: can('materials:read'),
     refetchInterval: 30_000,
   });
-  const reviewCount = stats.data?.review ?? 0;
+  const reviewCount = stats.data?.needs_attention ?? 0;
   const navigate = useNavigate();
   const location = useLocation();
   const { message } = AntdApp.useApp();
@@ -314,14 +307,13 @@ function AppFrame() {
           </div>
 
           <div className="app-header__actions">
-            <NetworkActivity />
+            {can('audit:read') ? <NetworkActivity /> : null}
             {can('materials:read') ? (
               <Link to="/search" className="app-header__search">
                 <SearchOutlined />
                 <span>搜题</span>
               </Link>
             ) : null}
-            {can('uploads:write') ? <HeaderImportLink /> : null}
             {can('uploads:write') ? <HeaderUploadButton /> : null}
             {user ? (
               <Dropdown
@@ -338,11 +330,6 @@ function AppFrame() {
                   <Avatar size={32} className="app-account__avatar">
                     {user.username.slice(0, 1).toUpperCase()}
                   </Avatar>
-                  <span className="app-account__copy">
-                    <strong>{user.username}</strong>
-                    <small>{USER_ROLE_LABELS[user.role]}</small>
-                  </span>
-                  <DownOutlined className="app-account__arrow" />
                 </button>
               </Dropdown>
             ) : null}

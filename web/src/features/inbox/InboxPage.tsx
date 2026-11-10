@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Checkbox, Collapse, Empty, Form, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd';
-import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
+import { EyeOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PackMember, Part, ReviewPack, ReviewPackItem, ReviewReason, Stage } from '../../shared/api/types';
+import type { PackMember, Part, ReviewPack, Stage } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
-import { REVIEW_REASON_LABELS } from '../../shared/lib/labels';
+import { ATTENTION_REASON_LABELS, attentionReasonLabel } from '../../shared/lib/labels';
 import { PART_OPTIONS } from '../../shared/lib/options';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { PartTag, StageTag } from '../../shared/ui/StatusTags';
-import { enqueueMaterialAnalysis } from '../ai/api';
-import { useMaterialAnalysis } from '../ai/queries';
+import { PackAIPanel } from '../ai/AnalysisPanel';
 import { updateMaterial } from '../materials/api';
 import { FilePreviewModal, canPreview } from '../materials/FilePreview';
 import { invalidateLibrary, useAcceptMaterials, useReviewPacks } from '../materials/queries';
@@ -26,44 +25,39 @@ const ADVANCED_CATALOG_FIELDS: CatalogField[] = ['term', 'exam_date', 'chapter',
 const CATALOG_FIELDS = [...PRIMARY_CATALOG_FIELDS, ...ADVANCED_CATALOG_FIELDS];
 const EMPTY_REVIEW_PACKS: ReviewPack[] = [];
 
-type FormValues = CatalogFormValues;
-
 interface MemberEdit {
   part: Part;
   answer_start_page: number;
 }
 
 function initialMemberEdits(members: PackMember[]): Record<string, MemberEdit> {
-  return Object.fromEntries(
-    members.map((member) => [member.id, { part: member.part, answer_start_page: member.answer_start_page }]),
-  );
+  return Object.fromEntries(members.map((member) => [member.id, { part: member.part, answer_start_page: member.answer_start_page }]));
 }
 
-function suggestedItems(group: ReviewPack): ReviewPackItem[] {
-  return group.items.filter((item) => item.suggested_pack);
+function packReasons(group: ReviewPack): string[] {
+  return group.items.flatMap((item) => item.attention_reasons).filter((reason, index, all) => all.indexOf(reason) === index);
 }
 
-/** 右侧：当前套卷的一次性核对表单。文件部件可以逐个调整，编目信息只填一次。 */
-function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: Stage; onDone: () => void }) {
+/** 右侧：一套需关注资料。AI 的编目与校验问题在上，人工修改（会被锁定）在下。 */
+function AttentionPanel({ group, stage, onDone }: { group: ReviewPack; stage: Stage; onDone: () => void }) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const facets = usePackFacets();
-  const analysis = useMaterialAnalysis(group.items[0]?.id ?? '');
   const accept = useAcceptMaterials();
-  const [form] = Form.useForm<FormValues>();
+  const [form] = Form.useForm<CatalogFormValues>();
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<PackMember | null>(null);
+  const [editing, setEditing] = useState(false);
   const [memberEdits, setMemberEdits] = useState<Record<string, MemberEdit>>(() => initialMemberEdits(group.pack.members));
-  const editable = stage === 'review';
-  const reviewIds = group.pack.members.filter((member) => member.stage === 'review').map((member) => member.id);
+  const editable = stage === 'attention';
+  const showEdit = editable && editing;
+  const attentionIds = group.pack.members.filter((member) => member.stage === 'attention').map((member) => member.id);
 
   useEffect(() => {
     form.resetFields();
     form.setFieldsValue(packToForm(group.pack));
     setMemberEdits(initialMemberEdits(group.pack.members));
   }, [form, group.pack]);
-
-  const uncertain = analysis.data?.suggestions.uncertain ?? [];
 
   const updateMember = (member: PackMember, patch: Partial<MemberEdit>) => {
     setMemberEdits((current) => ({
@@ -73,13 +67,12 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
   };
 
   const confirm = useCallback(async () => {
-    if (!editable || saving || reviewIds.length === 0) return;
+    if (!editable || saving || attentionIds.length === 0) return;
     const values = await form.validateFields();
     setSaving(true);
     try {
       const touched = CATALOG_FIELDS.filter((field) => form.isFieldTouched(field));
       if (touched.length > 0) await updatePack(group.pack.id, formToUpdate(values, touched));
-
       const changes = group.pack.members.filter((member) => {
         const next = memberEdits[member.id];
         return next && (next.part !== member.part || next.answer_start_page !== member.answer_start_page);
@@ -90,7 +83,7 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
           return updateMaterial(member.id, { part: next.part, answer_start_page: next.answer_start_page });
         }),
       );
-      await accept.mutateAsync({ ids: reviewIds });
+      await accept.mutateAsync({ ids: attentionIds });
       invalidateLibrary(queryClient);
       message.success(`已确认《${group.pack.title}》`);
       onDone();
@@ -99,36 +92,14 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
     } finally {
       setSaving(false);
     }
-  }, [accept, editable, form, group.pack, memberEdits, message, onDone, queryClient, reviewIds, saving]);
-
-  const acceptSuggestion = useCallback(async () => {
-    const suggestions = suggestedItems(group);
-    if (suggestions.length === 0) return;
-    try {
-      await accept.mutateAsync({ ids: suggestions.map((item) => item.id), acceptSuggestion: true });
-      message.success('已接受配套建议');
-      onDone();
-    } catch (error) {
-      message.error(errorMessage(error));
-    }
-  }, [accept, group, message, onDone]);
-
-  const retry = async () => {
-    try {
-      await Promise.all(group.items.filter((item) => item.stage === 'failed').map((item) => enqueueMaterialAnalysis(item.id, true)));
-      invalidateLibrary(queryClient);
-      message.success('已重新加入识别队列');
-    } catch (error) {
-      message.error(errorMessage(error));
-    }
-  };
+  }, [accept, attentionIds, editable, form, group.pack, memberEdits, message, onDone, queryClient, saving]);
 
   return (
     <Card
       className="inbox-panel"
       title={
         <div className="flex flex-col">
-          <Typography.Text strong ellipsis>{group.pack.title || '待命名套卷'}</Typography.Text>
+          <Typography.Text strong ellipsis>{group.pack.title || '未命名资料'}</Typography.Text>
           <Typography.Text type="secondary" className="text-xs">
             {group.pack.members.length} 个文件 · {group.pack.is_exam ? '试卷资料' : '普通资料'}
           </Typography.Text>
@@ -144,40 +115,34 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
       <div className="page-stack">
         <Space wrap>
           <StageTag stage={stage} />
-          {group.items.flatMap((item) => item.review_reasons).filter((reason, index, all) => all.indexOf(reason) === index).map((reason) => (
-            <Tag key={reason} color="warning">{REVIEW_REASON_LABELS[reason]}</Tag>
+          {packReasons(group).map((reason) => (
+            <Tag key={reason} color="warning">{attentionReasonLabel(reason)}</Tag>
           ))}
-          {analysis.data?.status === 'succeeded' ? <Tag>AI 把握 {Math.round(analysis.data.confidence * 100)}%</Tag> : null}
         </Space>
 
-        {stage === 'failed' ? (
-          <Alert
-            type="error"
-            showIcon
-            title="识别失败"
-            description="可以重新识别，成功后会回到待确认。"
-            action={<Button size="small" icon={<ReloadOutlined />} onClick={() => void retry()}>重新识别</Button>}
-          />
-        ) : null}
-
-        {suggestedItems(group).length > 0 ? (
+        {stage === 'waiting_ai' ? (
           <Alert
             type="info"
             showIcon
-            title="发现可能的配套资料"
-            description={suggestedItems(group).map((item) => item.suggested_pack?.title).filter(Boolean).join('、')}
-            action={editable ? <Button size="small" type="primary" onClick={() => void acceptSuggestion()}>接受建议</Button> : undefined}
+            title="AI 暂不可用"
+            description={
+              <span>
+                请检查 <Link to="/admin/ai-models">AI 模型</Link> 和 <Link to="/admin/ai-settings">AI 解析</Link> 的配置；保存后这些文件会自动继续。
+              </span>
+            }
           />
         ) : null}
+        {stage === 'processing' ? <Alert type="info" showIcon title="AI 正在阅读、分组或编目，完成后会自动入库" /> : null}
 
-        {stage === 'processing' ? <Alert type="info" showIcon title="正在识别，完成后会自动出现在待确认" /> : null}
+        <PackAIPanel packId={group.pack.id} canWrite={editable} />
 
-        {editable ? (
+        {showEdit ? (
           <Form form={form} layout="vertical" disabled={saving}>
-            <PackCatalogFields fields={PRIMARY_CATALOG_FIELDS} facets={facets.data} uncertain={uncertain} columns={2} />
+            <Typography.Paragraph type="secondary">在下方修改的字段会被锁定，之后 AI 不再改动；未修改的字段保持 AI 的结果。</Typography.Paragraph>
+            <PackCatalogFields fields={PRIMARY_CATALOG_FIELDS} facets={facets.data} columns={2} />
             <Collapse
               size="small"
-              items={[{ key: 'advanced', label: '更多编目信息（可选）', children: <PackCatalogFields fields={ADVANCED_CATALOG_FIELDS} facets={facets.data} uncertain={uncertain} columns={2} /> }]}
+              items={[{ key: 'advanced', label: '更多编目信息（可选）', children: <PackCatalogFields fields={ADVANCED_CATALOG_FIELDS} facets={facets.data} columns={2} /> }]}
             />
           </Form>
         ) : null}
@@ -200,7 +165,7 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
                       {edit.part === 'full' && edit.answer_start_page > 0 ? <span>答案从第 {edit.answer_start_page} 页开始</span> : null}
                     </span>
                   </div>
-                  {editable && member.stage === 'review' ? (
+                  {showEdit ? (
                     <Space wrap size={8} className="inbox-pack-member__edit">
                       <Select<Part> size="small" value={edit.part} options={PART_OPTIONS} onChange={(part) => updateMember(member, { part })} style={{ width: 128 }} aria-label={`${member.file_name} 的部件`} />
                       {edit.part === 'full' ? <InputNumber size="small" min={1} max={10000} value={edit.answer_start_page || undefined} placeholder="答案起始页" onChange={(value) => updateMember(member, { answer_start_page: value ?? 0 })} /> : null}
@@ -213,11 +178,13 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
         </Card>
 
         {editable ? (
-          <Space wrap>
-            <Button type="primary" loading={saving || accept.isPending} onClick={() => void confirm()}>
-              确认这套 {reviewIds.length} 个文件
+          <Space>
+            <Button type="primary" loading={saving || accept.isPending} disabled={attentionIds.length === 0} onClick={() => void confirm()}>
+              {showEdit ? '保存并确认' : `确认这套 ${attentionIds.length} 个文件`}
             </Button>
-            {suggestedItems(group).length > 0 ? <Button loading={accept.isPending} onClick={() => void acceptSuggestion()}>接受配套建议</Button> : null}
+            <Button type="text" onClick={() => setEditing((v) => !v)}>
+              {showEdit ? '取消修改' : '修改编目'}
+            </Button>
           </Space>
         ) : null}
       </div>
@@ -227,29 +194,34 @@ function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: S
 }
 
 const TABS: { value: Stage; label: string }[] = [
-  { value: 'review', label: '待确认' },
-  { value: 'processing', label: '处理中' },
-  { value: 'failed', label: '失败' },
+  { value: 'attention', label: '需关注' },
+  { value: 'processing', label: 'AI 整理中' },
+  { value: 'waiting_ai', label: '等待 AI' },
 ];
+
+const EMPTY_COPY: Partial<Record<Stage, string>> = {
+  attention: '没有需要人工处理的套卷',
+  processing: 'AI 当前没有正在整理的套卷',
+  waiting_ai: '没有等待 AI 的套卷',
+};
 
 export function InboxPage() {
   const { message } = App.useApp();
   const [params, setParams] = useSearchParams();
-  const stage = (TABS.find((tab) => tab.value === params.get('stage'))?.value ?? 'review') as Stage;
+  const stage = (TABS.find((tab) => tab.value === params.get('stage'))?.value ?? 'attention') as Stage;
   const reason = params.get('reason') ?? '';
   const [page, setPage] = useState(1);
-  const query = useReviewPacks(
-    { page, page_size: 100, stage, reason: (reason as ReviewReason) || undefined },
-    { poll: stage === 'review' ? false : 8000 },
-  );
+  const query = useReviewPacks({ page, page_size: 100, stage, reason: reason || undefined }, { poll: stage === 'attention' ? false : 8000 });
   const accept = useAcceptMaterials();
   const groups = query.data?.items ?? EMPTY_REVIEW_PACKS;
   const [activeId, setActiveId] = useState<string>();
   const [checked, setChecked] = useState<string[]>([]);
+  const [bulk, setBulk] = useState(false);
   const active = groups.find((group) => group.pack.id === activeId) ?? groups[0];
 
   useEffect(() => {
     setChecked([]);
+    setBulk(false);
     setActiveId(undefined);
     setPage(1);
   }, [stage, reason]);
@@ -280,14 +252,13 @@ export function InboxPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [active?.pack.id, groups]);
 
-  const bulkAccept = async (acceptSuggestion: boolean) => {
-    const ids = groups.filter((group) => checked.includes(group.pack.id)).flatMap((group) => {
-      if (acceptSuggestion) return suggestedItems(group).map((item) => item.id);
-      return group.pack.members.filter((member) => member.stage === 'review').map((member) => member.id);
-    });
+  const bulkAccept = async () => {
+    const ids = groups
+      .filter((group) => checked.includes(group.pack.id))
+      .flatMap((group) => group.pack.members.filter((member) => member.stage === 'attention').map((member) => member.id));
     if (ids.length === 0) return;
     try {
-      const result = await accept.mutateAsync({ ids, acceptSuggestion });
+      const result = await accept.mutateAsync({ ids });
       message.success(`已确认 ${result.count} 个文件`);
       setChecked([]);
     } catch (error) {
@@ -295,25 +266,39 @@ export function InboxPage() {
     }
   };
 
-  const reasonOptions = Object.entries(REVIEW_REASON_LABELS).map(([value, label]) => ({ value, label }));
+  const reasonOptions = Object.keys(ATTENTION_REASON_LABELS).map((value) => ({ value, label: attentionReasonLabel(value) }));
+  const emptyCopy = reason ? '没有符合该原因的套卷' : (EMPTY_COPY[stage] ?? '没有套卷');
   return (
     <div className="page-stack">
-      <PageHeader title="待确认" description="按套卷确认识别结果；同一套里的文件只需核对一次。J/K 可切换套卷。" />
+      <PageHeader title="需关注" description="编目全部由 AI 完成；这里只列出 AI 没能通过校验的套卷。J/K 可切换套卷。" />
       <div className="flex flex-wrap items-center gap-3">
         <Segmented value={stage} onChange={(value) => setParams({ stage: String(value) })} options={TABS} />
-        {stage === 'review' ? <Select allowClear placeholder="按原因筛选" value={reason || undefined} options={reasonOptions} onChange={(value) => setParams(value ? { stage, reason: value } : { stage })} style={{ width: 160 }} /> : null}
+        {stage === 'attention' ? <Select allowClear placeholder="按原因筛选" value={reason || undefined} options={reasonOptions} onChange={(value) => setParams(value ? { stage, reason: value } : { stage })} style={{ width: 180 }} /> : null}
         <Typography.Text type="secondary">共 {query.data?.total ?? 0} 套</Typography.Text>
+        {stage === 'attention' && groups.length > 1 ? (
+          <Button
+            type="text"
+            onClick={() => {
+              setBulk((v) => !v);
+              setChecked([]);
+            }}
+          >
+            {bulk ? '完成' : '批量确认'}
+          </Button>
+        ) : null}
       </div>
 
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : null}
       {query.isPending ? <LoadingState /> : null}
       {!query.isPending && groups.length === 0 ? (
-        <Card><Empty description={stage === 'review' ? '都确认好了，没有需要处理的套卷' : stage === 'processing' ? '没有正在识别的套卷' : '没有识别失败的套卷'} /></Card>
+        <Card>
+          <Empty description={emptyCopy} />
+        </Card>
       ) : null}
       {!query.isPending && groups.length > 0 ? (
         <div className="inbox-layout">
           <Card className="inbox-list" size="small" styles={{ body: { padding: 0 } }}>
-            {stage === 'review' ? (
+            {stage === 'attention' && bulk ? (
               <div className="inbox-list__toolbar">
                 <Checkbox
                   checked={checked.length > 0 && checked.length === groups.length}
@@ -323,10 +308,9 @@ export function InboxPage() {
                   全选套卷
                 </Checkbox>
                 {checked.length > 0 ? (
-                  <Space size={4}>
-                    <Button size="small" onClick={() => void bulkAccept(false)} loading={accept.isPending}>确认 {checked.length} 套</Button>
-                    {groups.some((group) => checked.includes(group.pack.id) && suggestedItems(group).length > 0) ? <Button size="small" onClick={() => void bulkAccept(true)} loading={accept.isPending}>接受配套</Button> : null}
-                  </Space>
+                  <Button size="small" onClick={() => void bulkAccept()} loading={accept.isPending}>
+                    按当前编目确认 {checked.length} 套
+                  </Button>
                 ) : null}
               </div>
             ) : null}
@@ -346,13 +330,21 @@ export function InboxPage() {
                     }
                   }}
                 >
-                  {stage === 'review' ? <Checkbox checked={checked.includes(group.pack.id)} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} onChange={(event) => setChecked((list) => (event.target.checked ? [...list, group.pack.id] : list.filter((id) => id !== group.pack.id)))} /> : null}
+                  {stage === 'attention' && bulk ? (
+                    <Checkbox
+                      checked={checked.includes(group.pack.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                      onChange={(event) => setChecked((list) => (event.target.checked ? [...list, group.pack.id] : list.filter((id) => id !== group.pack.id)))}
+                    />
+                  ) : null}
                   <div className="inbox-item__body">
-                    <span className="inbox-item__title">{group.pack.title || '待命名套卷'}</span>
+                    <span className="inbox-item__title">{group.pack.title || '未命名资料'}</span>
                     <span className="inbox-item__meta">
                       <span>{group.pack.members.length} 个文件</span>
-                      {group.items.flatMap((item) => item.review_reasons).filter((reasonValue, index, all) => all.indexOf(reasonValue) === index).slice(0, 2).map((reasonValue) => <Tag key={reasonValue} color="warning">{REVIEW_REASON_LABELS[reasonValue]}</Tag>)}
-                      {suggestedItems(group).length > 0 ? <Tag color="blue">有配套建议</Tag> : null}
+                      {packReasons(group).slice(0, 2).map((reasonValue) => (
+                        <Tag key={reasonValue} color="warning">{attentionReasonLabel(reasonValue)}</Tag>
+                      ))}
                       <span>{formatDateTime(group.pack.created_at)}</span>
                     </span>
                   </div>
@@ -367,7 +359,7 @@ export function InboxPage() {
               </div>
             ) : null}
           </Card>
-          {active ? <ReviewPackPanel key={active.pack.id} group={active} stage={stage} onDone={advance} /> : null}
+          {active ? <AttentionPanel key={active.pack.id} group={active} stage={stage} onDone={advance} /> : null}
         </div>
       ) : null}
     </div>

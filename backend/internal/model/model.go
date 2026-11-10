@@ -81,24 +81,35 @@ const (
 // SyncStatuses lists material sync statuses.
 var SyncStatuses = []string{SyncWaitingCatalog, SyncNotRequired, SyncSyncing, SyncSynced, SyncAttention}
 
-// Material curation stages: the one status a person needs to read.
+// Material curation stages: the one status a person needs to read. The AI
+// decides every catalogue; people only step in for "attention".
 const (
+	// StageProcessing: the AI pipeline (read → group → decide) is working.
 	StageProcessing = "processing"
-	StageReview     = "review"
-	StageReady      = "ready"
-	StageFailed     = "failed"
+	// StageWaitingAI: no usable model or OCR service; work resumes on its own
+	// once the AI configuration is available again.
+	StageWaitingAI = "waiting_ai"
+	// StageAttention: the AI could not reach a verified decision.
+	StageAttention = "attention"
+	// StageReady: catalogued by a verified AI decision or by a person.
+	StageReady = "ready"
 )
 
 // MaterialStages lists curation stages.
-var MaterialStages = []string{StageProcessing, StageReview, StageReady, StageFailed}
+var MaterialStages = []string{StageProcessing, StageWaitingAI, StageAttention, StageReady}
 
-// Reasons a material waits in the review inbox.
+// AI pipeline steps of a material that is not ready yet.
 const (
-	ReviewLowConfidence  = "low_confidence"
-	ReviewPackSuggestion = "pack_suggestion"
-	ReviewDuplicate      = "duplicate_suspect"
-	ReviewAnalysisFailed = "analysis_failed"
-	ReviewManual         = "manual"
+	StepRead   = "read"
+	StepGroup  = "group"
+	StepDecide = "decide"
+)
+
+// Attention reasons that are not check codes.
+const (
+	AttentionAIFailed        = "ai_failed"        // the model kept failing after every retry
+	AttentionGroupUnverified = "group_unverified" // grouping fell back to single-file sets
+	AttentionMetadataOnly    = "metadata_only"    // no content could be read; judged by name only
 )
 
 // Pack document types: what kind of material a pack is.
@@ -130,9 +141,11 @@ const (
 const (
 	JobIngest    = "ingest"
 	JobReplicate = "replicate"
-	JobAnalyze   = "analyze"
+	JobAnalyze   = "analyze" // READ: parse one file and let the model write its card
 	JobIndex     = "index"
-	JobGroup     = "group"
+	JobGroup     = "group"  // GROUP: the model groups a batch of cards into sets
+	JobDecide    = "decide" // DECIDE: the model decides one set's catalogue
+	JobEntity    = "entity" // the model checks a new dictionary entry for duplicates
 
 	JobPending   = "pending"
 	JobRunning   = "running"
@@ -272,12 +285,17 @@ type Material struct {
 	Position          int    `gorm:"not null"`
 	Part              string `gorm:"size:32;not null;index"`
 	AnswerStartPage   int    `gorm:"not null"`
-	Title             string `gorm:"size:255;not null"`
-	FileName          string `gorm:"type:text;not null"`
-	OriginalName      string `gorm:"type:text;not null"`
-	Stage             string `gorm:"size:16;not null;index"`
-	ReviewReasonsJSON string `gorm:"type:text;not null"`
-	SuggestedPackID   string `gorm:"size:36"`
+	Title         string `gorm:"size:255;not null"`
+	FileName      string `gorm:"type:text;not null"`
+	OriginalName  string `gorm:"type:text;not null"`
+	Stage         string `gorm:"size:16;not null;index"`
+	AIStep        string `gorm:"size:16;not null;default:'';index"`
+	AttentionJSON string `gorm:"type:text;not null;default:'[]'"`
+	// BatchID groups files the model groups together: the upload they
+	// arrived with, or a library re-run.
+	BatchID string `gorm:"size:36;not null;default:'';index"`
+	// PartLocked marks a role set by a person; decisions keep it.
+	PartLocked bool `gorm:"not null;default:false"`
 	// Status reports whether the original is safe: archived once it is in the
 	// local CAS, missing when it can only be pulled back from a drive.
 	Status        string `gorm:"size:16;not null;index"`
@@ -313,25 +331,40 @@ type MaterialSource struct {
 // sheet...) or one single-document resource. Catalogue fields live here and
 // every member file inherits them.
 type Pack struct {
-	ID            string `gorm:"primaryKey;size:36"`
-	Title         string `gorm:"size:255;not null"`
-	TitleLocked   bool   `gorm:"not null"`
-	CatalogLocked bool   `gorm:"not null"`
-	DocType       string `gorm:"size:32;not null;index"`
-	SubjectsJSON  string `gorm:"type:text;not null"`
-	Grade         string `gorm:"size:16;not null;index"`
-	Term          string `gorm:"size:16;not null"`
-	Cohort        int    `gorm:"not null;index"`
-	Region        string `gorm:"size:64;not null;index"`
-	Organization  string `gorm:"size:128;not null"`
-	ExamDate      string `gorm:"size:7;not null"`
-	ExamName      string `gorm:"size:255;not null"`
-	Chapter       string `gorm:"size:255;not null"`
-	TagsJSON      string `gorm:"type:text;not null"`
-	Description   string `gorm:"type:text;not null"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	ID    string `gorm:"primaryKey;size:36"`
+	Title string `gorm:"size:255;not null"`
+	// LockedJSON lists catalogue fields a person set; decisions keep them.
+	LockedJSON   string `gorm:"type:text;not null;default:'[]'"`
+	DocType      string `gorm:"size:32;not null;index"`
+	SubjectsJSON string `gorm:"type:text;not null"`
+	Grade        string `gorm:"size:16;not null;index"`
+	Term         string `gorm:"size:16;not null"`
+	Cohort       int    `gorm:"not null;index"`
+	Region       string `gorm:"size:64;not null;index"`
+	// Organization is the canonical name of OrganizationID, kept on the pack
+	// for titles, filters and path templates.
+	Organization   string `gorm:"size:128;not null"`
+	OrganizationID string `gorm:"size:36;not null;default:'';index"`
+	ExamDate       string `gorm:"size:7;not null"`
+	ExamName       string `gorm:"size:255;not null"`
+	Chapter        string `gorm:"size:255;not null"`
+	TagsJSON       string `gorm:"type:text;not null"`
+	Description    string `gorm:"type:text;not null"`
+	// Revision changes whenever the members change; a decision made for an
+	// older revision is discarded.
+	Revision  int `gorm:"not null;default:0"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt gorm.DeletedAt `gorm:"index"`
+}
+
+// Locked reports the locked catalogue fields.
+func (p Pack) Locked() map[string]bool {
+	out := map[string]bool{}
+	for _, f := range DecodeStrings(p.LockedJSON) {
+		out[f] = true
+	}
+	return out
 }
 
 // PackSubject links a pack to subject codes (filterable).
@@ -397,7 +430,16 @@ type Job struct {
 	UploadID        string `gorm:"size:36;index"`
 	ReplicaID       string `gorm:"size:36;index"`
 	MaterialID      string `gorm:"size:36;index"`
-	Attempts        int    `gorm:"not null"`
+	PackID          string `gorm:"size:36;not null;default:'';index"`
+	BatchID         string `gorm:"size:36;not null;default:'';index"`
+	EntityID        string `gorm:"size:36;not null;default:'';index"`
+	// PayloadJSON holds what a job was prepared with (the files of a group
+	// chunk, the pack revision of a decision) so failures and commits refer
+	// to exactly that work.
+	PayloadJSON string `gorm:"type:text;not null;default:''"`
+	// NextAttemptAt delays a retried job; nil means it may run now.
+	NextAttemptAt   *time.Time `gorm:"index"`
+	Attempts        int        `gorm:"not null"`
 	Error           string `gorm:"type:text;not null"`
 	ProgressMessage string `gorm:"type:text;not null;default:''"`
 	ProgressCurrent int    `gorm:"not null;default:0"`
@@ -676,41 +718,84 @@ type AIProvider struct {
 	UpdatedAt    time.Time
 }
 
-// AISettings is the singleton document-analysis configuration (ID is always 1).
+// AISettings is the singleton AI configuration (ID is always 1). Cataloguing
+// always runs through the AI; there is no switch to turn it off.
 type AISettings struct {
-	ID              int    `gorm:"primaryKey"`
-	AnalysisEnabled bool   `gorm:"not null"`
-	OCRProviderID   string `gorm:"size:36;index"`
-	MaxPages        int    `gorm:"not null"`
-	MaxImages       int    `gorm:"not null"`
-	// AutoAcceptConfidence is the overall confidence at or above which an
-	// analysed file goes straight to ready instead of the review inbox.
-	AutoAcceptConfidence float64 `gorm:"not null;default:0.8"`
-	UpdatedAt            time.Time
+	ID            int    `gorm:"primaryKey"`
+	OCRProviderID string `gorm:"size:36;index"`
+	MaxPages      int    `gorm:"not null"`
+	MaxImages     int    `gorm:"not null"`
+	UpdatedAt     time.Time
 }
 
 // TableName pins the singleton settings table name.
 func (AISettings) TableName() string { return "ai_settings" }
 
-// MaterialAnalysis is the latest AI result for one material. Successful
-// suggestions are applied automatically; AppliedAt records that write.
-type MaterialAnalysis struct {
-	ID              string  `gorm:"primaryKey;size:36"`
-	MaterialID      string  `gorm:"size:36;not null;uniqueIndex"`
-	Status          string  `gorm:"size:16;not null;index"`
-	ProviderID      string  `gorm:"size:36"`
-	JobID           string  `gorm:"size:36"`
-	Model           string  `gorm:"size:200"`
-	MarkdownPath    string  `gorm:"type:text"`
-	ImagesJSON      string  `gorm:"type:text;not null"`
-	PageCount       int     `gorm:"not null"`
-	ImageCount      int     `gorm:"not null"`
-	SuggestionsJSON string  `gorm:"type:text;not null"`
-	Confidence      float64 `gorm:"not null"`
-	Error           string  `gorm:"type:text;not null"`
-	AppliedAt       *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+// FileCard is the model's verified reading of one file (READ step).
+type FileCard struct {
+	MaterialID   string `gorm:"primaryKey;size:36"`
+	Status       string `gorm:"size:16;not null;index"`
+	JobID        string `gorm:"size:36"`
+	ProviderID   string `gorm:"size:36"`
+	Model        string `gorm:"size:200"`
+	CardJSON     string `gorm:"type:text;not null"`
+	ProblemsJSON string `gorm:"type:text;not null"`
+	MetadataOnly bool   `gorm:"not null"`
+	PageCount    int    `gorm:"not null"`
+	Error        string `gorm:"type:text;not null"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// PackDecision is the latest verified AI catalogue of one pack (DECIDE step).
+type PackDecision struct {
+	PackID       string `gorm:"primaryKey;size:36"`
+	Status       string `gorm:"size:16;not null;index"`
+	JobID        string `gorm:"size:36"`
+	Revision     int    `gorm:"not null"`
+	ProviderID   string `gorm:"size:36"`
+	Model        string `gorm:"size:200"`
+	DecisionJSON string `gorm:"type:text;not null"`
+	ProblemsJSON string `gorm:"type:text;not null"`
+	Error        string `gorm:"type:text;not null"`
+	DecidedAt    *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Entity kinds kept in the name dictionary.
+const (
+	EntityOrganization = "organization"
+	EntityTag          = "tag"
+)
+
+// Entity sources: created by the AI or by a person.
+const (
+	EntitySourceAI    = "ai"
+	EntitySourceHuman = "human"
+)
+
+// Entity is one canonical name (a school, a league, a tag). Every spelling
+// the AI or a person met is an EntityAlias pointing here, so one school is
+// always stored under one name.
+type Entity struct {
+	ID        string `gorm:"primaryKey;size:36"`
+	Kind      string `gorm:"size:16;not null;index"`
+	Name      string `gorm:"size:128;not null"`
+	Region    string `gorm:"size:64;not null"`
+	Source    string `gorm:"size:16;not null"`
+	Locked    bool   `gorm:"not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// EntityAlias maps one normalised spelling to its entity.
+type EntityAlias struct {
+	Kind      string `gorm:"primaryKey;size:16"`
+	Norm      string `gorm:"primaryKey;size:128"`
+	EntityID  string `gorm:"size:36;not null;index"`
+	Text      string `gorm:"size:128;not null"`
+	CreatedAt time.Time
 }
 
 // SearchSettings is the singleton question-index configuration (ID is always 1).
@@ -786,7 +871,7 @@ func Models() []any {
 		&Upload{}, &UploadEntry{}, &Job{}, &JobLock{},
 		&Drive{}, &Rule{}, &RuleTarget{}, &Replica{},
 		&DriveNodeRoute{},
-		&AIProvider{}, &OCRProvider{}, &AISettings{}, &MaterialAnalysis{},
+		&AIProvider{}, &OCRProvider{}, &AISettings{}, &FileCard{}, &PackDecision{}, &Entity{}, &EntityAlias{},
 		&SearchSettings{}, &MaterialText{}, &QuestionBlock{}, &QuestionTerm{}, &MaterialIndexState{},
 		&ClusterSettings{}, &Node{},
 	}

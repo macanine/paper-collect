@@ -87,7 +87,7 @@ export function UploadTray() {
           ))}
           {batches.some((b) => b.phase === 'done') ? (
             <div className="upload-tray__footer">
-              <Link to="/inbox">去待确认看看 →</Link>
+              <Link to="/inbox">查看需关注 →</Link>
             </div>
           ) : null}
         </div>

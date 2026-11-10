@@ -150,18 +150,12 @@ func (s *Service) archiveSource(e model.UploadEntry) string {
 	return zipPath
 }
 
-// publishIngest deduplicates by content, records every arrival as a source,
-// places new files into packs (pairing siblings by name) and queues storage,
-// analysis and indexing, all in one transaction.
+// publishIngest deduplicates by content, records every arrival as a source
+// and queues new files for the AI pipeline, all in one transaction.
 func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, files []plannedFile, skipped []string) error {
 	now := s.now()
 	if err := s.lockJobLease(tx, job.ID, job.LeaseOwner); err != nil {
 		return fmt.Errorf("claim ingest job: %w", err)
-	}
-	hints := decodeHints(up.HintsJSON)
-	settings, err := s.loadAISettingsTx(tx)
-	if err != nil {
-		return err
 	}
 
 	// Pass 1: existing content only gains a source. The same content twice in
@@ -210,109 +204,48 @@ func (s *Service) publishIngest(tx *gorm.DB, job model.Job, up model.Upload, fil
 		fresh = append(fresh, newFile{plannedFile: f, ID: id})
 	}
 
-	// Pass 2: pair new siblings. Files in the same directory whose names reduce
-	// to the same stem ("…数学试题" / "…数学答案") form one pack.
-	type group struct {
-		files []newFile
-	}
-	groups := []*group{}
-	byKey := map[string]*group{}
+	// New files are archived without any catalogue: the AI reads each one,
+	// groups the batch into sets and decides every set. Upload hints are only
+	// evidence for the model.
+	created := 0
 	for _, f := range fresh {
-		stem := pairingStem(f.Path)
-		dir := path.Dir(f.Path)
-		// Files named only by their part ("试卷.pdf", "答案.pdf") take their
-		// identity from the folder they sit in.
-		if stem == "" && dir == "." {
-			groups = append(groups, &group{files: []newFile{f}})
-			continue
+		b, err := s.ensureBlobTx(tx, f.plannedFile, now)
+		if err != nil {
+			return err
 		}
-		key := dir + "\x00" + stem
-		g, ok := byKey[key]
-		if !ok {
-			g = &group{}
-			byKey[key] = g
-			groups = append(groups, g)
-		}
-		g.files = append(g.files, f)
-	}
-
-	stage := model.StageProcessing
-	reasons := []string{}
-	if !settings.AnalysisEnabled {
-		stage = model.StageReview
-		reasons = []string{model.ReviewManual}
-	}
-	var created []*model.Material
-	for _, g := range groups {
-		pack := model.Pack{
-			ID: newID(), DocType: hints.DocType, SubjectsJSON: model.EncodeStrings(hints.SubjectCodes), Grade: hints.Grade,
-			Cohort: hints.Cohort, Region: hints.Region, Organization: hints.Organization, TagsJSON: model.EncodeStrings(hints.Tags),
+		m := &model.Material{
+			ID: f.ID, Part: model.PartOther, OriginalName: path.Base(f.Path), Title: truncateRunes(stripExt(f.Path), maxTitleRunes),
+			FileName: path.Base(f.Path), Stage: model.StageProcessing, AIStep: model.StepRead, AttentionJSON: "[]", BatchID: up.ID,
+			Status: model.StatusArchived, SyncStatus: model.SyncWaitingCatalog, BlobID: b.ID, MediaType: f.MediaType, SizeBytes: f.Size, SHA256: f.SHA,
 			CreatedAt: now, UpdatedAt: now,
 		}
-		if err := tx.Create(&pack).Error; err != nil {
-			return fmt.Errorf("create pack: %w", err)
+		if err := tx.Create(m).Error; err != nil {
+			return fmt.Errorf("create material: %w", err)
 		}
-		if err := insertPackSubjects(tx, pack.ID, hints.SubjectCodes); err != nil {
+		if err := tx.Create(&model.MaterialSource{ID: newID(), MaterialID: m.ID, UploadID: up.ID, UserID: up.UserID,
+			Path: f.Path, CreatedAt: now}).Error; err != nil {
+			return fmt.Errorf("record source: %w", err)
+		}
+		if err := s.enqueueReadTx(tx, m.ID, now); err != nil {
 			return err
 		}
-		sort.SliceStable(g.files, func(i, j int) bool {
-			return partRank[suggestPart(path.Base(g.files[i].Path), g.files[i].MediaType)] < partRank[suggestPart(path.Base(g.files[j].Path), g.files[j].MediaType)]
-		})
-		for i, f := range g.files {
-			b, err := s.ensureBlobTx(tx, f.plannedFile, now)
-			if err != nil {
-				return err
-			}
-			m := &model.Material{
-				ID: f.ID, PackID: pack.ID, Position: i, Part: suggestPart(path.Base(f.Path), f.MediaType),
-				OriginalName: path.Base(f.Path), Stage: stage, ReviewReasonsJSON: model.EncodeStrings(reasons),
-				Status: model.StatusArchived, SyncStatus: model.SyncWaitingCatalog, BlobID: b.ID, MediaType: f.MediaType, SizeBytes: f.Size, SHA256: f.SHA,
-				CreatedAt: now, UpdatedAt: now,
-			}
-			// A lone file named like an answer key is most likely a full set
-			// only when nothing else came with it; keep the hint as is.
-			if err := tx.Create(m).Error; err != nil {
-				return fmt.Errorf("create material: %w", err)
-			}
-			if err := tx.Create(&model.MaterialSource{ID: newID(), MaterialID: m.ID, UploadID: up.ID, UserID: up.UserID,
-				Path: f.Path, CreatedAt: now}).Error; err != nil {
-				return fmt.Errorf("record source: %w", err)
-			}
-			created = append(created, m)
-		}
-		if _, err := s.refreshPackNamesTx(tx, pack.ID); err != nil {
-			return err
-		}
+		created++
 	}
 	for _, packID := range restoredPacks {
 		if _, err := s.refreshPackNamesTx(tx, packID); err != nil {
 			return err
 		}
 	}
-
-	if !settings.AnalysisEnabled {
-		for _, m := range created {
-			if _, err := s.planMaterialTx(tx, m.ID, true); err != nil {
-				return err
-			}
-		}
-	}
-	if err := s.autoEnqueueAnalysesTx(tx, created, settings, now); err != nil {
-		return err
-	}
-	if err := s.autoEnqueueIndexTx(tx, created, now); err != nil {
-		return err
-	}
 	skippedJSON, _ := json.Marshal(skipped)
 	if err := tx.Model(&model.Upload{}).Where("id = ?", up.ID).Updates(map[string]any{
-		"status": model.UploadCompleted, "new_count": len(created), "duplicate_count": duplicates,
+		"status": model.UploadCompleted, "new_count": created, "duplicate_count": duplicates,
 		"skipped_json": string(skippedJSON), "updated_at": now,
 	}).Error; err != nil {
 		return fmt.Errorf("complete upload: %w", err)
 	}
 	if err := s.finishJobTxWithMetrics(tx, job.ID, job.LeaseOwner, model.JobSucceeded,
-		fmt.Sprintf("新增 %d 个文件，%d 个已存在，跳过 %d 个", len(created), duplicates, len(skipped)),
-		map[string]any{"new_count": len(created), "duplicate_count": duplicates, "skipped_count": len(skipped)}); err != nil {
+		fmt.Sprintf("新增 %d 个文件，%d 个已存在，跳过 %d 个；新文件交给 AI 阅读、分组和编目", created, duplicates, len(skipped)),
+		map[string]any{"new_count": created, "duplicate_count": duplicates, "skipped_count": len(skipped)}); err != nil {
 		return fmt.Errorf("complete job: %w", err)
 	}
 	return s.auditSystem(tx, "ingest.complete", up.ID)

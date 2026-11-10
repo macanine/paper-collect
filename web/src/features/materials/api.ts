@@ -6,12 +6,11 @@ import type {
   MaterialPullCache,
   MaterialUpdate,
   Page,
-  ReviewReason,
   ReviewPack,
   Stage,
 } from '../../shared/api/types';
 
-export function listReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: ReviewReason }, signal?: AbortSignal): Promise<Page<ReviewPack>> {
+export function listReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: string }, signal?: AbortSignal): Promise<Page<ReviewPack>> {
   return apiRequest<Page<ReviewPack>>('/materials/review-packs', { query: params, signal });
 }
 
@@ -27,9 +26,9 @@ export function updateMaterial(id: string, body: MaterialUpdate): Promise<Materi
   return apiRequest<MaterialDetail>(`/materials/${segment(id)}`, { method: 'PATCH', body });
 }
 
-/** 确认待确认文件；acceptSuggestion 同时并入建议的套卷。 */
-export function acceptMaterials(ids: string[], acceptSuggestion = false): Promise<{ count: number }> {
-  return apiRequest<{ count: number }>('/materials/accept', { method: 'POST', body: { ids, accept_suggestion: acceptSuggestion } });
+/** 人工确认需关注的文件：按当前编目入库并开始同步。 */
+export function acceptMaterials(ids: string[]): Promise<{ count: number }> {
+  return apiRequest<{ count: number }>('/materials/accept', { method: 'POST', body: { ids } });
 }
 
 export function downloadMaterial(id: string) {

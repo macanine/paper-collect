@@ -72,7 +72,7 @@ func (e *syncEnv) material(title, fileName string, content []byte, pack func(*mo
 	}
 	b := model.Blob{ID: newID(), SHA256: sha, SizeBytes: int64(len(content)), MediaType: "application/pdf", FileName: fileName, CreatedAt: now}
 	m := model.Material{ID: newID(), PackID: p.ID, Part: model.PartQuestions, Title: title, FileName: fileName, OriginalName: fileName,
-		Stage: model.StageReady, ReviewReasonsJSON: "[]", Status: model.StatusArchived, SyncStatus: model.SyncNotRequired,
+		Stage: model.StageReady, AttentionJSON: "[]", Status: model.StatusArchived, SyncStatus: model.SyncNotRequired,
 		BlobID: b.ID, MediaType: "application/pdf", SizeBytes: int64(len(content)), SHA256: sha, CreatedAt: now, UpdatedAt: now}
 	for _, row := range []any{&p, &b, &m} {
 		if err := e.conn.Create(row).Error; err != nil {
@@ -571,8 +571,8 @@ func TestWaitingCatalogUntilReadyOrForced(t *testing.T) {
 	if err != nil || preview.Counts["waiting_catalog"] != 1 {
 		t.Fatalf("preview = %+v %v", preview.Counts, err)
 	}
-	// Confirming the file (stage ready) plans it.
-	if err := e.conn.Transaction(func(tx *gorm.DB) error { return e.svc.setStageTx(tx, m.ID, model.StageReady, nil, "") }); err != nil {
+	// A committed catalogue decision plans it.
+	if err := e.conn.Transaction(func(tx *gorm.DB) error { _, err := e.svc.planMaterialTx(tx, m.ID, true); return err }); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.reload(m); got.SyncStatus != model.SyncSyncing || got.SyncPlannedAt == nil {

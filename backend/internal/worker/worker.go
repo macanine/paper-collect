@@ -497,7 +497,7 @@ func (w *Worker) execute(parent context.Context, in jobexec.Input) {
 	case err != nil:
 		message, extra := jobexec.Failure(in.Kind, err)
 		w.cfg.Logf("%s job %s failed: %s", in.Kind, in.JobID, message)
-		_ = w.call(report, http.MethodPost, "/internal/v1/jobs/"+in.JobID+"/fail", map[string]any{"error": message, "extra": extra}, nil)
+		_ = w.call(report, http.MethodPost, "/internal/v1/jobs/"+in.JobID+"/fail", map[string]any{"error": message, "extra": extra, "class": jobexec.FailureClass(err)}, nil)
 	default:
 		status, err := w.complete(report, in.JobID, out)
 		if err == nil {
@@ -506,7 +506,7 @@ func (w *Worker) execute(parent context.Context, in jobexec.Input) {
 		w.cfg.Logf("report %s job %s failed: %s", in.Kind, in.JobID, jobexec.Redact(err.Error()))
 		// A result the master refuses would be refused again after every requeue.
 		if status >= 400 && status < 500 && status != http.StatusConflict && status != http.StatusUnauthorized {
-			_ = w.call(report, http.MethodPost, "/internal/v1/jobs/"+in.JobID+"/fail", map[string]any{"error": "主端拒绝了任务结果：" + jobexec.Redact(err.Error())}, nil)
+			_ = w.call(report, http.MethodPost, "/internal/v1/jobs/"+in.JobID+"/fail", map[string]any{"error": "主端拒绝了任务结果：" + jobexec.Redact(err.Error()), "class": jobexec.ClassPermanent}, nil)
 		}
 	}
 }

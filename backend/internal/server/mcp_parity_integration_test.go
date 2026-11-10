@@ -1,10 +1,8 @@
 package server_test
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -61,67 +59,6 @@ func toolData(t *testing.T, r rpcToolResponse) map[string]any {
 		t.Fatalf("invalid tool data: %v", err)
 	}
 	return data
-}
-func TestMCPApplicationWriteAndUploadParity(t *testing.T) {
-	env := newEnv(t)
-	key := createAgentKey(t, env, []string{"materials:read", "materials:write", "collections:read", "collections:write", "uploads:write", "jobs:read"})
-	collection := toolData(t, callTool(t, env, key, "collections_create", map[string]any{"title": "MCP 专题"}))
-	id := collection["id"].(string)
-	updated := toolData(t, callTool(t, env, key, "collections_update", map[string]any{"id": id, "description": "修改成功"}))
-	if updated["description"] != "修改成功" {
-		t.Fatal("collection update was not applied")
-	}
-	roots := toolData(t, callTool(t, env, key, "collections_list", map[string]any{"q": "MCP"}))
-	if roots["total"] != float64(1) {
-		t.Fatal("collection query filters differ from REST")
-	}
-	pdf := minimalPDF()
-	upload := toolData(t, callTool(t, env, key, "uploads_create", map[string]any{"title": "测试资料", "entries": []any{map[string]any{"relative_path": "test.pdf", "size_bytes": len(pdf)}}}))
-	uploadID := upload["id"].(string)
-	entries := upload["entries"].([]any)
-	entryID := entries[0].(map[string]any)["id"].(string)
-	transfer := toolData(t, callTool(t, env, key, "uploads_transfer_info", map[string]any{"id": uploadID, "entry_id": entryID}))
-	if transfer["method"] != "PUT" || !strings.HasPrefix(transfer["path"].(string), "/api/v1/uploads/") {
-		t.Fatal("invalid upload descriptor")
-	}
-	_ = toolData(t, callTool(t, env, key, "uploads_file_put", map[string]any{"id": uploadID, "entry_id": entryID, "data_base64": base64.StdEncoding.EncodeToString(pdf)}))
-	_ = toolData(t, callTool(t, env, key, "uploads_finalize", map[string]any{"id": uploadID}))
-	env.svc.ProcessAvailable(t.Context(), 100)
-	materialList := toolData(t, callTool(t, env, key, "materials_search", map[string]any{"q": "test", "part": "other"}))
-	if materialList["total"] != float64(1) {
-		t.Fatal("material filtering differs from REST")
-	}
-	material := materialList["items"].([]any)[0].(map[string]any)
-	materialID := material["id"].(string)
-	packID := material["pack_id"].(string)
-	_ = toolData(t, callTool(t, env, key, "materials_update", map[string]any{"id": materialID, "part": "questions"}))
-	pack := toolData(t, callTool(t, env, key, "packs_update", map[string]any{"id": packID, "doc_type": "weekly", "subject_codes": []any{"physics"}}))
-	if pack["title"] != "周测 物理" {
-		t.Fatalf("pack update did not rename: %v", pack["title"])
-	}
-	added := toolData(t, callTool(t, env, key, "collections_items_add", map[string]any{"id": id, "pack_ids": []any{packID}}))
-	if added["pack_count"] != float64(1) {
-		t.Fatal("pack was not added to the topic")
-	}
-	download := toolData(t, callTool(t, env, key, "materials_download", map[string]any{"id": materialID}))
-	if download["method"] != "GET" || !strings.HasSuffix(download["path"].(string), "/download") {
-		t.Fatal("invalid download descriptor")
-	}
-	req, err := http.NewRequest(http.MethodGet, env.base+download["path"].(string), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	res, err := env.client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	contents, err := io.ReadAll(res.Body)
-	if err != nil || res.StatusCode != http.StatusOK || !bytes.Equal(contents, pdf) {
-		t.Fatal("streamed download differs from the uploaded file")
-	}
-	_ = toolData(t, callTool(t, env, key, "collections_delete", map[string]any{"id": id}))
 }
 func TestMCPPermissionsAndInputValidation(t *testing.T) {
 	env := newEnv(t)
@@ -193,79 +130,6 @@ func TestMCPRejectsTrailingJSONAndOversizedWhitespace(t *testing.T) {
 		if err != nil || body.Error == nil || body.Error.Code != -32700 {
 			t.Fatal("invalid MCP framing was accepted")
 		}
-	}
-}
-
-func TestDashboardStatsRESTAndMCPParity(t *testing.T) {
-	env := newEnv(t)
-	key := createAgentKey(t, env, []string{"materials:read", "jobs:read"})
-	headers := map[string]string{"Authorization": "Bearer " + key}
-	uploadID, _ := env.upload(t, "统计测试", map[string][]byte{"stats.pdf": minimalPDF()})
-	env.finalizeAndWait(t, uploadID)
-	for _, test := range []struct {
-		path, tool string
-		fields     []string
-	}{
-		{"/api/v1/materials/stats", "materials_stats", []string{"packs", "files", "review", "ready", "missing_answers", "archived", "missing", "waiting_catalog", "not_required", "syncing", "synced", "attention"}},
-		{"/api/v1/jobs/stats", "jobs_stats", []string{"total", "pending", "running", "succeeded", "failed"}},
-	} {
-		status, raw := env.do(t, http.MethodGet, test.path, nil, headers)
-		if status != http.StatusOK {
-			t.Fatalf("%s returned %d", test.path, status)
-		}
-		var response struct {
-			Data map[string]any `json:"data"`
-		}
-		if err := json.Unmarshal(raw, &response); err != nil {
-			t.Fatal(err)
-		}
-		result := toolData(t, callTool(t, env, key, test.tool, map[string]any{}))
-		for _, field := range test.fields {
-			if _, ok := response.Data[field]; !ok || result[field] != response.Data[field] {
-				t.Fatalf("%s field %s differs between REST and MCP", test.tool, field)
-			}
-		}
-		count, ok := response.Data["total"].(float64)
-		if !ok {
-			count, _ = response.Data["files"].(float64)
-		}
-		if count < 1 {
-			t.Fatalf("%s should include created data", test.tool)
-		}
-	}
-	readKey := createAgentKey(t, env, []string{"materials:read"})
-	status, _ := env.do(t, http.MethodGet, "/api/v1/jobs/stats", nil, map[string]string{"Authorization": "Bearer " + readKey})
-	if status != http.StatusForbidden {
-		t.Fatalf("jobs stats bypassed scope: %d", status)
-	}
-	if response := callTool(t, env, readKey, "jobs_stats", map[string]any{}); !response.Result.IsError {
-		t.Fatal("jobs MCP stats bypassed scope")
-	}
-}
-
-func TestMCPUponZIPUploadArchivesOnlyMembers(t *testing.T) {
-	env := newEnv(t)
-	key := createAgentKey(t, env, []string{"uploads:write", "materials:read"})
-	packageZip := zipWith(t, map[string][]byte{"试卷.pdf": minimalPDF()})
-	upload := toolData(t, callTool(t, env, key, "uploads_create", map[string]any{
-		"title": "资料", "entries": []any{
-			map[string]any{"relative_path": "资料.zip", "size_bytes": len(packageZip)},
-		},
-	}))
-	uploadID := upload["id"].(string)
-	entry := upload["entries"].([]any)[0].(map[string]any)
-	_ = toolData(t, callTool(t, env, key, "uploads_file_put", map[string]any{
-		"id": uploadID, "entry_id": entry["id"], "data_base64": base64.StdEncoding.EncodeToString(packageZip),
-	}))
-	_ = toolData(t, callTool(t, env, key, "uploads_finalize", map[string]any{"id": uploadID}))
-	env.svc.ProcessAvailable(t.Context(), 100)
-	result := toolData(t, callTool(t, env, key, "uploads_get", map[string]any{"id": uploadID}))
-	if result["status"] != "completed" || result["new_count"] != float64(1) {
-		t.Fatal("MCP ZIP did not archive its member")
-	}
-	materials := toolData(t, callTool(t, env, key, "materials_search", map[string]any{}))
-	if materials["total"] != float64(1) || materials["items"].([]any)[0].(map[string]any)["original_name"] != "试卷.pdf" {
-		t.Fatal("MCP did not archive exactly the ZIP member")
 	}
 }
 

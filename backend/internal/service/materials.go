@@ -26,27 +26,25 @@ type MaterialFilter struct {
 
 // MaterialView is one file with its pack and, for detail views, sources and replicas.
 type MaterialView struct {
-	Material  model.Material
-	Pack      *PackView
-	Reasons   []string
-	Sources   []model.MaterialSource
-	Replicas  []model.Replica
-	Suggested *model.Pack
+	Material model.Material
+	Pack     *PackView
+	Reasons  []string
+	Sources  []model.MaterialSource
+	Replicas []model.Replica
 }
 
-// ReviewPackItem is the small per-file portion needed by the suite review UI.
+// ReviewPackItem is the small per-file portion needed by the attention UI.
 // The full file summary lives in ReviewPackView.Pack.Members so one pack is
 // serialized once instead of once per member.
 type ReviewPackItem struct {
-	ID        string
-	Stage     string
-	Reasons   []string
-	Suggested *model.Pack
+	ID      string
+	Stage   string
+	Reasons []string
 }
 
-// ReviewPackView is one paginated suite in the review inbox. Items contains
+// ReviewPackView is one paginated set in the attention inbox. Items contains
 // the files matching the requested stage/reason filter; Pack.Members contains
-// every file so confirming the suite can finish all review members at once.
+// every file so confirming the set can finish all of its members at once.
 type ReviewPackView struct {
 	Pack  PackView
 	Items []ReviewPackItem
@@ -90,13 +88,13 @@ func (s *Service) materialQuery(db *gorm.DB, f MaterialFilter) *gorm.DB {
 		q = q.Where("sha256 = ?", strings.ToLower(f.SHA256))
 	}
 	if f.Reason != "" {
-		q = q.Where("review_reasons_json LIKE ? ESCAPE '!'", "%"+likeEscape(`"`+f.Reason+`"`)+"%")
+		q = q.Where("attention_json LIKE ? ESCAPE '!'", "%"+likeEscape(`"`+f.Reason)+"%")
 	}
 	return q
 }
 
 // ListMaterials returns a filtered, paginated file list with each file's pack.
-// The review inbox is this list with stage=review, oldest first.
+// Files that need attention are listed oldest first.
 func (s *Service) ListMaterials(ctx context.Context, f MaterialFilter, pg PageQuery) (Page[MaterialView], error) {
 	db := s.db.WithContext(ctx)
 	var total int64
@@ -104,7 +102,7 @@ func (s *Service) ListMaterials(ctx context.Context, f MaterialFilter, pg PageQu
 		return Page[MaterialView]{}, wrap("count materials", err)
 	}
 	order := "created_at DESC"
-	if f.Stage == model.StageReview {
+	if f.Stage == model.StageAttention {
 		order = "created_at ASC"
 	}
 	rows := []model.Material{}
@@ -119,18 +117,20 @@ func (s *Service) ListMaterials(ctx context.Context, f MaterialFilter, pg PageQu
 	return newPage(items, total, pg), nil
 }
 
-// ListReviewPacks returns the review inbox grouped and paginated by suite.
+// ListReviewPacks returns the attention inbox grouped and paginated by set.
+// Files not placed in a set yet (still being read or grouped) are counted in
+// the stats but not listed here.
 // This keeps large suites together and avoids serializing the same suite once
 // for every matching file.
 func (s *Service) ListReviewPacks(ctx context.Context, stage, reason string, pg PageQuery) (Page[ReviewPackView], error) {
 	db := s.db.WithContext(ctx)
 	apply := func(q *gorm.DB) *gorm.DB {
-		q = q.Model(&model.Material{})
+		q = q.Model(&model.Material{}).Where("pack_id <> ''")
 		if stage != "" {
 			q = q.Where("stage = ?", stage)
 		}
 		if reason != "" {
-			q = q.Where("review_reasons_json LIKE ? ESCAPE '!'", "%"+likeEscape(`"`+reason+`"`)+"%")
+			q = q.Where("attention_json LIKE ? ESCAPE '!'", "%"+likeEscape(`"`+reason)+"%")
 		}
 		return q
 	}
@@ -162,27 +162,10 @@ func (s *Service) ListReviewPacks(ctx context.Context, stage, reason string, pg 
 	if err := apply(db).Where("pack_id IN ?", packIDs).Order("created_at ASC").Order("id ASC").Find(&materials).Error; err != nil {
 		return Page[ReviewPackView]{}, wrap("load review pack items", err)
 	}
-	suggestedIDs := make([]string, 0)
-	seenSuggested := map[string]bool{}
-	for _, material := range materials {
-		if material.SuggestedPackID != "" && !seenSuggested[material.SuggestedPackID] {
-			seenSuggested[material.SuggestedPackID] = true
-			suggestedIDs = append(suggestedIDs, material.SuggestedPackID)
-		}
-	}
-	suggestedViews, err := s.packViewsByID(db, suggestedIDs, false)
-	if err != nil {
-		return Page[ReviewPackView]{}, err
-	}
 	itemsByPack := make(map[string][]ReviewPackItem, len(packIDs))
 	for _, material := range materials {
-		var suggested *model.Pack
-		if view, ok := suggestedViews[material.SuggestedPackID]; ok && material.SuggestedPackID != "" {
-			copy := view.Pack
-			suggested = &copy
-		}
 		itemsByPack[material.PackID] = append(itemsByPack[material.PackID], ReviewPackItem{
-			ID: material.ID, Stage: material.Stage, Reasons: model.DecodeStrings(material.ReviewReasonsJSON), Suggested: suggested,
+			ID: material.ID, Stage: material.Stage, Reasons: model.DecodeStrings(material.AttentionJSON),
 		})
 	}
 	items := make([]ReviewPackView, 0, len(packIDs))
@@ -198,11 +181,9 @@ func (s *Service) materialViews(db *gorm.DB, rows []model.Material) ([]MaterialV
 	packIDs := []string{}
 	seen := map[string]bool{}
 	for _, m := range rows {
-		for _, id := range []string{m.PackID, m.SuggestedPackID} {
-			if id != "" && !seen[id] {
-				seen[id] = true
-				packIDs = append(packIDs, id)
-			}
+		if m.PackID != "" && !seen[m.PackID] {
+			seen[m.PackID] = true
+			packIDs = append(packIDs, m.PackID)
 		}
 	}
 	packs, err := s.packViewsByID(db, packIDs, false)
@@ -211,13 +192,9 @@ func (s *Service) materialViews(db *gorm.DB, rows []model.Material) ([]MaterialV
 	}
 	items := make([]MaterialView, 0, len(rows))
 	for _, m := range rows {
-		view := MaterialView{Material: m, Reasons: model.DecodeStrings(m.ReviewReasonsJSON)}
+		view := MaterialView{Material: m, Reasons: model.DecodeStrings(m.AttentionJSON)}
 		if p, ok := packs[m.PackID]; ok {
 			view.Pack = &p
-		}
-		if p, ok := packs[m.SuggestedPackID]; ok && m.SuggestedPackID != "" {
-			pack := p.Pack
-			view.Suggested = &pack
 		}
 		items = append(items, view)
 	}
@@ -246,8 +223,9 @@ func (s *Service) GetMaterial(ctx context.Context, id string) (MaterialView, err
 	return view, nil
 }
 
-// UpdateMaterial changes a file's part or moves it between packs. A manual
-// edit is a human decision, so the file leaves the review inbox.
+// UpdateMaterial changes a file's part or moves it between packs. These are
+// human decisions: a part set by a person is locked, and moving a file makes
+// the AI decide both affected sets again.
 func (s *Service) UpdateMaterial(ctx context.Context, p auth.Principal, id string, pt MaterialPatch) (MaterialView, error) {
 	if pt.empty() {
 		return MaterialView{}, apperr.Validation("至少需要提供一个可修改字段")
@@ -257,9 +235,6 @@ func (s *Service) UpdateMaterial(ctx context.Context, p auth.Principal, id strin
 		var err error
 		renamed, err = s.applyMaterialPatchTx(tx, id, pt, s.now())
 		if err != nil {
-			return err
-		}
-		if err := s.setStageTx(tx, id, model.StageReady, nil, ""); err != nil {
 			return err
 		}
 		return s.audit(tx, p, "material.update", id)
@@ -284,13 +259,13 @@ func (s *Service) applyMaterialPatchTx(tx *gorm.DB, id string, pt MaterialPatch,
 		if err := validatePart(*pt.Part); err != nil {
 			return nil, err
 		}
-		updates["part"] = *pt.Part
+		updates["part"], updates["part_locked"] = *pt.Part, true
 	}
 	if pt.AnswerStartPage != nil {
 		if *pt.AnswerStartPage < 0 || *pt.AnswerStartPage > 10000 {
 			return nil, apperr.Validation("答案起始页必须为 0 到 10000")
 		}
-		updates["answer_start_page"] = *pt.AnswerStartPage
+		updates["answer_start_page"], updates["part_locked"] = *pt.AnswerStartPage, true
 	}
 	if err := tx.Model(&model.Material{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 		return nil, wrap("update material", err)
@@ -300,19 +275,48 @@ func (s *Service) applyMaterialPatchTx(tx *gorm.DB, id string, pt MaterialPatch,
 			return nil, wrap("sync material index state", err)
 		}
 	}
-	touched := map[string]bool{m.PackID: true}
+	touched := map[string]bool{}
+	if m.PackID != "" {
+		touched[m.PackID] = true
+	}
+	moved := false
 	switch {
 	case pt.NewPack:
+		if m.PackID == "" {
+			return nil, apperr.Conflict("文件还没有归入套卷")
+		}
 		target, err := s.splitIntoNewPackTx(tx, m, now)
 		if err != nil {
 			return nil, err
 		}
-		touched[target] = true
+		touched[target], moved = true, true
 	case pt.PackID != nil && *pt.PackID != m.PackID:
-		if err := s.moveMaterialTx(tx, m, *pt.PackID, now); err != nil {
+		var count int64
+		if err := tx.Model(&model.Pack{}).Where("id = ?", *pt.PackID).Count(&count).Error; err != nil {
+			return nil, wrap("check pack", err)
+		}
+		if count == 0 {
+			return nil, apperr.NotFound("目标套卷不存在")
+		}
+		if err := s.placeMaterialTx(tx, m, *pt.PackID, now); err != nil {
 			return nil, err
 		}
-		touched[*pt.PackID] = true
+		touched[*pt.PackID], moved = true, true
+	}
+	if moved {
+		// A person placed the file: it no longer waits for AI grouping.
+		mu := map[string]any{"batch_id": ""}
+		if m.AIStep == model.StepGroup {
+			mu["ai_step"] = model.StepDecide
+		}
+		if err := tx.Model(&model.Material{}).Where("id = ?", m.ID).Updates(mu).Error; err != nil {
+			return nil, wrap("mark placed", err)
+		}
+		for packID := range touched {
+			if err := s.membersChangedTx(tx, packID, now); err != nil {
+				return nil, err
+			}
+		}
 	}
 	var renamed []string
 	for packID := range touched {
@@ -345,7 +349,7 @@ func (s *Service) moveMaterialTx(tx *gorm.DB, m model.Material, targetPackID str
 		return wrap("pack position", err)
 	}
 	if err := tx.Model(&model.Material{}).Where("id = ?", m.ID).Updates(map[string]any{
-		"pack_id": target.ID, "position": maxPos.N + 1, "suggested_pack_id": "", "updated_at": now,
+		"pack_id": target.ID, "position": maxPos.N + 1, "updated_at": now,
 	}).Error; err != nil {
 		return wrap("move material", err)
 	}
@@ -365,7 +369,8 @@ func (s *Service) splitIntoNewPackTx(tx *gorm.DB, m model.Material, now time.Tim
 	fresh := old
 	fresh.ID = newID()
 	fresh.Title = ""
-	fresh.TitleLocked = false
+	fresh.LockedJSON = "[]"
+	fresh.Revision = 0
 	fresh.ExamName = ""
 	fresh.CreatedAt, fresh.UpdatedAt = now, now
 	fresh.DeletedAt = gorm.DeletedAt{}
@@ -376,7 +381,7 @@ func (s *Service) splitIntoNewPackTx(tx *gorm.DB, m model.Material, now time.Tim
 		return "", err
 	}
 	if err := tx.Model(&model.Material{}).Where("id = ?", m.ID).Updates(map[string]any{
-		"pack_id": fresh.ID, "position": 0, "suggested_pack_id": "", "updated_at": now,
+		"pack_id": fresh.ID, "position": 0, "updated_at": now,
 	}).Error; err != nil {
 		return "", wrap("move material", err)
 	}
@@ -399,59 +404,36 @@ func (s *Service) dropPackIfEmptyTx(tx *gorm.DB, packID string) error {
 	if err := tx.Where("pack_id = ?", packID).Delete(&model.CollectionItem{}).Error; err != nil {
 		return wrap("delete pack placements", err)
 	}
-	if err := tx.Model(&model.Material{}).Where("suggested_pack_id = ?", packID).Update("suggested_pack_id", "").Error; err != nil {
-		return wrap("clear pack suggestions", err)
+	if err := tx.Where("pack_id = ?", packID).Delete(&model.PackDecision{}).Error; err != nil {
+		return wrap("delete pack decision", err)
+	}
+	if err := tx.Where("kind = ? AND pack_id = ? AND status = ?", model.JobDecide, packID, model.JobPending).Delete(&model.Job{}).Error; err != nil {
+		return wrap("delete pack decide jobs", err)
 	}
 	return wrap("delete pack", tx.Unscoped().Where("id = ?", packID).Delete(&model.Pack{}).Error)
 }
 
-// setStageTx writes the curation stage. Ready and processing clear the inbox reasons.
-func (s *Service) setStageTx(tx *gorm.DB, id, stage string, reasons []string, suggestedPackID string) error {
-	if stage != model.StageReview && stage != model.StageFailed {
-		reasons = nil
-		suggestedPackID = ""
-	}
-	err := wrap("set stage", tx.Model(&model.Material{}).Where("id = ?", id).Updates(map[string]any{
-		"stage": stage, "review_reasons_json": model.EncodeStrings(reasons), "suggested_pack_id": suggestedPackID,
-	}).Error)
-	if err != nil {
-		return err
-	}
-	if stage == model.StageReady {
-		_, err = s.planMaterialTx(tx, id, true)
-	}
-	return err
-}
-
-// AcceptMaterials confirms files in the review inbox as they are now.
-// AcceptSuggestion additionally moves each file into its suggested pack.
-func (s *Service) AcceptMaterials(ctx context.Context, p auth.Principal, ids []string, acceptSuggestion bool) (int, error) {
+// AcceptMaterials confirms files that need attention as they are now: a
+// person takes the AI's result (or their own edits) as final. Files the AI
+// is still working on are left alone.
+func (s *Service) AcceptMaterials(ctx context.Context, p auth.Principal, ids []string) (int, error) {
 	if len(ids) == 0 || len(ids) > 500 {
 		return 0, apperr.Validation("一次需要确认 1 到 500 个文件")
 	}
-	var renamed []string
 	count := 0
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []model.Material
-		if err := tx.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		if err := tx.Where("id IN ? AND stage = ? AND pack_id <> ''", ids, model.StageAttention).Find(&rows).Error; err != nil {
 			return wrap("load materials", err)
 		}
 		now := s.now()
 		for _, m := range rows {
-			if acceptSuggestion && m.SuggestedPackID != "" {
-				var exists int64
-				if err := tx.Model(&model.Pack{}).Where("id = ?", m.SuggestedPackID).Count(&exists).Error; err != nil {
-					return wrap("check pack", err)
-				}
-				if exists > 0 {
-					ids, err := s.applyMaterialPatchTx(tx, m.ID, MaterialPatch{PackID: &m.SuggestedPackID}, now)
-					if err != nil {
-						return err
-					}
-					renamed = append(renamed, ids...)
-				}
+			if err := tx.Model(&model.Material{}).Where("id = ?", m.ID).Updates(map[string]any{
+				"stage": model.StageReady, "ai_step": "", "attention_json": "[]", "updated_at": now,
+			}).Error; err != nil {
+				return wrap("accept material", err)
 			}
-			if err := s.setStageTx(tx, m.ID, model.StageReady, nil, ""); err != nil {
+			if _, err := s.planMaterialTx(tx, m.ID, true); err != nil {
 				return err
 			}
 			count++
@@ -461,7 +443,7 @@ func (s *Service) AcceptMaterials(ctx context.Context, p auth.Principal, ids []s
 	if err != nil {
 		return 0, err
 	}
-	s.renameMaterialFiles(ctx, renamed)
+	s.notify()
 	return count, nil
 }
 

@@ -10,7 +10,7 @@ import (
 // LibraryStats summarises the library for the dashboard.
 type LibraryStats struct {
 	Packs, Files                                                               int64
-	Processing, Review, Ready, Failed                                          int64
+	Processing, WaitingAI, NeedsAttention, Ready                               int64
 	MissingAnswers, Trashed                                                    int64
 	Archived, Missing, WaitingCatalog, Syncing, Synced, Attention, NotRequired int64
 }
@@ -58,12 +58,12 @@ func (s *Service) GetLibraryStats(ctx context.Context) (LibraryStats, error) {
 		switch row.Stage {
 		case model.StageProcessing:
 			out.Processing = row.N
-		case model.StageReview:
-			out.Review = row.N
+		case model.StageWaitingAI:
+			out.WaitingAI = row.N
+		case model.StageAttention:
+			out.NeedsAttention = row.N
 		case model.StageReady:
 			out.Ready = row.N
-		case model.StageFailed:
-			out.Failed = row.N
 		}
 	}
 	rows, err := groupedStatusCounts(db, &model.Material{})

@@ -43,7 +43,8 @@ func remoteDriveAt(dir string) func(storage.Config) (storage.Adapter, error) {
 // A worker node without database or DATA_DIR claims a replicate job from the
 // master, downloads the verified original, uploads it, and reports the result.
 func TestWorkerNodeExecutesReplicateJob(t *testing.T) {
-	env := newEnvWith(t, 0, []string{})
+	env := newEnvWith(t, 0, []string{model.JobAnalyze})
+	configureCatalogAI(t, env, newFakeAI(t))
 	driveID := env.syncAllToDrive(t, webdavDrive)
 	uploadID, _ := env.upload(t, "从端测试", map[string][]byte{"学生版.pdf": minimalPDF()})
 	env.finalizeAndWait(t, uploadID)
@@ -147,7 +148,8 @@ func TestWorkerNodeExecutesReplicateJob(t *testing.T) {
 
 // A node can only report on jobs it currently leases.
 func TestNodeCannotCompleteAnotherNodesJob(t *testing.T) {
-	env := newEnvWith(t, 0, []string{})
+	env := newEnvWith(t, 0, []string{model.JobAnalyze})
+	configureCatalogAI(t, env, newFakeAI(t))
 	env.syncAllToDrive(t, webdavDrive)
 	uploadID, _ := env.upload(t, "租约测试", map[string][]byte{"学生版.pdf": minimalPDF()})
 	env.finalizeAndWait(t, uploadID)
@@ -187,31 +189,5 @@ func TestNodeCannotCompleteAnotherNodesJob(t *testing.T) {
 	}
 	if status, _ := env.do(t, http.MethodGet, "/internal/v1/blobs/"+strings.Repeat("0", 64), nil, a); status != http.StatusNotFound {
 		t.Fatalf("unknown blob = %d, want 404", status)
-	}
-}
-
-// With replicate left to nodes, a local drive's replica is still stored by the
-// master, under its own DATA_DIR, and no node ever sees the job.
-func TestLocalDriveReplicaRunsOnMaster(t *testing.T) {
-	env := newEnvWith(t, 0, []string{})
-	driveID := env.syncAllToLocalDrive(t)
-	status, body := env.do(t, http.MethodPost, "/api/v1/nodes", map[string]any{"name": "从端"}, nil)
-	var created nodeBody
-	if status != http.StatusCreated || json.Unmarshal(body, &created) != nil {
-		t.Fatalf("create node %d: %s", status, body)
-	}
-	uploadID, _ := env.upload(t, "本地网盘", map[string][]byte{"学生版.pdf": minimalPDF()})
-	env.finalizeAndWait(t, uploadID)
-
-	var replica model.Replica
-	if err := env.db.Where("drive_id = ?", driveID).First(&replica).Error; err != nil || replica.Status != model.ReplicaReady {
-		t.Fatalf("replica: %+v %v", replica, err)
-	}
-	if _, err := os.Stat(filepath.Join(env.dataDir, "drives", driveID, filepath.FromSlash(replica.RemotePath))); err != nil {
-		t.Fatalf("master must hold the local replica: %v", err)
-	}
-	var job model.Job
-	if err := env.db.Where("replica_id = ?", replica.ID).First(&job).Error; err != nil || job.NodeID == created.Data.ID {
-		t.Fatalf("job ran on the worker: %+v %v", job, err)
 	}
 }

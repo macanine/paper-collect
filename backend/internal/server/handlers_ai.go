@@ -141,20 +141,16 @@ func (s *Server) handleGetAISettings(c *gin.Context) {
 
 func (s *Server) handlePutAISettings(c *gin.Context) {
 	var req struct {
-		AnalysisEnabled bool     `json:"analysis_enabled"`
-		OCRProviderID   *string  `json:"ocr_provider_id"`
-		MaxPages        int      `json:"max_pages"`
-		MaxImages       int      `json:"max_images"`
-		AutoAccept      *float64 `json:"auto_accept_confidence"`
+		OCRProviderID *string `json:"ocr_provider_id"`
+		MaxPages      int     `json:"max_pages"`
+		MaxImages     int     `json:"max_images"`
 	}
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
 	view, err := s.svc.PutAISettings(c.Request.Context(), principal(c), service.AISettingsInput{
-		AnalysisEnabled: req.AnalysisEnabled, OCRProviderID: req.OCRProviderID,
-		MaxPages: req.MaxPages, MaxImages: req.MaxImages,
-		AutoAcceptConfidence: req.AutoAccept,
+		OCRProviderID: req.OCRProviderID, MaxPages: req.MaxPages, MaxImages: req.MaxImages,
 	})
 	if err != nil {
 		respondError(c, err)
@@ -244,42 +240,115 @@ func (s *Server) handleTestOCRProvider(c *gin.Context) {
 	s.respondData(c, http.StatusOK, gin.H{"healthy": result.Healthy, "message": result.Message})
 }
 
-func (s *Server) handleEnqueueAnalysis(c *gin.Context) {
-	var req struct {
-		Force bool `json:"force"`
-	}
-	if _, empty, ae := decodeOptionalJSON(c, &req); ae != nil {
-		respondError(c, ae)
-		return
-	} else if empty {
-		req.Force = false
-	}
-	view, jobID, err := s.svc.EnqueueMaterialAnalysis(c.Request.Context(), principal(c), c.Param("id"), req.Force)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	s.respondData(c, http.StatusAccepted, gin.H{"job_id": jobID, "analysis": toMaterialAnalysis(view)})
-}
-
-func (s *Server) handleGetAnalysis(c *gin.Context) {
-	view, err := s.svc.GetMaterialAnalysis(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	s.respondData(c, http.StatusOK, toMaterialAnalysis(view))
-}
-
-func (s *Server) handleApplyAnalysis(c *gin.Context) {
+// handleRereadMaterial lets the AI read one file again; its set is then
+// decided again.
+func (s *Server) handleRereadMaterial(c *gin.Context) {
 	if _, _, ae := decodeOptionalJSON(c, &struct{}{}); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	view, err := s.svc.ApplyMaterialAnalysis(c.Request.Context(), principal(c), c.Param("id"))
+	if err := s.svc.RereadMaterial(c.Request.Context(), principal(c), c.Param("id")); err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusAccepted, gin.H{"queued": true})
+}
+
+func (s *Server) handleGetMaterialCard(c *gin.Context) {
+	view, err := s.svc.GetMaterialCard(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, toMaterialDetail(view))
+	s.respondData(c, http.StatusOK, toMaterialCard(view))
+}
+
+func (s *Server) handleGetPackAI(c *gin.Context) {
+	view, err := s.svc.GetPackAI(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toPackAI(view))
+}
+
+func (s *Server) handleRedecidePack(c *gin.Context) {
+	if _, _, ae := decodeOptionalJSON(c, &struct{}{}); ae != nil {
+		respondError(c, ae)
+		return
+	}
+	if err := s.svc.RedecidePack(c.Request.Context(), principal(c), c.Param("id")); err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusAccepted, gin.H{"queued": true})
+}
+
+func (s *Server) handleRerunAI(c *gin.Context) {
+	var req struct {
+		Mode   string `json:"mode"`
+		Scope  string `json:"scope"`
+		DryRun bool   `json:"dry_run"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	out, err := s.svc.RerunAI(c.Request.Context(), principal(c), req.Mode, req.Scope, req.DryRun)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, rerunDTO{Materials: out.Materials, Packs: out.Packs, EstimatedCalls: out.EstimatedCalls, Applied: out.Applied})
+}
+
+func (s *Server) handleListEntities(c *gin.Context) {
+	pg, ae := pageQuery(c)
+	if ae != nil {
+		respondError(c, ae)
+		return
+	}
+	page, err := s.svc.ListEntities(c.Request.Context(), c.Query("kind"), c.Query("q"), pg)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toPage(page, toEntity))
+}
+
+func (s *Server) handlePatchEntity(c *gin.Context) {
+	var req struct {
+		Name          *string  `json:"name"`
+		Region        *string  `json:"region"`
+		Locked        *bool    `json:"locked"`
+		RemoveAliases []string `json:"remove_aliases"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	view, err := s.svc.UpdateEntity(c.Request.Context(), principal(c), c.Param("id"), service.EntityPatch{
+		Name: req.Name, Region: req.Region, Locked: req.Locked, RemoveAliases: req.RemoveAliases,
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toEntity(view))
+}
+
+func (s *Server) handleMergeEntity(c *gin.Context) {
+	var req struct {
+		Into string `json:"into"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	view, err := s.svc.MergeEntity(c.Request.Context(), principal(c), c.Param("id"), req.Into)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toEntity(view))
 }

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, type Key, type ReactNode } from 'react';
-import { App, Button, Card, Checkbox, Input, Popconfirm, Select, Space, Table, Typography } from 'antd';
+import { App, Button, Card, Checkbox, Dropdown, Input, Select, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { FilterOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DownOutlined, FilterOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router';
 import type { DocType, Grade, Pack, Stage, SubjectCode } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
@@ -41,7 +41,8 @@ export function LibraryPage() {
   const canWrite = can('materials:write');
   const compact = useCompactViewport();
   const navigate = useNavigate();
-  const { message } = App.useApp();
+  const { message, modal: confirmModal } = App.useApp();
+  const [selectMode, setSelectMode] = useState(false);
   const list = useListSearch(FILTER_KEYS);
   const { filters, setFilters } = list;
   const [qInput, setQInput] = useDebouncedFilterInput(filters.q, (q) => setFilters({ q }));
@@ -125,33 +126,34 @@ export function LibraryPage() {
 
   const rowSelection = useMemo(
     () =>
-      canWrite
+      canWrite && selectMode
         ? {
             selectedRowKeys: ids,
             preserveSelectedRowKeys: true,
             onChange: (_keys: Key[], rows: Pack[]) => setSelected(rows.filter(Boolean)),
           }
         : undefined,
-    [canWrite, ids],
+    [canWrite, selectMode, ids],
   );
+
+  const confirmTrash = () =>
+    confirmModal.confirm({
+      title: `把 ${selected.length} 个套卷移入回收站？`,
+      content: '30 天内可以恢复。',
+      okText: '移入',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: handleTrash,
+    });
+
+  const exitSelect = () => {
+    setSelectMode(false);
+    setSelected([]);
+  };
 
   return (
     <div className="page-stack">
-      <PageHeader
-        title="资料库"
-        extra={
-          <Select
-            value={filters.sort || 'updated'}
-            onChange={(sort) => setFilters({ sort: sort === 'updated' ? '' : sort })}
-            options={[
-              { value: 'updated', label: '最近更新' },
-              { value: 'cohort', label: '按届别与考试时间' },
-              { value: 'title', label: '按名称' },
-            ]}
-            style={{ width: 168 }}
-          />
-        }
-      />
+      <PageHeader title="资料库" />
 
       <Card size="small" className="library-filter-card">
         <div className="library-filters__primary">
@@ -161,21 +163,13 @@ export function LibraryPage() {
             value={qInput}
             onChange={(e) => setQInput(e.target.value)}
             className="library-filters__search"
-            enterButton
           />
-          <Checkbox checked={filters.content === '1'} onChange={(e) => setFilters({ content: e.target.checked ? '1' : '' })}>
-            搜索正文
-          </Checkbox>
-          <Button
-            type={advancedOpen || activeFilterCount > 0 ? 'default' : 'text'}
-            icon={<FilterOutlined />}
-            onClick={() => setAdvancedOpen((open) => !open)}
-          >
-            高级筛选{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
+          <Button type={advancedOpen || activeFilterCount > 0 ? 'default' : 'text'} icon={<FilterOutlined />} onClick={() => setAdvancedOpen((open) => !open)}>
+            筛选{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
           </Button>
-          {hasFilters ? (
-            <Button type="link" icon={<ReloadOutlined />} onClick={clear}>
-              清除
+          {canWrite ? (
+            <Button type={selectMode ? 'default' : 'text'} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>
+              {selectMode ? '完成' : '选择'}
             </Button>
           ) : null}
         </div>
@@ -205,31 +199,61 @@ export function LibraryPage() {
             <FilterField label="整理状态">
               <Select allowClear placeholder="全部" value={filters.stage || undefined} onChange={(v) => setFilters({ stage: v ?? '' })} options={STAGE_OPTIONS} />
             </FilterField>
+            <FilterField label="排序">
+              <Select
+                value={filters.sort || 'updated'}
+                onChange={(sort) => setFilters({ sort: sort === 'updated' ? '' : sort })}
+                options={[
+                  { value: 'updated', label: '最近更新' },
+                  { value: 'cohort', label: '按届别与考试时间' },
+                  { value: 'title', label: '按名称' },
+                ]}
+              />
+            </FilterField>
             <div className="library-filter-field library-filter-field--check">
-              <Checkbox checked={filters.missing === 'answers'} onChange={(e) => setFilters({ missing: e.target.checked ? 'answers' : '' })}>
-                只看缺答案
-              </Checkbox>
+              <Space wrap size={16}>
+                <Checkbox checked={filters.missing === 'answers'} onChange={(e) => setFilters({ missing: e.target.checked ? 'answers' : '' })}>
+                  只看缺答案
+                </Checkbox>
+                <Checkbox checked={filters.content === '1'} onChange={(e) => setFilters({ content: e.target.checked ? '1' : '' })}>
+                  同时搜索正文
+                </Checkbox>
+                {hasFilters ? (
+                  <Button type="link" size="small" onClick={clear}>
+                    清除全部
+                  </Button>
+                ) : null}
+              </Space>
             </div>
           </div>
         ) : null}
       </Card>
 
-      {canWrite && selected.length > 0 ? (
+      {canWrite && selectMode && selected.length > 0 ? (
         <Card size="small" className="bulk-bar">
           <Space wrap>
             <Typography.Text strong>已选 {selected.length} 个</Typography.Text>
-            <Button onClick={() => setModal('edit')}>批量编目</Button>
             <Button onClick={() => setModal('topic')}>加入专题</Button>
-            <Button disabled={selected.length < 2} onClick={() => setModal('merge')}>
-              合并为一套
-            </Button>
             <Button onClick={() => void handleDownload()}>下载</Button>
-            <Popconfirm title={`把 ${selected.length} 个套卷移入回收站？`} okText="移入" onConfirm={() => void handleTrash()}>
-              <Button danger>移入回收站</Button>
-            </Popconfirm>
-            <Button type="link" onClick={() => setSelected([])}>
-              取消选择
-            </Button>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'edit', label: '批量编目' },
+                  { key: 'merge', label: '合并为一套', disabled: selected.length < 2 },
+                  { type: 'divider' },
+                  { key: 'trash', label: '移入回收站', danger: true },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'trash') confirmTrash();
+                  else setModal(key as 'edit' | 'merge');
+                },
+              }}
+            >
+              <Button>
+                更多 <DownOutlined />
+              </Button>
+            </Dropdown>
           </Space>
         </Card>
       ) : null}

@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nic/paper-collect/backend/internal/apperr"
+	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/service"
 )
 
@@ -58,4 +60,26 @@ func (s *Server) handleRetryJob(c *gin.Context) {
 		return
 	}
 	s.respondData(c, http.StatusAccepted, toJob(job))
+}
+
+// handleRetryFailedJobs re-queues every failed job, optionally of one kind.
+func (s *Server) handleRetryFailedJobs(c *gin.Context) {
+	var req struct {
+		Kind string `json:"kind"`
+	}
+	if _, _, ae := decodeOptionalJSON(c, &req); ae != nil {
+		respondError(c, ae)
+		return
+	}
+	if req.Kind != "" && !isOneOf(req.Kind, model.JobIngest, model.JobReplicate, model.JobAnalyze, model.JobIndex,
+		model.JobGroup, model.JobDecide, model.JobEntity) {
+		respondError(c, apperr.Validation("kind 不在允许范围内"))
+		return
+	}
+	n, err := s.svc.RetryFailedJobs(c.Request.Context(), principal(c), req.Kind)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusAccepted, countDTO{Count: n})
 }

@@ -22,16 +22,16 @@
 | `sessions` | `Session` | 浏览器会话；`refresh_hash` 唯一；`prev_hash` 记录上一枚 token 用于重放检测；`expires_at`、`revoked` |
 | `audits` | `Audit` | 审计元数据；`user_id`、`action`、`target_id`、`created_at`；不含正文、令牌、Cookie、密钥、分享链接 |
 | `blobs` | `Blob` | 不可变内容；`sha256` 唯一；大小/媒体类型/原始文件名；一份内容对应一个 Blob |
-| `packs` | `Pack` | 套卷（浏览单位）；`doc_type`/`grade`/`cohort`/`region` 索引；`title_locked`、`catalog_locked`、`deleted_at`（回收站）；编目字段与 JSON 列表 |
-| `materials` | `Material` | 单个文件（一份 SHA-256）；`pack_id`、`part`、`stage`、`status`、`sync_status` 索引；`sync_planned_at`；`sha256` 唯一；`suggested_pack_id`、`review_reasons_json`；`deleted_at` 随套卷进回收站 |
+| `packs` | `Pack` | 套卷（浏览单位）；`doc_type`/`grade`/`cohort`/`region`/`organization_id` 索引；`locked_json`（人工锁定的编目字段）、`revision`（成员变化计数，过期的 AI 编目被丢弃）、`deleted_at`（回收站）；编目字段与 JSON 列表；`organization` 为名称词典规范名称 |
+| `materials` | `Material` | 单个文件（一份 SHA-256）；`pack_id`（分组前为空）、`part`、`stage`、`ai_step`、`batch_id`、`status`、`sync_status` 索引；`sync_planned_at`；`sha256` 唯一；`attention_json`（需关注原因）、`part_locked`；`deleted_at` 随套卷进回收站 |
 | `material_sources` | `MaterialSource` | 每次到达记录；`material_id`、`upload_id` 索引；`path`、`duplicate`、`user_id`；同一内容重复上传只追加此行 |
 | `pack_subjects` | `PackSubject` | 套卷-学科连接；主键 `(pack_id, code)`；`code` 索引；用于列表与搜题筛选 |
 | `collections` | `Collection` | 专题；`title`/`description`；只收纳套卷，无父子层级 |
 | `collection_items` | `CollectionItem` | 专题收录；唯一索引 `(collection_id, pack_id)`；`position` 显式排序 |
 | `uploads` | `Upload` | 上传批次；`user_id`、`status`、`job_id` 索引；`title`、`hints_json`、`new_count`/`duplicate_count`、`skipped_json` |
 | `upload_entries` | `UploadEntry` | 清单文件槽位；`upload_id` 索引；`position`、相对路径、声明大小、可选 SHA、媒体类型、`status`（pending/received/existing） |
-| `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner` 索引；`upload_id`、`replica_id`、`material_id` 索引；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
-| `job_locks` | `JobLock` | 同资料 analyze/index/group 互斥；资源键、任务 ID、租约到期时间 |
+| `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner`、`next_attempt_at` 索引；`upload_id`、`replica_id`、`material_id`、`pack_id`、`batch_id`、`entity_id` 索引；`payload_json`（准备时的分组文件或套卷版本）；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
+| `job_locks` | `JobLock` | 资源互斥：同资料 analyze/index、同套卷 decide、全局 group、全局 entity；资源键、任务 ID、租约到期时间 |
 | `storage_drives` | `Drive` | 网盘；`enabled`、`read_order`、`route_mode` 索引；kind、`root_path`、`max_file_bytes`、`allowed_exts_json`、`on_path_change`、上传路由策略、config JSON、加密 secret；kind 不可改 |
 | `drive_node_routes` | `DriveNodeRoute` | 网盘上传节点；唯一索引 `(drive_id,node_id)`；`priority`、`enabled`；优先级越小越先领取，主端也可作为路由节点 |
 | `sync_rules` | `Rule` | 有序同步规则；`position`、`enabled` 索引；`is_default` 标记兜底规则；`conditions_json` |
@@ -41,8 +41,11 @@
 | `ocr_providers` | `OCRProvider` | OCR 服务商；kind 为 `mineru`/`paddleocr`/`rapidocr`，外部服务加密令牌，模型字段（PaddleOCR 默认 `PP-OCRv6`，RapidOCR 字段默认 `PP-OCRv5`，但自建服务固定使用 RapidOCR 3.10 默认 PP-OCRv6 small），启停与优先级 |
 | `cluster_settings` | `ClusterSettings` | 单例 `id=default`；主端任务类型与四类并发、租约/心跳/领取/轮询参数和调度修订号 |
 | `nodes` | `Node` | 主端与从端运行状态；从端另存主端期望槽位、缓存上限、OCRProvider ID、配置修订和已应用修订，节点令牌只存哈希 |
-| `ai_settings` | `AISettings` | 单例 `id=1`；自动分析开关、当前 `ocr_provider_id`、页数/图片上限与自动入库阈值 |
-| `material_analyses` | `MaterialAnalysis` | 每资料一行（`material_id` 唯一）；status、provider/model、页数、置信度、建议 JSON、应用时间、Markdown 路径、脱敏错误 |
+| `ai_settings` | `AISettings` | 单例 `id=1`；当前 `ocr_provider_id`、页数/图片上限（编目始终由 AI 完成，没有开关） |
+| `file_cards` | `FileCard` | 每资料一行；AI 阅读记录：status、provider/model、校验后的 card JSON、校验问题 JSON、是否仅凭文件名、页数、脱敏错误 |
+| `pack_decisions` | `PackDecision` | 每套卷一行；最近一次 AI 编目：status、对应 revision、provider/model、校验后的决定 JSON、校验问题 JSON、决定时间、脱敏错误 |
+| `entities` | `Entity` | 名称词典条目；`kind`（organization/tag）索引；规范名称、地区、来源（ai/human）、是否锁定 |
+| `entity_aliases` | `EntityAlias` | 名称写法；主键 `(kind, norm)`（归一化后的写法）、`entity_id` 索引、原始写法；一种写法只属于一个条目 |
 | `search_settings` | `SearchSettings` | 单例 `id=1`；索引开关、页数/批次上限、指定 provider/model |
 | `material_texts` | `MaterialText` | 每资料一行；`source_hash`、`parse_key`、页数、逐页文本 JSON、完整 Markdown；供分析与索引复用 |
 | `question_blocks` | `QuestionBlock` | 题目；`material_id`、`page_no` 索引；`seq`、题号、保留公式的题干、普通文本归一化、`math_index_version`、置信度、model/prompt_version |
@@ -59,7 +62,10 @@ Blob ── Material（一份 SHA 对应一个文件）
 Pack ──< Material ──< MaterialSource
 Pack ──< PackSubject
 Pack ──< CollectionItem >── Collection
-Material ──< MaterialAnalysis
+Material ──< FileCard
+Pack ──< PackDecision
+Entity ──< EntityAlias
+Entity ──< Pack（organization_id；标签按名称写入 tags_json）
 Material ──< MaterialText
 Material ──< QuestionBlock ──< QuestionTerm
 Material ──< MaterialIndexState
@@ -74,22 +80,22 @@ Job ──< Upload / Replica / Material（按 kind 关联）
 - `Material` 属于唯一 `Pack`；套卷持有编目字段，文件继承套卷的学科/年级/届别等，只有 `part`、`answer_start_page` 和 `position` 是文件级字段。
 - `Replica` 与 `Material` 不直接关联，而是挂在 Blob 上；资料 `sync_status` 按 Blob 的副本事实刷新。`Replica.rule_id` 记录当前需要它的规则，规则外副本为空。
 - `CollectionItem` 是套卷与专题的多对多（带 position）；一个套卷可在多个专题，专题不嵌套。
-- `MaterialAnalysis`、`MaterialText`、`MaterialIndexState` 都是每文件最多一行；重跑覆盖自身。
-- Job 的关联是弱引用：ingest 带 `upload_id`，replicate 带 `replica_id`，analyze/index/group 带 `material_id`；没有数据库外键。
+- `FileCard`、`MaterialText`、`MaterialIndexState` 都是每文件最多一行，`PackDecision` 每套卷最多一行；重跑覆盖自身。
+- Job 的关联是弱引用：ingest 带 `upload_id`，replicate 带 `replica_id`，analyze/index 带 `material_id`，group 带 `batch_id`，decide 带 `pack_id`，entity 带 `entity_id`；没有数据库外键。
 
 ### 2.2 状态与派生字段
 
 - `Material.status` 只反映原件：本机 CAS 中存在为 `archived`，缺失为 `missing`。
 - `Material.sync_status` 反映网盘同步：未生成计划前为 `waiting_catalog`；之后忽略 skipped/orphaned 副本，没有其他副本为 `not_required`，必需目标全部 ready 为 `synced`，有副本 pending/uploading/moving 为 `syncing`，必需目标失败、必需目标分享失败或已写入副本路径偏离为 `attention`。`sync_planned_at` 记录最近一次生成计划的时间。
-- `Material.stage` 是人工整理阶段：processing（识别中）、review（待确认）、ready（已入库）、failed（识别失败）；`review_reasons_json` 记录 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual，`suggested_pack_id` 指向待确认的配套套卷。套卷 stage 取成员中最靠后的阶段。
+- `Material.stage` 是整理阶段：processing（AI 整理中，`ai_step` 为 read/group/decide）、waiting_ai（等待模型或 OCR 配置）、attention（需关注）、ready（已入库）；`attention_json` 记录 ai_failed、group_unverified、metadata_only 或关键校验代码。新文件 `pack_id` 为空，分组后才归入套卷。套卷 stage 取成员中最靠后的阶段。
 - `Material.part` 是文件在套卷中的部件：questions、answers、full、teacher、answer_sheet、listening、main、other；`answer_start_page` 记录同一文件内答案起始页。
-- `Material.title` 与 `file_name` 由「套卷标题 + part 中文标签」派生；套卷 `title_locked=true` 时固定不变，人工 PATCH 设置 `catalog_locked=true` 阻止自动编目覆盖。改名后重新计算副本 `desired_path`，`on_path_change=move` 的网盘随之移动。
+- `Material.title` 与 `file_name` 由「套卷标题 + part 中文标签」派生；套卷 `locked_json` 含 `title` 时标题固定不变。人工修改的编目字段加入 `locked_json`、人工修改的部件置 `part_locked`，AI 编目不会改动它们。改名后重新计算副本 `desired_path`，`on_path_change=move` 的网盘随之移动。
 - `Upload.status`：pending → processing → completed/failed；`UploadEntry.status`：pending → received（或 existing 秒传）→ 归档后写入 `results`。
-- `Job.status`：pending → running → succeeded/failed；failed 可重试回 pending（同 id）；`group` 无匹配时记为 succeeded 并在进度/日志说明原因，手动重新分析可重新入队；启动时把遗留 running 改回 pending。
+- `Job.status`：pending → running → succeeded/failed；暂时性失败按退避写入 `next_attempt_at` 并回到 pending（最多 6 次），AI 任务因缺少配置失败时回到 pending 且不计次数；租约多次过期的任务停止重试；failed 可手动重试回 pending（同 id，次数归零）；启动时把遗留 running 改回 pending。
 - `Replica.status`：pending → uploading（首次上传）或 moving（已写入、路径变化）→ ready/failed；skipped 表示网盘停用、超限或扩展名不允许；orphaned 表示不再被规则需要但远端文件仍在。分享状态独立为空/pending/ready/unsupported/failed。
 - `sync_rules` 只有一行 `is_default=true` 的兜底规则；空库启动时创建 ID 为 `default`、没有目标的「其他所有文件」。
 - `Pack.deleted_at` 非空即回收站；同一事务把成员 `materials.deleted_at` 置为非空。30 天后 `PurgeExpiredTrash` 彻底删除，`packs_purge` 只能处理回收站中的套卷。
-- `MaterialAnalysis.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
+- `FileCard.status`、`PackDecision.status`：pending/running/succeeded/failed；`MaterialIndexState.status`：pending/running/succeeded/failed/not_applicable。
 - `material_texts.parse_key` 是 `sha256("ocr-text-v2:" + kind + ":" + base_url + ":" + model)`；与 `source_hash`（资料 SHA-256）一起判断缓存是否可复用。切换服务商、地址或 OCR 模型都会使旧缓存失效；`POST /materials/{id}/index` 的 `force=true` 会清空 `source_hash` 强制重解析。
 - RapidOCR 的 DOCX 解析键额外包含 `docx-native-v2`，保存常见公式结构。已有题目的 `math_index_version=0` 表示尚未补建公式词项；后台按批次事务补建为 1，公式搜索会先完成剩余补建。该操作不修改题干、不调用外部服务；旧题干已丢失的结构需从原件重建索引才能恢复。
 
@@ -109,7 +115,6 @@ DATA_DIR/
   tmp/docx-*/                          预览转换期间的临时 Word 文件和独立配置
   tmp/fontconfig-cache/                 macOS 转换器使用的字体缓存
   renders/office-v1/<sha前两位>/<sha>.pdf  DOCX 生成的 PDF 预览缓存
-  analysis/<materialID>/document.md    识别用 Markdown（数据库存绝对路径）
   drives/<driveID>/...                 `local` 网盘的副本（按路径模板分层）
 ```
 
@@ -120,7 +125,6 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 - `tmp/material-pulls/<sha256>` 是按需拉取缓存，不是 CAS。写入前校验资料声明的大小和 SHA-256，过期后由读取或后续拉取机会性清理；保留期由 `PULL_CACHE_TTL` 控制，不参与资料归档或副本状态。
 - DOCX 预览是可重建的派生文件，原件最后一个资料引用删除时一并清理；转换异常退出时可能留下临时目录。预览和临时文件也可能包含资料正文，备份和权限应与原件一致。
 - 原始上传在 `tmp/` 完成后才发布到 CAS；失败不会标记 entry received，但极端情况下可能留下未被引用的 CAS 文件。
-- `analysis/<materialID>/document.md` 每次分析前会删除并重建；数据库中的 `markdown_path` 是绝对路径，移动数据目录后旧分析摘要可能读不到，直到重新识别。
 - `local` 网盘根目录固定为 `DATA_DIR/drives/<driveID>`，API 不能指定任意路径；系统不再默认创建本地网盘。
 - 数据库还保存凭据密文（云盘、AI、OCR）和哈希（密码、refresh、API Key secret）；`MASTER_KEY` 不存入数据库。
 
@@ -140,7 +144,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 2. 使用**原来的** `MASTER_KEY`（以及匹配的 `JWT_SECRET`）启动；恢复后管理员/用户/密钥不需要重建。
 3. 检查 `/healthz`、登录、资料详情、一次原件下载；如使用 AI，抽查解析文本、模型端点和凭据是否可用。
 4. 如使用云盘，先在隔离网络或临时端点验证副本状态，避免 worker 把未完成任务重试到生产云盘。
-5. 在独立环境定期演练恢复。恢复后旧 `material_analyses.markdown_path` 指向原绝对路径；换目录时摘要可能为空，重新识别即可重建。`material_texts` 仍可按文件 SHA + 解析器地址复用。
+5. 在独立环境定期演练恢复。`material_texts` 仍可按文件 SHA + 解析器地址复用。
 6. `AutoMigrate` 只增不删；恢复旧库后启动会补新表/列。不要依赖它清理旧功能留下的表/列/目录。
 
 ### 4.3 一致性注意
@@ -166,7 +170,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 | `blobs/` 孤儿 | 上传 CAS 发布后 DB 事务失败、ZIP 展开失败、已删除资料未清理干净 | 没有自动 GC；先做引用扫描，再在停机窗口清理，保留正在使用的 SHA |
 | `material_texts` | 每份资料的完整 Markdown + 逐页文本，最多数 MB/份 | 分析与索引共享；可设保留期或压缩/外置，删除前确认无进行中的任务 |
 | `question_terms` / `question_blocks` | 每道题每个词项/题目行 | 重建索引会替换旧行；删除资料会清理；可定期统计热点与碎片 |
-| `material_analyses` | 每次重跑覆盖同一行，但 Markdown 文件重建 | 可清理失败/过期分析记录和对应 `analysis/` 目录 |
+| `file_cards` / `pack_decisions` | 每次重跑覆盖同一行 | 无需清理；不保存模型原文和页面图 |
 | `jobs` / `audits` | 每次上传/复制/分析/索引/管理操作 | 可设保留期；清理前考虑失败任务重试和审计合规 |
 | `sessions` / `api_keys` | 过期会话、撤销密钥 | 可定期清理过期/撤销记录，但要保留必要的撤销证据 |
 

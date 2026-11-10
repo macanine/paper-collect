@@ -14,6 +14,7 @@ const ApiKeysPage = page(() => import('./features/apiKeys/ApiKeysPage'), 'ApiKey
 const AuditLogsPage = page(() => import('./features/audit/AuditLogsPage'), 'AuditLogsPage');
 const AiModelsPage = page(() => import('./features/ai/AiModelsPage'), 'AiModelsPage');
 const AiSettingsPage = page(() => import('./features/ai/AiSettingsPage'), 'AiSettingsPage');
+const EntitiesPage = page(() => import('./features/ai/EntitiesPage'), 'EntitiesPage');
 const SearchPage = page(() => import('./features/search/SearchPage'), 'SearchPage');
 const CollectionDetailPage = page(() => import('./features/collections/CollectionDetailPage'), 'CollectionDetailPage');
 const CollectionsListPage = page(() => import('./features/collections/CollectionsListPage'), 'CollectionsListPage');
@@ -58,6 +59,7 @@ const ROUTES: { path: string; scope: Scope; element: ReactNode }[] = [
   { path: 'admin/nodes/:nodeId', scope: 'nodes:manage', element: <NodeDetailPage /> },
   { path: 'admin/ai-models', scope: 'ai:read', element: <AiModelsPage /> },
   { path: 'admin/ai-settings', scope: 'ai:read', element: <AiSettingsPage /> },
+  { path: 'entities', scope: 'materials:read', element: <EntitiesPage /> },
   { path: 'admin/api-keys', scope: 'keys:manage', element: <ApiKeysPage /> },
   { path: 'admin/users', scope: 'users:manage', element: <UsersPage /> },
   { path: 'admin/audit', scope: 'audit:read', element: <AuditLogsPage /> },

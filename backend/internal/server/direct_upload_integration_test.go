@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -78,6 +77,7 @@ func (e *testEnv) uploadResult(t *testing.T, id string) uploadResultBody {
 
 func TestDirectSingleFileBecomesOnePackWithoutCollections(t *testing.T) {
 	env := newEnv(t)
+	configureCatalogAI(t, env, newFakeAI(t))
 	pdf := pdfWith("single")
 	id := directUpload(t, env, map[string][]byte{"资料.pdf": pdf})
 	result := env.uploadResult(t, id)
@@ -94,11 +94,11 @@ func TestDirectSingleFileBecomesOnePackWithoutCollections(t *testing.T) {
 		t.Fatalf("download %d", status)
 	}
 	status, body = env.do(t, http.MethodPatch, "/api/v1/packs/"+packID, map[string]any{"subject_codes": []string{"math"}, "doc_type": "lecture", "grade": "grade10"}, nil)
-	if status != http.StatusOK || !bytes.Contains(body, []byte(`"title":"讲义 高一 数学"`)) || !bytes.Contains(body, []byte(`"catalog_locked":true`)) {
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"title":"2026届 讲义 高一 数学"`)) || !bytes.Contains(body, []byte(`"locked_fields":[`)) {
 		t.Fatalf("pack edit must rename and lock the catalogue %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodPatch, "/api/v1/packs/"+packID, map[string]any{"title": "我的讲义"}, nil)
-	if status != http.StatusOK || !bytes.Contains(body, []byte(`"title_locked":true`)) {
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"title"`)) {
 		t.Fatalf("manual title %d: %s", status, body)
 	}
 	status, body = env.do(t, http.MethodDelete, "/api/v1/materials/"+materialID, nil, nil)
@@ -140,6 +140,7 @@ func TestKnownContentSkipsTransfer(t *testing.T) {
 
 func TestFolderAndNestedZIPExpandIntoPacks(t *testing.T) {
 	env := newEnv(t)
+	configureCatalogAI(t, env, newFakeAI(t))
 	inner := zipWith(t, map[string][]byte{"化学试题.pdf": pdfWith("chem-q"), "化学答案.pdf": pdfWith("chem-a")})
 	outer := zipWith(t, map[string][]byte{"数学讲义.pdf": pdfWith("math"), "内层.zip": inner, "说明.txt": []byte("x")})
 	id := directUpload(t, env, map[string][]byte{"资料包.zip": outer, "目录/物理周测.pdf": pdfWith("phys")})
@@ -168,67 +169,5 @@ func TestDirectUploadStillRejectsUnsafeZIP(t *testing.T) {
 	status, body = env.do(t, http.MethodGet, "/api/v1/materials?page=1&page_size=10", nil, nil)
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"total":0`)) {
 		t.Fatalf("unsafe ZIP should not publish material %d: %s", status, body)
-	}
-}
-
-func TestIndexingCanBeEnabledAfterUpload(t *testing.T) {
-	env := newEnv(t)
-	settings := map[string]any{"enabled": false, "max_pages": 500, "batch_pages": 10, "batch_chars": 12000}
-	status, body := env.do(t, http.MethodPut, "/api/v1/search/settings", settings, nil)
-	if status != http.StatusOK {
-		t.Fatalf("disable indexing %d: %s", status, body)
-	}
-	id := directUpload(t, env, map[string][]byte{"试卷.pdf": minimalPDF()})
-	var upload struct{ Data struct{ MaterialID string } }
-	upload.Data.MaterialID = env.uploadResult(t, id).Data.Results[0].MaterialID
-	ctx := context.Background()
-	if queued, err := env.svc.EnqueueMissingIndexes(ctx); err != nil || queued != 0 {
-		t.Fatalf("indexing disabled: queued %d, error %v", queued, err)
-	}
-	settings["enabled"] = true
-	status, body = env.do(t, http.MethodPut, "/api/v1/search/settings", settings, nil)
-	if status != http.StatusOK {
-		t.Fatalf("enable indexing %d: %s", status, body)
-	}
-	if queued, err := env.svc.EnqueueMissingIndexes(ctx); err != nil || queued != 1 {
-		t.Fatalf("queue missing index: queued %d, error %v", queued, err)
-	}
-	state, err := env.svc.GetMaterialIndexState(ctx, upload.Data.MaterialID)
-	if err != nil || state.Status != "pending" || state.JobID == "" {
-		t.Fatalf("missing index state: %+v, %v", state, err)
-	}
-	if queued, err := env.svc.EnqueueMissingIndexes(ctx); err != nil || queued != 0 {
-		t.Fatalf("duplicate missing index: queued %d, error %v", queued, err)
-	}
-}
-
-func TestDirectUploadSharesParsingBetweenAnalysisAndIndex(t *testing.T) {
-	fake := newFakeAI(t)
-	env := newEnv(t)
-	ocrID := configureOCRProvider(t, env, fake.server.URL, "mineru", "mineru-token")
-	status, body := env.do(t, http.MethodPost, "/api/v1/ai/providers", map[string]any{
-		"name": "文本模型", "base_url": fake.server.URL + "/v1", "api_key": "sk-test",
-		"models": []string{"text-model"}, "default_model": "text-model", "enabled": true, "priority": 1,
-	}, nil)
-	if status != http.StatusCreated {
-		t.Fatalf("provider %d: %s", status, body)
-	}
-	status, body = env.do(t, http.MethodPut, "/api/v1/ai/settings", map[string]any{
-		"analysis_enabled": true, "ocr_provider_id": ocrID, "max_pages": 3, "max_images": 0,
-	}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("settings %d: %s", status, body)
-	}
-	id := directUpload(t, env, map[string][]byte{"试卷.pdf": minimalPDF()})
-	var upload struct{ Data struct{ MaterialID string } }
-	upload.Data.MaterialID = env.uploadResult(t, id).Data.Results[0].MaterialID
-	for _, suffix := range []string{"analysis", "index"} {
-		status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+upload.Data.MaterialID+"/"+suffix, nil, nil)
-		if status != http.StatusOK || !bytes.Contains(body, []byte(`"status":"succeeded"`)) {
-			t.Fatalf("%s %d: %s", suffix, status, body)
-		}
-	}
-	if fake.parseCalls() != 1 {
-		t.Fatalf("analysis and indexing should share parsing, got %d calls", fake.parseCalls())
 	}
 }

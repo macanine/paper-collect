@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/ai"
+	"github.com/nic/paper-collect/backend/internal/catalogai"
 )
 
 func TestSampleAnalysisDocumentKeepsHeadAndAnswerTail(t *testing.T) {
@@ -22,14 +23,15 @@ func TestSampleAnalysisDocumentKeepsHeadAndAnswerTail(t *testing.T) {
 	}
 }
 
-func TestAnalysisMessagesRequireDocumentAndTreatMetadataAsAuxiliary(t *testing.T) {
-	messages := BuildAnalysisMessages("正文第一页\n正文最后一页答案", "文件名：高三数学试卷.pdf", nil)
+func TestCardMessagesRequireDocumentAndTreatMetadataAsAuxiliary(t *testing.T) {
+	in := CardMeta{FileName: "高三数学试卷.pdf", MediaType: "application/pdf"}.CardInput("正文第一页\n正文最后一页答案", 2, false)
+	messages := catalogai.CardMessages(in, nil)
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d, want 2", len(messages))
 	}
 	system, _ := messages[0].Content.(string)
 	user, _ := messages[1].Content.(string)
-	if !strings.Contains(system, "正文与它们冲突时以正文为准") || !strings.Contains(system, "末尾是否有集中答案区") {
+	if !strings.Contains(system, "以正文为准") || !strings.Contains(system, "末尾是否有集中答案区") {
 		t.Fatalf("prompt does not put document content first: %s", system)
 	}
 	if !strings.Contains(user, "正文第一页") || !strings.Contains(user, "高三数学试卷.pdf") {

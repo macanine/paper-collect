@@ -1,5 +1,5 @@
-// Package jobexec runs the database-free middle of replicate, analyze and index
-// jobs. The master prepares a self-contained Input, any node executes it through
+// Package jobexec runs the database-free middle of replicate, analyze (READ),
+// index, group, decide and entity jobs. The master prepares a self-contained Input, any node executes it through
 // an Env, and the master commits the Result in one transaction. The same code
 // runs locally on the master and remotely on worker nodes.
 package jobexec
@@ -20,11 +20,16 @@ const (
 	KindReplicate = "replicate"
 	KindAnalyze   = "analyze"
 	KindIndex     = "index"
+	// Local-only kinds: they need fresh library candidates, so the master
+	// prepares and runs them itself.
+	KindGroup  = "group"
+	KindDecide = "decide"
+	KindEntity = "entity"
 )
 
 // Protocol is the master/worker wire version. A worker with another version may
 // heartbeat, so it stays visible, but cannot claim jobs.
-const Protocol = 2
+const Protocol = 3
 
 // RemoteKinds lists the kinds that can leave the master.
 var RemoteKinds = []string{KindReplicate, KindAnalyze, KindIndex}
@@ -48,6 +53,9 @@ type Input struct {
 	Replicate *ReplicateInput `json:"replicate,omitempty"`
 	Analyze   *AnalyzeInput   `json:"analyze,omitempty"`
 	Index     *IndexInput     `json:"index,omitempty"`
+	Group     *GroupInput     `json:"-"`
+	Decide    *DecideInput    `json:"-"`
+	Entity    *EntityInput    `json:"-"`
 }
 
 // HasResult reports whether a result carries the output of the given kind.
@@ -59,6 +67,12 @@ func (r Result) HasResult(kind string) bool {
 		return r.Analyze != nil
 	case KindIndex:
 		return r.Index != nil
+	case KindGroup:
+		return r.Group != nil
+	case KindDecide:
+		return r.Decide != nil
+	case KindEntity:
+		return r.Entity != nil
 	}
 	return false
 }
@@ -69,6 +83,9 @@ type Result struct {
 	Replicate *ReplicateResult `json:"replicate,omitempty"`
 	Analyze   *AnalyzeResult   `json:"analyze,omitempty"`
 	Index     *IndexResult     `json:"index,omitempty"`
+	Group     *GroupResult     `json:"-"`
+	Decide    *DecideResult    `json:"-"`
+	Entity    *EntityResult    `json:"-"`
 }
 
 // Blob identifies original content by hash and size.
@@ -127,6 +144,24 @@ func Run(ctx context.Context, env Env, in Input) (Result, error) {
 		}
 		out, err := runIndex(ctx, env, *in.Index)
 		return Result{Index: out}, err
+	case KindGroup:
+		if in.Group == nil {
+			return Result{}, errors.New("分组任务缺少输入")
+		}
+		out, err := runGroup(ctx, env, *in.Group)
+		return Result{Group: out}, err
+	case KindDecide:
+		if in.Decide == nil {
+			return Result{}, errors.New("编目任务缺少输入")
+		}
+		out, err := runDecide(ctx, env, *in.Decide)
+		return Result{Decide: out}, err
+	case KindEntity:
+		if in.Entity == nil {
+			return Result{}, errors.New("名称检查任务缺少输入")
+		}
+		out, err := runEntity(ctx, env, *in.Entity)
+		return Result{Entity: out}, err
 	}
 	return Result{}, fmt.Errorf("未知任务类型 %q", in.Kind)
 }

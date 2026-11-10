@@ -90,9 +90,9 @@ const PART_COLORS: Record<Part, TagColor> = {
 
 const STAGE_COLORS: Record<Stage, TagColor> = {
   processing: 'processing',
-  review: 'warning',
+  waiting_ai: 'default',
+  attention: 'warning',
   ready: 'success',
-  failed: 'error',
 };
 
 export function MaterialStatusTag({ status }: { status: MaterialStatus }) {

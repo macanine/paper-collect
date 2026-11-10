@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analysisStatusCopy, confidencePercent, suggestionFieldCount } from './format';
+import { analysisStatusCopy, cardFieldCount, confidencePercent } from './format';
 
 describe('AI 分析展示辅助', () => {
   it('置信度限制在 0-100', () => {
@@ -14,8 +14,8 @@ describe('AI 分析展示辅助', () => {
     expect(analysisStatusCopy('running', '')).toBe('识别中');
   });
 
-  it('统计建议字段数量', () => {
-    expect(suggestionFieldCount({})).toBe(0);
-    expect(suggestionFieldCount({ exam_name: 't', subject_codes: ['math'], grade: 'grade12', part: 'questions', uncertain: ['grade'] })).toBe(4);
+  it('统计阅读记录字段数量，不计证据', () => {
+    expect(cardFieldCount({ role: 'other' })).toBe(1);
+    expect(cardFieldCount({ role: 'questions', title_text: 't', subjects: ['math'], grade: 'grade12', evidence: { grade: '高三' } })).toBe(4);
   });
 });

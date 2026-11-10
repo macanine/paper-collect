@@ -182,9 +182,9 @@ func TestRecoverExpiredLeasesResetsProjectionAndReleasesLock(t *testing.T) {
 	dir := t.TempDir()
 	svc, conn := newWorkerTestService(t, dir, "worker-1")
 	materialID := newID()
-	analysis := model.MaterialAnalysis{
-		ID: newID(), MaterialID: materialID, Status: model.AnalysisRunning,
-		ImagesJSON: "[]", SuggestionsJSON: "{}", JobID: newID(),
+	analysis := model.FileCard{
+		MaterialID: materialID, Status: model.AnalysisRunning,
+		CardJSON: "{}", ProblemsJSON: "[]", JobID: newID(),
 	}
 	job := model.Job{
 		ID: analysis.JobID, Kind: model.JobAnalyze, Status: model.JobRunning,
@@ -218,8 +218,8 @@ func TestRecoverExpiredLeasesResetsProjectionAndReleasesLock(t *testing.T) {
 	if gotJob.Status != model.JobPending || gotJob.LeaseOwner != "" || gotJob.LeaseUntil != nil {
 		t.Fatalf("job was not reset: %+v", gotJob)
 	}
-	var gotAnalysis model.MaterialAnalysis
-	if err := conn.Where("id = ?", analysis.ID).First(&gotAnalysis).Error; err != nil {
+	var gotAnalysis model.FileCard
+	if err := conn.Where("material_id = ?", analysis.MaterialID).First(&gotAnalysis).Error; err != nil {
 		t.Fatal(err)
 	}
 	if gotAnalysis.Status != model.AnalysisPending {

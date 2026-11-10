@@ -6,7 +6,7 @@ import { describeError, errorMessage } from '../../shared/api/errors';
 import type { Part, Replica, Drive } from '../../shared/api/types';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { saveBlob } from '../../shared/lib/download';
-import { MATERIAL_STATUS_LABELS, REVIEW_REASON_LABELS, SYNC_STATUS_LABELS } from '../../shared/lib/labels';
+import { AI_STEP_LABELS, MATERIAL_STATUS_LABELS, SYNC_STATUS_LABELS, attentionReasonLabel } from '../../shared/lib/labels';
 import { PART_OPTIONS } from '../../shared/lib/options';
 import { CopyButton } from '../../shared/ui/CopyButton';
 import { BackLink } from '../../shared/ui/BackLink';
@@ -146,9 +146,11 @@ export function MaterialDetailPage() {
           <span className="flex flex-wrap items-center gap-2">
             <PartTag part={material.part} />
             <StageTag stage={material.stage} />
-            {material.review_reasons.map((r) => (
+            {material.stage === 'processing' && material.ai_step ? <Tag>{AI_STEP_LABELS[material.ai_step]}</Tag> : null}
+            {material.part_locked ? <Tag>部件由人工设定</Tag> : null}
+            {material.attention_reasons.map((r) => (
               <Tag key={r} color="warning">
-                {REVIEW_REASON_LABELS[r]}
+                {attentionReasonLabel(r)}
               </Tag>
             ))}
           </span>
