@@ -55,6 +55,7 @@ const NAVIGATION: NavigationSection[] = [
     label: '资料',
     items: [
       { key: '/', path: '/', label: '工作台', icon: <DashboardOutlined /> },
+      { key: '/imports', path: '/imports', label: '导入中心', icon: <CloudUploadOutlined />, scope: 'uploads:write' },
       { key: '/inbox', path: '/inbox', label: '待确认', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
       { key: '/library', path: '/library', label: '资料库', icon: <FolderOpenOutlined />, scope: 'materials:read' },
       { key: '/search', path: '/search', label: '搜题', icon: <SearchOutlined />, scope: 'materials:read' },

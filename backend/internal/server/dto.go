@@ -98,6 +98,18 @@ type materialDetailDTO struct {
 	Replicas []replicaDTO        `json:"replicas"`
 }
 
+type reviewPackItemDTO struct {
+	ID            string        `json:"id"`
+	Stage         string        `json:"stage"`
+	ReviewReasons []string      `json:"review_reasons"`
+	SuggestedPack *packBriefDTO `json:"suggested_pack"`
+}
+
+type reviewPackDTO struct {
+	Pack  packDTO             `json:"pack"`
+	Items []reviewPackItemDTO `json:"items"`
+}
+
 type packBriefDTO struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -386,6 +398,22 @@ func toMaterialDetail(v service.MaterialView) materialDetailDTO {
 		sources = append(sources, materialSourceDTO{ID: src.ID, UploadID: src.UploadID, Path: src.Path, Duplicate: src.Duplicate, CreatedAt: src.CreatedAt})
 	}
 	return materialDetailDTO{materialDTO: toMaterial(v), Sources: sources, Replicas: replicas}
+}
+
+func toReviewPack(v service.ReviewPackView) reviewPackDTO {
+	items := make([]reviewPackItemDTO, 0, len(v.Items))
+	for _, item := range v.Items {
+		reasons := item.Reasons
+		if reasons == nil {
+			reasons = []string{}
+		}
+		var suggested *packBriefDTO
+		if item.Suggested != nil {
+			suggested = &packBriefDTO{ID: item.Suggested.ID, Title: item.Suggested.Title}
+		}
+		items = append(items, reviewPackItemDTO{ID: item.ID, Stage: item.Stage, ReviewReasons: reasons, SuggestedPack: suggested})
+	}
+	return reviewPackDTO{Pack: toPack(v.Pack), Items: items}
 }
 
 func toPack(v service.PackView) packDTO {

@@ -2,31 +2,17 @@ import { apiDownload, apiRequest } from '../../shared/api/client';
 import { segment } from '../../shared/api/paths';
 import type {
   LibraryStats,
-  Material,
   MaterialDetail,
   MaterialPullCache,
-  MaterialStatus,
   MaterialUpdate,
   Page,
-  Part,
   ReviewReason,
+  ReviewPack,
   Stage,
 } from '../../shared/api/types';
 
-export type MaterialListParams = {
-  page: number;
-  page_size: number;
-  q?: string;
-  stage?: Stage | '';
-  part?: Part | '';
-  status?: MaterialStatus | '';
-  reason?: ReviewReason | '';
-  pack_id?: string;
-  sha256?: string;
-};
-
-export function listMaterials(params: MaterialListParams, signal?: AbortSignal): Promise<Page<Material>> {
-  return apiRequest<Page<Material>>('/materials', { query: params, signal });
+export function listReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: ReviewReason }, signal?: AbortSignal): Promise<Page<ReviewPack>> {
+  return apiRequest<Page<ReviewPack>>('/materials/review-packs', { query: params, signal });
 }
 
 export function getLibraryStats(signal?: AbortSignal): Promise<LibraryStats> {

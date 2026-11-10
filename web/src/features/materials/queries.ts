@@ -1,10 +1,9 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { MaterialUpdate } from '../../shared/api/types';
-import { acceptMaterials, getMaterial, listMaterials, updateMaterial, type MaterialListParams } from './api';
+import type { MaterialUpdate, ReviewReason, Stage } from '../../shared/api/types';
+import { acceptMaterials, getMaterial, listReviewPacks, updateMaterial } from './api';
 
 export const materialKeys = {
   all: ['materials'] as const,
-  list: (params: MaterialListParams) => ['materials', 'list', params] as const,
   detail: (id: string) => ['materials', 'detail', id] as const,
 };
 
@@ -15,11 +14,11 @@ export function invalidateLibrary(queryClient: QueryClient) {
   }
 }
 
-export function useMaterialsList(params: MaterialListParams, options: { poll?: boolean | number } = {}) {
+export function useReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: ReviewReason }, options: { poll?: boolean | number } = {}) {
   const refetchInterval = options.poll === true ? 5000 : typeof options.poll === 'number' ? options.poll : false;
   return useQuery({
-    queryKey: materialKeys.list(params),
-    queryFn: ({ signal }) => listMaterials(params, signal),
+    queryKey: ['materials', 'review-packs', params],
+    queryFn: ({ signal }) => listReviewPacks(params, signal),
     placeholderData: keepPreviousData,
     refetchInterval,
     refetchIntervalInBackground: false,

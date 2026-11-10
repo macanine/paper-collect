@@ -21,6 +21,8 @@
 
 `Material`（文件）：`id,pack_id,position:integer,part:Part,answer_start_page:integer,title(1..255),file_name,original_name,stage:Stage,review_reasons:string[],suggested_pack?:{id,title},status:MaterialStatus,sync_status:SyncStatus,sync_planned_at:date-time|null,media_type,size_bytes,sha256(64 位小写十六进制，全局唯一),created_at,updated_at,pack?:Pack`。**一个 SHA-256 只对应一个 Material**：同一内容再次上传只追加 `MaterialSource`，不重复解析、计费或新建套卷。**Part 有且只有 8 类**：questions=试题，只有题目；answers=答案，只有答案或解析；full=题目+答案在同一文件（后部集中答案）；teacher=教师版，每题后紧跟答案；answer_sheet=空白答题卡；listening=听力音频或原文；main=单文档资料正文（讲义、课件、指南）；other=无法判断。详情额外含 `sources:MaterialSource[]`、`replicas:Replica[]` 和 `pack:Pack`。**MaterialStatus** 只回答原件是否安全：archived=原件在本机 CAS；missing=本机原件缺失，只能从网盘副本读取。**SyncStatus** 单独回答网盘同步进度：waiting_catalog=等待编目确定（规则依赖编目，尚未生成计划）；not_required=命中的规则不上传任何网盘；syncing=有副本在等待、上传或移动；synced=全部必需目标已就绪；attention=必需目标失败、必需目标的分享失败，或副本路径已偏离（网盘设置为保持原位）。`sync_planned_at` 为最近一次生成同步计划的时间。`review_reasons` 取值 low_confidence、pack_suggestion、duplicate_suspect、analysis_failed、manual。`suggested_pack` 为待确认的配套建议。
 
+`ReviewPack`：`pack:Pack,items:ReviewPackItem[]`；`ReviewPackItem` 为 `id,stage,review_reasons[],suggested_pack?:{id,title}`，只包含当前 stage/reason 命中的文件，`pack.members` 仍包含整套文件。
+
 `MaterialSource`：`id,material_id,upload_id,user_id,path,duplicate:boolean,created_at`；记录每一次到达。`duplicate=true` 表示这次上传的内容此前已经归档。
 
 `Collection`（专题）：`id,title(1..255),description(<=4000),pack_count:integer,created_at,updated_at`；详情额外含 `packs:Pack[]`，按专题内 position 排序。专题只收纳套卷，不含文件，也没有父子层级；同专题同套卷唯一，最多 5000 个套卷。
@@ -116,6 +118,10 @@ JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。tr
 ### GET /materials（materials:read）
 
 查询：page、page_size、`q`（标题/原始文件名，<=200）、`stage`（Stage）、`part`（Part）、`status`（MaterialStatus）、`sync_status`（SyncStatus）、`reason`（review_reasons 之一）、`pack_id`、`sha256`（64 位十六进制，精确查询相同内容）。200 Page<Material>；`stage=review` 即待确认收件箱，按 created_at 升序，其余按时间倒序。
+
+### GET /materials/review-packs（materials:read）
+
+按套卷分页读取待处理文件，查询 `page`、`page_size`、`stage`（默认 `review`）和 `reason`。200 Page<ReviewPack>；每个套卷只返回一次，`pack` 包含全部成员，`items` 只包含命中当前 stage/reason 的文件及其 review 原因、配套建议。适合管理台按套卷核对，避免同一套卷跨页重复。
 
 ### GET /materials/stats（materials:read）
 

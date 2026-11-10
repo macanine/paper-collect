@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Checkbox, Collapse, Empty, Form, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd';
 import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { Material, Pack, PackMember, Part, Stage } from '../../shared/api/types';
+import type { PackMember, Part, ReviewPack, ReviewPackItem, ReviewReason, Stage } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { REVIEW_REASON_LABELS } from '../../shared/lib/labels';
@@ -15,7 +15,7 @@ import { enqueueMaterialAnalysis } from '../ai/api';
 import { useMaterialAnalysis } from '../ai/queries';
 import { updateMaterial } from '../materials/api';
 import { FilePreviewModal, canPreview } from '../materials/FilePreview';
-import { invalidateLibrary, useAcceptMaterials, useMaterialsList } from '../materials/queries';
+import { invalidateLibrary, useAcceptMaterials, useReviewPacks } from '../materials/queries';
 import { updatePack } from '../packs/api';
 import { Completeness } from '../packs/PackBadges';
 import { PackCatalogFields, formToUpdate, packToForm, type CatalogField, type CatalogFormValues } from '../packs/PackCatalogFields';
@@ -27,33 +27,9 @@ const CATALOG_FIELDS = [...PRIMARY_CATALOG_FIELDS, ...ADVANCED_CATALOG_FIELDS];
 
 type FormValues = CatalogFormValues;
 
-interface PackReviewGroup {
-  pack: Pack;
-  items: Material[];
-  members: PackMember[];
-  suggestedItems: Material[];
-}
-
 interface MemberEdit {
   part: Part;
   answer_start_page: number;
-}
-
-function groupMaterials(items: Material[]): PackReviewGroup[] {
-  const groups = new Map<string, PackReviewGroup>();
-  for (const item of items) {
-    if (!item.pack) continue;
-    const current = groups.get(item.pack.id) ?? {
-      pack: item.pack,
-      items: [],
-      members: item.pack.members,
-      suggestedItems: [],
-    };
-    current.items.push(item);
-    if (item.suggested_pack) current.suggestedItems.push(item);
-    groups.set(item.pack.id, current);
-  }
-  return [...groups.values()];
 }
 
 function initialMemberEdits(members: PackMember[]): Record<string, MemberEdit> {
@@ -62,8 +38,12 @@ function initialMemberEdits(members: PackMember[]): Record<string, MemberEdit> {
   );
 }
 
+function suggestedItems(group: ReviewPack): ReviewPackItem[] {
+  return group.items.filter((item) => item.suggested_pack);
+}
+
 /** 右侧：当前套卷的一次性核对表单。文件部件可以逐个调整，编目信息只填一次。 */
-function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; stage: Stage; onDone: () => void }) {
+function ReviewPackPanel({ group, stage, onDone }: { group: ReviewPack; stage: Stage; onDone: () => void }) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const facets = usePackFacets();
@@ -71,16 +51,16 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
   const accept = useAcceptMaterials();
   const [form] = Form.useForm<FormValues>();
   const [saving, setSaving] = useState(false);
-  const [preview, setPreview] = useState<Material | null>(null);
-  const [memberEdits, setMemberEdits] = useState<Record<string, MemberEdit>>(() => initialMemberEdits(group.members));
+  const [preview, setPreview] = useState<PackMember | null>(null);
+  const [memberEdits, setMemberEdits] = useState<Record<string, MemberEdit>>(() => initialMemberEdits(group.pack.members));
   const editable = stage === 'review';
-  const reviewIds = group.items.filter((item) => item.stage === 'review').map((item) => item.id);
+  const reviewIds = group.pack.members.filter((member) => member.stage === 'review').map((member) => member.id);
 
   useEffect(() => {
     form.resetFields();
     form.setFieldsValue(packToForm(group.pack));
-    setMemberEdits(initialMemberEdits(group.members));
-  }, [form, group.pack, group.members]);
+    setMemberEdits(initialMemberEdits(group.pack.members));
+  }, [form, group.pack]);
 
   const uncertain = analysis.data?.suggestions.uncertain ?? [];
 
@@ -99,7 +79,7 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
       const touched = CATALOG_FIELDS.filter((field) => form.isFieldTouched(field));
       if (touched.length > 0) await updatePack(group.pack.id, formToUpdate(values, touched));
 
-      const changes = group.members.filter((member) => {
+      const changes = group.pack.members.filter((member) => {
         const next = memberEdits[member.id];
         return next && (next.part !== member.part || next.answer_start_page !== member.answer_start_page);
       });
@@ -118,18 +98,19 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
     } finally {
       setSaving(false);
     }
-  }, [accept, editable, form, group.members, group.pack.id, group.pack.title, memberEdits, message, onDone, queryClient, reviewIds, saving]);
+  }, [accept, editable, form, group.pack, memberEdits, message, onDone, queryClient, reviewIds, saving]);
 
   const acceptSuggestion = useCallback(async () => {
-    if (group.suggestedItems.length === 0) return;
+    const suggestions = suggestedItems(group);
+    if (suggestions.length === 0) return;
     try {
-      await accept.mutateAsync({ ids: group.suggestedItems.map((item) => item.id), acceptSuggestion: true });
+      await accept.mutateAsync({ ids: suggestions.map((item) => item.id), acceptSuggestion: true });
       message.success('已接受配套建议');
       onDone();
     } catch (error) {
       message.error(errorMessage(error));
     }
-  }, [accept, group.suggestedItems, message, onDone]);
+  }, [accept, group, message, onDone]);
 
   const retry = async () => {
     try {
@@ -141,7 +122,6 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
     }
   };
 
-  const itemByID = new Map(group.items.map((item) => [item.id, item]));
   return (
     <Card
       className="inbox-panel"
@@ -149,7 +129,7 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
         <div className="flex flex-col">
           <Typography.Text strong ellipsis>{group.pack.title || '待命名套卷'}</Typography.Text>
           <Typography.Text type="secondary" className="text-xs">
-            {group.members.length} 个文件 · {group.pack.is_exam ? '试卷资料' : '普通资料'}
+            {group.pack.members.length} 个文件 · {group.pack.is_exam ? '试卷资料' : '普通资料'}
           </Typography.Text>
         </div>
       }
@@ -179,12 +159,12 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
           />
         ) : null}
 
-        {group.suggestedItems.length > 0 ? (
+        {suggestedItems(group).length > 0 ? (
           <Alert
             type="info"
             showIcon
             title="发现可能的配套资料"
-            description={group.suggestedItems.map((item) => item.suggested_pack?.title).filter(Boolean).join('、')}
+            description={suggestedItems(group).map((item) => item.suggested_pack?.title).filter(Boolean).join('、')}
             action={editable ? <Button size="small" type="primary" onClick={() => void acceptSuggestion()}>接受建议</Button> : undefined}
           />
         ) : null}
@@ -201,16 +181,15 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
           </Form>
         ) : null}
 
-        <Card size="small" title={`文件（${group.members.length}）`} styles={{ body: { padding: 0 } }}>
+        <Card size="small" title={`文件（${group.pack.members.length}）`} styles={{ body: { padding: 0 } }}>
           <ul className="inbox-pack-members">
-            {group.members.map((member) => {
-              const item = itemByID.get(member.id);
+            {group.pack.members.map((member) => {
               const edit = memberEdits[member.id] ?? { part: member.part, answer_start_page: member.answer_start_page };
               return (
                 <li key={member.id} className="inbox-pack-member">
                   <div className="inbox-pack-member__main">
                     <div className="inbox-pack-member__title">
-                      {canPreview(member.media_type) && item ? <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setPreview(item)} aria-label={`预览 ${member.file_name}`} /> : null}
+                      {canPreview(member.media_type) ? <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setPreview(member)} aria-label={`预览 ${member.file_name}`} /> : null}
                       <Link to={`/materials/${member.id}`}>{member.file_name}</Link>
                     </div>
                     <span className="inbox-pack-member__meta">
@@ -237,11 +216,11 @@ function ReviewPackPanel({ group, stage, onDone }: { group: PackReviewGroup; sta
             <Button type="primary" loading={saving || accept.isPending} onClick={() => void confirm()}>
               确认这套 {reviewIds.length} 个文件
             </Button>
-            {group.suggestedItems.length > 0 ? <Button loading={accept.isPending} onClick={() => void acceptSuggestion()}>接受配套建议</Button> : null}
+            {suggestedItems(group).length > 0 ? <Button loading={accept.isPending} onClick={() => void acceptSuggestion()}>接受配套建议</Button> : null}
           </Space>
         ) : null}
       </div>
-      {preview ? <FilePreviewModal target={{ id: preview.id, title: preview.original_name, fileName: preview.file_name, mediaType: preview.media_type }} onClose={() => setPreview(null)} /> : null}
+      {preview ? <FilePreviewModal target={{ id: preview.id, title: preview.title, fileName: preview.file_name, mediaType: preview.media_type }} onClose={() => setPreview(null)} /> : null}
     </Card>
   );
 }
@@ -258,12 +237,12 @@ export function InboxPage() {
   const stage = (TABS.find((tab) => tab.value === params.get('stage'))?.value ?? 'review') as Stage;
   const reason = params.get('reason') ?? '';
   const [page, setPage] = useState(1);
-  const query = useMaterialsList(
-    { page, page_size: 100, stage, reason: (reason as Material['review_reasons'][number]) || undefined },
+  const query = useReviewPacks(
+    { page, page_size: 100, stage, reason: (reason as ReviewReason) || undefined },
     { poll: stage === 'review' ? false : 8000 },
   );
   const accept = useAcceptMaterials();
-  const groups = useMemo(() => groupMaterials(query.data?.items ?? []), [query.data?.items]);
+  const groups = query.data?.items ?? [];
   const [activeId, setActiveId] = useState<string>();
   const [checked, setChecked] = useState<string[]>([]);
   const active = groups.find((group) => group.pack.id === activeId) ?? groups[0];
@@ -298,7 +277,10 @@ export function InboxPage() {
   }, [active?.pack.id, groups]);
 
   const bulkAccept = async (acceptSuggestion: boolean) => {
-    const ids = groups.filter((group) => checked.includes(group.pack.id)).flatMap((group) => (acceptSuggestion ? group.suggestedItems : group.items).map((item) => item.id));
+    const ids = groups.filter((group) => checked.includes(group.pack.id)).flatMap((group) => {
+      if (acceptSuggestion) return suggestedItems(group).map((item) => item.id);
+      return group.pack.members.filter((member) => member.stage === 'review').map((member) => member.id);
+    });
     if (ids.length === 0) return;
     try {
       const result = await accept.mutateAsync({ ids, acceptSuggestion });
@@ -316,7 +298,7 @@ export function InboxPage() {
       <div className="flex flex-wrap items-center gap-3">
         <Segmented value={stage} onChange={(value) => setParams({ stage: String(value) })} options={TABS} />
         {stage === 'review' ? <Select allowClear placeholder="按原因筛选" value={reason || undefined} options={reasonOptions} onChange={(value) => setParams(value ? { stage, reason: value } : { stage })} style={{ width: 160 }} /> : null}
-        <Typography.Text type="secondary">共 {query.data?.total ?? 0} 个文件 · {groups.length} 套</Typography.Text>
+        <Typography.Text type="secondary">共 {query.data?.total ?? 0} 套</Typography.Text>
       </div>
 
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : null}
@@ -339,7 +321,7 @@ export function InboxPage() {
                 {checked.length > 0 ? (
                   <Space size={4}>
                     <Button size="small" onClick={() => void bulkAccept(false)} loading={accept.isPending}>确认 {checked.length} 套</Button>
-                    {groups.some((group) => checked.includes(group.pack.id) && group.suggestedItems.length > 0) ? <Button size="small" onClick={() => void bulkAccept(true)} loading={accept.isPending}>接受配套</Button> : null}
+                    {groups.some((group) => checked.includes(group.pack.id) && suggestedItems(group).length > 0) ? <Button size="small" onClick={() => void bulkAccept(true)} loading={accept.isPending}>接受配套</Button> : null}
                   </Space>
                 ) : null}
               </div>
@@ -364,10 +346,10 @@ export function InboxPage() {
                   <div className="inbox-item__body">
                     <span className="inbox-item__title">{group.pack.title || '待命名套卷'}</span>
                     <span className="inbox-item__meta">
-                      <span>{group.members.length} 个文件</span>
+                      <span>{group.pack.members.length} 个文件</span>
                       {group.items.flatMap((item) => item.review_reasons).filter((reasonValue, index, all) => all.indexOf(reasonValue) === index).slice(0, 2).map((reasonValue) => <Tag key={reasonValue} color="warning">{REVIEW_REASON_LABELS[reasonValue]}</Tag>)}
-                      {group.suggestedItems.length > 0 ? <Tag color="blue">有配套建议</Tag> : null}
-                      <span>{formatDateTime(group.items[0]?.created_at ?? group.pack.created_at)}</span>
+                      {suggestedItems(group).length > 0 ? <Tag color="blue">有配套建议</Tag> : null}
+                      <span>{formatDateTime(group.pack.created_at)}</span>
                     </span>
                   </div>
                 </li>

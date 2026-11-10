@@ -1,10 +1,10 @@
-import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
+import { Component, lazy, Suspense, type ComponentType, type ErrorInfo, type ReactNode } from 'react';
 import { Route, Routes } from 'react-router';
 import { useAuth } from './features/auth/AuthContext';
 import { LoginPage } from './features/auth/LoginPage';
 import { hasScope } from './features/auth/permissions';
 import type { Scope } from './shared/api/types';
-import { ForbiddenState, FullPageLoading, NotFoundPage } from './shared/ui/States';
+import { ErrorState, ForbiddenState, FullPageLoading, NotFoundPage } from './shared/ui/States';
 
 function page<K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) {
   return lazy(() => load().then((module) => ({ default: module[name] })));
@@ -65,21 +65,50 @@ const ROUTES: { path: string; scope: Scope; element: ReactNode }[] = [
 
 export function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route
-        element={
-          <Suspense fallback={<FullPageLoading />}>
-            <AuthenticatedLayout />
-          </Suspense>
-        }
-      >
-        <Route index element={<DashboardPage />} />
-        {ROUTES.map((route) => (
-          <Route key={route.path} path={route.path} element={<ScopeGuard scope={route.scope}>{route.element}</ScopeGuard>} />
-        ))}
-        <Route path="*" element={<NotFoundPage />} />
-      </Route>
-    </Routes>
+    <AppErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          element={
+            <Suspense fallback={<FullPageLoading />}>
+              <AuthenticatedLayout />
+            </Suspense>
+          }
+        >
+          <Route index element={<DashboardPage />} />
+          {ROUTES.map((route) => (
+            <Route key={route.path} path={route.path} element={<ScopeGuard scope={route.scope}>{route.element}</ScopeGuard>} />
+          ))}
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
+      </Routes>
+    </AppErrorBoundary>
   );
+}
+
+interface AppErrorBoundaryState {
+  error: Error | null;
+}
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBoundaryState> {
+  override state: AppErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
+    return { error };
+  }
+
+  override componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('页面渲染失败', error, info.componentStack);
+  }
+
+  override render() {
+    if (this.state.error) {
+      return (
+        <div className="app-loading-screen">
+          <ErrorState error={this.state.error} title="页面加载失败" onRetry={() => window.location.reload()} />
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }

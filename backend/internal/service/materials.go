@@ -34,6 +34,24 @@ type MaterialView struct {
 	Suggested *model.Pack
 }
 
+// ReviewPackItem is the small per-file portion needed by the suite review UI.
+// The full file summary lives in ReviewPackView.Pack.Members so one pack is
+// serialized once instead of once per member.
+type ReviewPackItem struct {
+	ID        string
+	Stage     string
+	Reasons   []string
+	Suggested *model.Pack
+}
+
+// ReviewPackView is one paginated suite in the review inbox. Items contains
+// the files matching the requested stage/reason filter; Pack.Members contains
+// every file so confirming the suite can finish all review members at once.
+type ReviewPackView struct {
+	Pack  PackView
+	Items []ReviewPackItem
+}
+
 // MaterialPatch is a partial file update. Nil means "leave unchanged". PackID
 // moves the file into another pack; NewPack splits it into a pack of its own.
 type MaterialPatch struct {
@@ -97,6 +115,81 @@ func (s *Service) ListMaterials(ctx context.Context, f MaterialFilter, pg PageQu
 	items, err := s.materialViews(db, rows)
 	if err != nil {
 		return Page[MaterialView]{}, err
+	}
+	return newPage(items, total, pg), nil
+}
+
+// ListReviewPacks returns the review inbox grouped and paginated by suite.
+// This keeps large suites together and avoids serializing the same suite once
+// for every matching file.
+func (s *Service) ListReviewPacks(ctx context.Context, stage, reason string, pg PageQuery) (Page[ReviewPackView], error) {
+	db := s.db.WithContext(ctx)
+	apply := func(q *gorm.DB) *gorm.DB {
+		q = q.Model(&model.Material{})
+		if stage != "" {
+			q = q.Where("stage = ?", stage)
+		}
+		if reason != "" {
+			q = q.Where("review_reasons_json LIKE ? ESCAPE '!'", "%"+likeEscape(`"`+reason+`"`)+"%")
+		}
+		return q
+	}
+	var total int64
+	if err := apply(db).Distinct("pack_id").Count(&total).Error; err != nil {
+		return Page[ReviewPackView]{}, wrap("count review packs", err)
+	}
+	type packRow struct {
+		PackID string
+	}
+	var rows []packRow
+	if err := apply(db).Select("pack_id").
+		Group("pack_id").Order("MIN(created_at) ASC").Order("pack_id ASC").
+		Limit(pg.PageSize).Offset(pg.offset()).Find(&rows).Error; err != nil {
+		return Page[ReviewPackView]{}, wrap("list review packs", err)
+	}
+	if len(rows) == 0 {
+		return newPage([]ReviewPackView{}, total, pg), nil
+	}
+	packIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		packIDs = append(packIDs, row.PackID)
+	}
+	packViews, err := s.packViewsByID(db, packIDs, false)
+	if err != nil {
+		return Page[ReviewPackView]{}, err
+	}
+	var materials []model.Material
+	if err := apply(db).Where("pack_id IN ?", packIDs).Order("created_at ASC").Order("id ASC").Find(&materials).Error; err != nil {
+		return Page[ReviewPackView]{}, wrap("load review pack items", err)
+	}
+	suggestedIDs := make([]string, 0)
+	seenSuggested := map[string]bool{}
+	for _, material := range materials {
+		if material.SuggestedPackID != "" && !seenSuggested[material.SuggestedPackID] {
+			seenSuggested[material.SuggestedPackID] = true
+			suggestedIDs = append(suggestedIDs, material.SuggestedPackID)
+		}
+	}
+	suggestedViews, err := s.packViewsByID(db, suggestedIDs, false)
+	if err != nil {
+		return Page[ReviewPackView]{}, err
+	}
+	itemsByPack := make(map[string][]ReviewPackItem, len(packIDs))
+	for _, material := range materials {
+		var suggested *model.Pack
+		if view, ok := suggestedViews[material.SuggestedPackID]; ok && material.SuggestedPackID != "" {
+			copy := view.Pack
+			suggested = &copy
+		}
+		itemsByPack[material.PackID] = append(itemsByPack[material.PackID], ReviewPackItem{
+			ID: material.ID, Stage: material.Stage, Reasons: model.DecodeStrings(material.ReviewReasonsJSON), Suggested: suggested,
+		})
+	}
+	items := make([]ReviewPackView, 0, len(packIDs))
+	for _, packID := range packIDs {
+		if pack, ok := packViews[packID]; ok {
+			items = append(items, ReviewPackView{Pack: pack, Items: itemsByPack[packID]})
+		}
 	}
 	return newPage(items, total, pg), nil
 }

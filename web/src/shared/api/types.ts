@@ -264,6 +264,18 @@ export interface Material {
   pack?: Pack;
 }
 
+export interface ReviewPackItem {
+  id: string;
+  stage: Stage;
+  review_reasons: ReviewReason[];
+  suggested_pack: PackBrief | null;
+}
+
+export interface ReviewPack {
+  pack: Pack;
+  items: ReviewPackItem[];
+}
+
 export interface MaterialSource {
   id: string;
   upload_id: string;

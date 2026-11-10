@@ -121,6 +121,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `packs_purge` | `POST /api/v1/packs/purge` | `materials:write` |
 | `packs_download` | `GET /api/v1/packs/:id/download` | `materials:read` |
 | `materials_search` | `GET /api/v1/materials` | `materials:read` |
+| `materials_review_packs` | `GET /api/v1/materials/review-packs` | `materials:read` |
 | `materials_stats` | `GET /api/v1/materials/stats` | `materials:read` |
 | `materials_accept` | `POST /api/v1/materials/accept` | `materials:write` |
 | `materials_get` | `GET /api/v1/materials/:id` | `materials:read` |

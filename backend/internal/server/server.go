@@ -106,6 +106,7 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.GET("/packs/:id/download", s.requireScope(model.ScopeMaterialsRead), s.handleDownloadPack)
 
 	authGroup.GET("/materials", s.requireScope(model.ScopeMaterialsRead), s.handleListMaterials)
+	authGroup.GET("/materials/review-packs", s.requireScope(model.ScopeMaterialsRead), s.handleListReviewPacks)
 	authGroup.GET("/materials/stats", s.requireScope(model.ScopeMaterialsRead), s.handleLibraryStats)
 	authGroup.POST("/materials/accept", s.requireScope(model.ScopeMaterialsWrite), s.handleAcceptMaterials)
 	authGroup.GET("/materials/:id", s.requireScope(model.ScopeMaterialsRead), s.handleGetMaterial)

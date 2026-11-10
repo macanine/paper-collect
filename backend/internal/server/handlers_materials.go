@@ -82,6 +82,33 @@ func (s *Server) handleListMaterials(c *gin.Context) {
 	s.respondData(c, http.StatusOK, toPage(page, toMaterial))
 }
 
+func (s *Server) handleListReviewPacks(c *gin.Context) {
+	pg, ae := pageQuery(c)
+	if ae != nil {
+		respondError(c, ae)
+		return
+	}
+	stage := c.Query("stage")
+	if stage == "" {
+		stage = model.StageReview
+	}
+	if !isOneOf(stage, model.MaterialStages...) {
+		respondError(c, apperr.Validation("stage 不在允许范围内"))
+		return
+	}
+	reason := c.Query("reason")
+	if reason != "" && !isOneOf(reason, model.ReviewLowConfidence, model.ReviewPackSuggestion, model.ReviewDuplicate, model.ReviewAnalysisFailed, model.ReviewManual) {
+		respondError(c, apperr.Validation("reason 不在允许范围内"))
+		return
+	}
+	page, err := s.svc.ListReviewPacks(c.Request.Context(), stage, reason, pg)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toPage(page, toReviewPack))
+}
+
 func (s *Server) handleLibraryStats(c *gin.Context) {
 	counts, err := s.svc.GetLibraryStats(c.Request.Context())
 	if err != nil {

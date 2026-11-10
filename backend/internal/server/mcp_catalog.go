@@ -169,6 +169,7 @@ var mcpOperations = func() []mcpOperation {
 		destructive(op("packs_purge", "彻底删除回收站中的套卷及其本地原件。", "POST", "/packs/purge", model.ScopeMaterialsWrite, ids)),
 		special(op("packs_download", "取得整套 ZIP 的流式下载路径，使用当前密钥直接请求。", "GET", "/packs/:id/download", model.ScopeMaterialsRead, id), "pack_download"),
 		op("materials_search", "查询文件：按关键词、整理状态、部件、归档状态、同步状态、待确认原因、套卷或内容指纹筛选；stage=review 即待确认收件箱。", "GET", "/materials", model.ScopeMaterialsRead, queryS("q stage part status sync_status reason pack_id sha256"), page),
+		op("materials_review_packs", "按套卷分页读取待确认、识别中或失败的文件；每套只返回一次，适合批量核对。", "GET", "/materials/review-packs", model.ScopeMaterialsRead, queryS("stage reason"), page),
 		op("materials_stats", "统计套卷、文件整理状态、缺答案与存储健康。", "GET", "/materials/stats", model.ScopeMaterialsRead),
 		op("materials_accept", "确认待确认文件；accept_suggestion=true 时同时并入建议的套卷。", "POST", "/materials/accept", model.ScopeMaterialsWrite, ids, bodyB("accept_suggestion")),
 		op("materials_get", "读取文件详情、来源记录和存储副本。", "GET", "/materials/:id", model.ScopeMaterialsRead, id),
