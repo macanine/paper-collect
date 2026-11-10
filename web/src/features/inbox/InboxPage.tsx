@@ -255,7 +255,10 @@ export function InboxPage() {
   }, [stage, reason]);
 
   useEffect(() => {
-    setChecked((current) => current.filter((id) => groups.some((group) => group.pack.id === id)));
+    setChecked((current) => {
+      const next = current.filter((id) => groups.some((group) => group.pack.id === id));
+      return next.length === current.length ? current : next;
+    });
     setActiveId((current) => (current && groups.some((group) => group.pack.id === current) ? current : groups[0]?.pack.id));
   }, [groups]);
 
