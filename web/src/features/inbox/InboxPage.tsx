@@ -24,6 +24,7 @@ import { usePackFacets } from '../packs/queries';
 const PRIMARY_CATALOG_FIELDS: CatalogField[] = ['doc_type', 'subject_codes', 'grade', 'cohort', 'region', 'organization', 'exam_name'];
 const ADVANCED_CATALOG_FIELDS: CatalogField[] = ['term', 'exam_date', 'chapter', 'tags'];
 const CATALOG_FIELDS = [...PRIMARY_CATALOG_FIELDS, ...ADVANCED_CATALOG_FIELDS];
+const EMPTY_REVIEW_PACKS: ReviewPack[] = [];
 
 type FormValues = CatalogFormValues;
 
@@ -242,7 +243,7 @@ export function InboxPage() {
     { poll: stage === 'review' ? false : 8000 },
   );
   const accept = useAcceptMaterials();
-  const groups = query.data?.items ?? [];
+  const groups = query.data?.items ?? EMPTY_REVIEW_PACKS;
   const [activeId, setActiveId] = useState<string>();
   const [checked, setChecked] = useState<string[]>([]);
   const active = groups.find((group) => group.pack.id === activeId) ?? groups[0];
