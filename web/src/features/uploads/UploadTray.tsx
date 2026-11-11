@@ -4,6 +4,7 @@ import { CloseOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { formatBytes } from '../../shared/lib/format';
 import { useUploads, type UploadBatch } from './UploadManager';
+import { href } from '../../app/routes';
 
 const PHASE_TEXT: Record<UploadBatch['phase'], string> = {
   preparing: '比对内容',
@@ -28,7 +29,7 @@ function BatchRow({ batch, onDismiss }: { batch: UploadBatch; onDismiss: () => v
     <div className="upload-tray__row">
       <div className="upload-tray__row-head">
         <Typography.Text strong ellipsis className="upload-tray__title">
-          {batch.uploadId ? <Link to={`/imports/${batch.uploadId}`}>{batch.title}</Link> : batch.title}
+          {batch.uploadId ? <Link to={href.upload(batch.uploadId)}>{batch.title}</Link> : batch.title}
         </Typography.Text>
         <Tag color={PHASE_COLOR[batch.phase]}>{PHASE_TEXT[batch.phase]}</Tag>
         {finished ? <Button type="text" size="small" aria-label="移除" icon={<CloseOutlined />} onClick={onDismiss} /> : null}

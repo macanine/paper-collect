@@ -8,6 +8,7 @@ import { formatDateTime } from '../../shared/lib/format';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { listAuditLogs } from './api';
+import { href } from '../../app/routes';
 
 const PAGE_SIZE = 20;
 
@@ -40,10 +41,10 @@ export function AuditLogsPage() {
       render: (value: string, record) => {
         const action = record.action.replace(/^agent:/, '');
         if (!value) return '系统设置';
-        if (action.startsWith('material.') && action !== 'material.delete') return <Link to={`/materials/${value}`}>查看资料</Link>;
-        if (action.startsWith('collection.') && action !== 'collection.delete') return <Link to={`/collections/${value}`}>查看合集</Link>;
-        if (action === 'job.retry') return <Link to={`/jobs/${value}`}>查看任务</Link>;
-        if (action.startsWith('upload.') || action === 'ingest.complete') return <Link to={`/imports/${value}`}>查看导入</Link>;
+        if (action.startsWith('material.') && action !== 'material.delete') return <Link to={href.material(value)}>查看资料</Link>;
+        if (action.startsWith('collection.') && action !== 'collection.delete') return <Link to={href.collection(value)}>查看合集</Link>;
+        if (action === 'job.retry') return <Link to={href.job(value)}>查看任务</Link>;
+        if (action.startsWith('upload.') || action === 'ingest.complete') return <Link to={href.upload(value)}>查看导入</Link>;
         if (action.startsWith('storage.')) return '存储设置';
         if (action.startsWith('ai.')) return '智能识别设置';
         if (action.startsWith('user.') || action.startsWith('auth.')) return '用户账户';

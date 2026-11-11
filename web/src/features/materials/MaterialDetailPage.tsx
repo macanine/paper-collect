@@ -24,6 +24,7 @@ import { FilePreviewModal, canPreview } from './FilePreview';
 import { ReplicaTable } from './ReplicaTable';
 import { invalidateLibrary, useMaterial, useUpdateMaterial } from './queries';
 import { useQueryClient } from '@tanstack/react-query';
+import { href } from '../../app/routes';
 
 const FILE_TYPES: Record<string, string> = {
   'application/pdf': 'PDF',
@@ -183,7 +184,7 @@ export function MaterialDetailPage() {
       {material.pack ? (
         <Card size="small" title="所属套卷">
           <div className="flex flex-col gap-1">
-            <Link to={`/packs/${material.pack.id}`} className="font-semibold">
+            <Link to={href.pack(material.pack.id)} className="font-semibold">
               {material.pack.title}
             </Link>
             <PackMeta pack={material.pack} />
@@ -249,7 +250,7 @@ export function MaterialDetailPage() {
             { title: '来源路径', dataIndex: 'path', key: 'path', width: 280, render: (path: string) => <span className="break-all">{path}</span> },
             { title: '', key: 'dup', width: 110, render: (_: unknown, src) => (src.duplicate ? <Tag>重复上传</Tag> : <Tag color="blue">首次上传</Tag>) },
             { title: '时间', dataIndex: 'created_at', key: 'created', width: 170, render: (v: string) => formatDateTime(v) },
-            { title: '', key: 'upload', width: 90, render: (_: unknown, src) => (src.upload_id && can('uploads:write') ? <Link to={`/imports/${src.upload_id}`}>导入</Link> : null) },
+            { title: '', key: 'upload', width: 90, render: (_: unknown, src) => (src.upload_id && can('uploads:write') ? <Link to={href.upload(src.upload_id)}>导入</Link> : null) },
           ]}
           scroll={{ x: 650 }}
         />

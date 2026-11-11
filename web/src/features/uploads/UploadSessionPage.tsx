@@ -18,6 +18,7 @@ import type { SourceResult } from './fileSources';
 import { useFinalizeUpload, useJob, useUpload, uploadKeys } from './queries';
 import { type RowStatus, type TransferRow, useUploadTransfer } from './useUploadTransfer';
 import { useQueryClient } from '@tanstack/react-query';
+import { href } from '../../app/routes';
 
 export function UploadSessionPage() {
   const { uploadId = '' } = useParams();
@@ -338,7 +339,7 @@ function SubmittedCard({ upload, jobPending, jobQueryError, jobStatus, jobFailur
             {
               title: '归入',
               key: 'pack',
-              render: (_: unknown, row) => (row.pack_id ? <Link to={`/packs/${row.pack_id}`}>{row.title || '查看套卷'}</Link> : '—'),
+              render: (_: unknown, row) => (row.pack_id ? <Link to={href.pack(row.pack_id)}>{row.title || '查看套卷'}</Link> : '—'),
             },
           ]}
         />

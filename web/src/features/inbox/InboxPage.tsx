@@ -19,6 +19,7 @@ import { updatePack } from '../packs/api';
 import { Completeness } from '../packs/PackBadges';
 import { PackCatalogFields, formToUpdate, packToForm, type CatalogField, type CatalogFormValues } from '../packs/PackCatalogFields';
 import { usePackFacets } from '../packs/queries';
+import { href } from '../../app/routes';
 
 const PRIMARY_CATALOG_FIELDS: CatalogField[] = ['doc_type', 'subject_codes', 'grade', 'cohort', 'region', 'organization', 'exam_name'];
 const ADVANCED_CATALOG_FIELDS: CatalogField[] = ['term', 'exam_date', 'chapter', 'tags'];
@@ -108,7 +109,7 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
       extra={
         <Space>
           <Completeness pack={group.pack} />
-          <Link to={`/packs/${group.pack.id}`}>打开套卷</Link>
+          <Link to={href.pack(group.pack.id)}>打开套卷</Link>
         </Space>
       }
     >
@@ -127,7 +128,7 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
             title="AI 暂不可用"
             description={
               <span>
-                请检查 <Link to="/admin/ai-models">AI 模型</Link> 和 <Link to="/admin/ai-settings">AI 解析</Link> 的配置；保存后这些文件会自动继续。
+                请检查 <Link to={href.settings('ai-models')}>AI 模型</Link> 和 <Link to={href.settings('ai-parsing')}>AI 解析</Link> 的配置；保存后这些文件会自动继续。
               </span>
             }
           />
@@ -156,7 +157,7 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
                   <div className="inbox-pack-member__main">
                     <div className="inbox-pack-member__title">
                       {canPreview(member.media_type) ? <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setPreview(member)} aria-label={`预览 ${member.file_name}`} /> : null}
-                      <Link to={`/materials/${member.id}`}>{member.file_name}</Link>
+                      <Link to={href.material(member.id)}>{member.file_name}</Link>
                     </div>
                     <span className="inbox-pack-member__meta">
                       <PartTag part={edit.part} />

@@ -1,4 +1,5 @@
-import { Component, lazy, Suspense, type ComponentType, type ErrorInfo, type ReactNode } from 'react';
+import { Component, lazy, Suspense, type ErrorInfo, type ReactNode } from 'react';
+import { ROUTES } from './app/routes';
 import { Route, Routes } from 'react-router';
 import { useAuth } from './features/auth/AuthContext';
 import { LoginPage } from './features/auth/LoginPage';
@@ -6,64 +7,15 @@ import { hasScope } from './features/auth/permissions';
 import type { Scope } from './shared/api/types';
 import { ErrorState, ForbiddenState, FullPageLoading, NotFoundPage } from './shared/ui/States';
 
-function page<K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) {
-  return lazy(() => load().then((module) => ({ default: module[name] })));
-}
-
-const ApiKeysPage = page(() => import('./features/apiKeys/ApiKeysPage'), 'ApiKeysPage');
-const AuditLogsPage = page(() => import('./features/audit/AuditLogsPage'), 'AuditLogsPage');
-const AiModelsPage = page(() => import('./features/ai/AiModelsPage'), 'AiModelsPage');
-const AiSettingsPage = page(() => import('./features/ai/AiSettingsPage'), 'AiSettingsPage');
-const EntitiesPage = page(() => import('./features/ai/EntitiesPage'), 'EntitiesPage');
-const SearchPage = page(() => import('./features/search/SearchPage'), 'SearchPage');
-const CollectionDetailPage = page(() => import('./features/collections/CollectionDetailPage'), 'CollectionDetailPage');
-const CollectionsListPage = page(() => import('./features/collections/CollectionsListPage'), 'CollectionsListPage');
-const DashboardPage = page(() => import('./features/dashboard/DashboardPage'), 'DashboardPage');
-const InboxPage = page(() => import('./features/inbox/InboxPage'), 'InboxPage');
-const JobDetailPage = page(() => import('./features/jobs/JobDetailPage'), 'JobDetailPage');
-const JobsListPage = page(() => import('./features/jobs/JobsListPage'), 'JobsListPage');
-const LibraryPage = page(() => import('./features/packs/LibraryPage'), 'LibraryPage');
-const PackDetailPage = page(() => import('./features/packs/PackDetailPage'), 'PackDetailPage');
-const MaterialDetailPage = page(() => import('./features/materials/MaterialDetailPage'), 'MaterialDetailPage');
-const NodesPage = page(() => import('./features/nodes/NodesPage'), 'NodesPage');
-const NodeDetailPage = page(() => import('./features/nodes/NodeDetailPage'), 'NodeDetailPage');
-const StoragePage = page(() => import('./features/storage/StoragePage'), 'StoragePage');
-const TrashPage = page(() => import('./features/trash/TrashPage'), 'TrashPage');
-const ImportCenterPage = page(() => import('./features/uploads/ImportCenterPage'), 'ImportCenterPage');
-const UploadSessionPage = page(() => import('./features/uploads/UploadSessionPage'), 'UploadSessionPage');
-const UsersPage = page(() => import('./features/users/UsersPage'), 'UsersPage');
-const AuthenticatedLayout = page(() => import('./layouts/AppLayout'), 'AuthenticatedLayout');
+const AuthenticatedLayout = lazy(() => import('./layouts/AppLayout').then((m) => ({ default: m.AuthenticatedLayout })));
+const SettingsPage = lazy(() => import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 /** 路由级权限镜像。服务端仍会逐请求重新检查角色与 scope。 */
-function ScopeGuard({ scope, children }: { scope: Scope; children: ReactNode }) {
+function ScopeGuard({ scope, children }: { scope?: Scope; children: ReactNode }) {
   const { user } = useAuth();
-  if (!hasScope(user?.role, scope)) return <ForbiddenState />;
+  if (scope && !hasScope(user?.role, scope)) return <ForbiddenState />;
   return <>{children}</>;
 }
-
-const ROUTES: { path: string; scope: Scope; element: ReactNode }[] = [
-  { path: 'inbox', scope: 'materials:write', element: <InboxPage /> },
-  { path: 'library', scope: 'materials:read', element: <LibraryPage /> },
-  { path: 'packs/:packId', scope: 'materials:read', element: <PackDetailPage /> },
-  { path: 'materials/:materialId', scope: 'materials:read', element: <MaterialDetailPage /> },
-  { path: 'search', scope: 'materials:read', element: <SearchPage /> },
-  { path: 'collections', scope: 'collections:read', element: <CollectionsListPage /> },
-  { path: 'collections/:collectionId', scope: 'collections:read', element: <CollectionDetailPage /> },
-  { path: 'imports', scope: 'uploads:write', element: <ImportCenterPage /> },
-  { path: 'imports/:uploadId', scope: 'uploads:write', element: <UploadSessionPage /> },
-  { path: 'trash', scope: 'materials:write', element: <TrashPage /> },
-  { path: 'jobs', scope: 'jobs:read', element: <JobsListPage /> },
-  { path: 'jobs/:jobId', scope: 'jobs:read', element: <JobDetailPage /> },
-  { path: 'storage', scope: 'storage:read', element: <StoragePage /> },
-  { path: 'admin/nodes', scope: 'nodes:manage', element: <NodesPage /> },
-  { path: 'admin/nodes/:nodeId', scope: 'nodes:manage', element: <NodeDetailPage /> },
-  { path: 'admin/ai-models', scope: 'ai:read', element: <AiModelsPage /> },
-  { path: 'admin/ai-settings', scope: 'ai:read', element: <AiSettingsPage /> },
-  { path: 'entities', scope: 'materials:read', element: <EntitiesPage /> },
-  { path: 'admin/api-keys', scope: 'keys:manage', element: <ApiKeysPage /> },
-  { path: 'admin/users', scope: 'users:manage', element: <UsersPage /> },
-  { path: 'admin/audit', scope: 'audit:read', element: <AuditLogsPage /> },
-];
 
 export function App() {
   return (
@@ -77,10 +29,10 @@ export function App() {
             </Suspense>
           }
         >
-          <Route index element={<DashboardPage />} />
-          {ROUTES.map((route) => (
-            <Route key={route.path} path={route.path} element={<ScopeGuard scope={route.scope}>{route.element}</ScopeGuard>} />
+          {ROUTES.map(({ path, scope, page: Page }) => (
+            <Route key={path} path={path} element={<ScopeGuard scope={scope}><Page /></ScopeGuard>} />
           ))}
+          <Route path="/settings/:section?" element={<SettingsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>

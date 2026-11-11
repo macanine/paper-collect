@@ -9,6 +9,7 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { PackMeta } from '../packs/PackBadges';
 import { usePackMutations, usePacksList } from '../packs/queries';
+import { href } from '../../app/routes';
 
 const RETENTION_DAYS = 30;
 
@@ -68,7 +69,7 @@ export function TrashPage() {
                 key: 'title',
                 render: (_: unknown, pack) => (
                   <div className="flex flex-col gap-1">
-                    <Link to={`/packs/${pack.id}`}>{pack.title}</Link>
+                    <Link to={href.pack(pack.id)}>{pack.title}</Link>
                     <PackMeta pack={pack} />
                   </div>
                 ),

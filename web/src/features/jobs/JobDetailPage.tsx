@@ -12,6 +12,7 @@ import { JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { useJobDetail, useRetryJob } from './queries';
 import { JobProgress, progressText } from './JobProgress';
+import { href } from '../../app/routes';
 
 export function JobDetailPage() {
   const { jobId = '' } = useParams();
@@ -113,7 +114,7 @@ export function JobDetailPage() {
             {
               key: 'node',
               label: '执行节点',
-              children: job.node_id ? <Link to={`/jobs?node_id=${job.node_id}`}>{job.node_name || '节点'}</Link> : '—',
+              children: job.node_id ? <Link to={href.jobs({ node_id: job.node_id })}>{job.node_name || '节点'}</Link> : '—',
             },
             {
               key: 'id',
@@ -127,8 +128,8 @@ export function JobDetailPage() {
               ),
             },
             { key: 'progress', label: '当前进度', span: { xs: 1, md: 2 }, children: progressText(job) },
-            ...(job.upload_id && can('uploads:write') ? [{ key: 'upload', label: '关联导入', children: <Link to={`/imports/${job.upload_id}`}>查看导入</Link> }] : []),
-            ...(job.material_id && can('materials:read') ? [{ key: 'material', label: '关联资料', children: <Link to={`/materials/${job.material_id}`}>查看资料</Link> }] : []),
+            ...(job.upload_id && can('uploads:write') ? [{ key: 'upload', label: '关联导入', children: <Link to={href.upload(job.upload_id)}>查看导入</Link> }] : []),
+            ...(job.material_id && can('materials:read') ? [{ key: 'material', label: '关联资料', children: <Link to={href.material(job.material_id)}>查看资料</Link> }] : []),
             ...(job.replica_id && can('jobs:read') ? [{
               key: 'replica',
               label: '关联副本',
@@ -136,7 +137,7 @@ export function JobDetailPage() {
                 <div className="detail-code-row">
                   <Typography.Text code className="inline-code-value">{job.replica_id}</Typography.Text>
                   <CopyButton value={job.replica_id} label="复制" />
-                  <Link to={`/jobs?replica_id=${job.replica_id}`}>查看同副本任务</Link>
+                  <Link to={href.jobs({ replica_id: job.replica_id })}>查看同副本任务</Link>
                 </div>
               ),
             }] : []),

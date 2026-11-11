@@ -10,6 +10,7 @@ import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { useAuth } from '../auth/AuthContext';
 import { Completeness, PackMeta } from '../packs/PackBadges';
 import { useCollection, useCollectionMutations } from './queries';
+import { href } from '../../app/routes';
 
 export function CollectionDetailPage() {
   const { collectionId = '' } = useParams();
@@ -94,7 +95,7 @@ export function CollectionDetailPage() {
             {collection.packs.map((pack, index) => (
               <li key={pack.id} className="collection-pack-list__item">
                 <div className="collection-pack-list__content">
-                  <Link to={`/packs/${pack.id}`} className="collection-pack-list__title">
+                  <Link to={href.pack(pack.id)} className="collection-pack-list__title">
                     {pack.title}
                   </Link>
                   <div className="collection-pack-list__meta">

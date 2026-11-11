@@ -1,29 +1,18 @@
-import { memo, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { App as AntdApp, Avatar, Badge, Button, Drawer, Dropdown } from 'antd';
+import { App as AntdApp, Avatar, Badge, Button, Drawer, Dropdown, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import {
-  AppstoreOutlined,
-  AuditOutlined,
-  BarsOutlined,
   BookOutlined,
-  CloudServerOutlined,
-  ClusterOutlined,
   CloudUploadOutlined,
-  DashboardOutlined,
-  DeleteOutlined,
-  ExperimentOutlined,
-  TagsOutlined,
-  FolderOpenOutlined,
-  InboxOutlined,
-  KeyOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
   MenuOutlined,
-  RobotOutlined,
+  MenuUnfoldOutlined,
   SearchOutlined,
-  TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
+import { NAV_SECTION_LABELS, resolveLocation, ROUTES, SETTINGS, SETTINGS_NAV, type NavSection } from '../app/routes';
 import { getLibraryStats } from '../features/materials/api';
 import { UploadDialog } from '../features/uploads/UploadDialog';
 import { UploadProvider, useUploads } from '../features/uploads/UploadManager';
@@ -33,137 +22,109 @@ import type { Scope } from '../shared/api/types';
 import { USER_ROLE_LABELS } from '../shared/lib/labels';
 import { NetworkActivity } from '../shared/ui/NetworkActivity';
 import { FullPageLoading, LoadingState } from '../shared/ui/States';
+import { CommandPalette, useCommandShortcut } from './CommandPalette';
 
-interface NavigationItem {
-  key: string;
+interface NavItem {
   path: string;
   label: string;
-  icon: ReactNode;
-  scope?: Scope;
-  badge?: 'review';
+  icon: React.ReactNode;
+  badge?: 'attention';
+  preload?: () => Promise<unknown>;
 }
 
-interface NavigationSection {
-  key: string;
+interface NavGroup {
+  key: NavSection;
   label: string;
-  items: NavigationItem[];
+  items: NavItem[];
 }
 
-const NAVIGATION: NavigationSection[] = [
-  {
-    key: 'workspace',
-    label: '资料',
-    items: [
-      { key: '/', path: '/', label: '工作台', icon: <DashboardOutlined /> },
-      { key: '/imports', path: '/imports', label: '导入中心', icon: <CloudUploadOutlined />, scope: 'uploads:write' },
-      { key: '/inbox', path: '/inbox', label: '需关注', icon: <InboxOutlined />, scope: 'materials:write', badge: 'review' },
-      { key: '/library', path: '/library', label: '资料库', icon: <FolderOpenOutlined />, scope: 'materials:read' },
-      { key: '/search', path: '/search', label: '搜题', icon: <SearchOutlined />, scope: 'materials:read' },
-      { key: '/collections', path: '/collections', label: '专题', icon: <AppstoreOutlined />, scope: 'collections:read' },
-      { key: '/entities', path: '/entities', label: '名称词典', icon: <TagsOutlined />, scope: 'materials:read' },
-    ],
-  },
-  {
-    key: 'records',
-    label: '记录',
-    items: [
-      { key: '/trash', path: '/trash', label: '回收站', icon: <DeleteOutlined />, scope: 'materials:write' },
-      { key: '/jobs', path: '/jobs', label: '处理日志', icon: <BarsOutlined />, scope: 'jobs:read' },
-    ],
-  },
-  {
-    key: 'system',
-    label: '系统',
-    items: [
-      { key: '/storage', path: '/storage', label: '存储', icon: <CloudServerOutlined />, scope: 'storage:read' },
-      { key: '/admin/nodes', path: '/admin/nodes', label: '节点', icon: <ClusterOutlined />, scope: 'nodes:manage' },
-      { key: '/admin/ai-models', path: '/admin/ai-models', label: 'AI 模型', icon: <RobotOutlined />, scope: 'ai:read' },
-      { key: '/admin/ai-settings', path: '/admin/ai-settings', label: 'AI 解析', icon: <ExperimentOutlined />, scope: 'ai:read' },
-      { key: '/admin/api-keys', path: '/admin/api-keys', label: 'API 密钥', icon: <KeyOutlined />, scope: 'keys:manage' },
-      { key: '/admin/users', path: '/admin/users', label: '用户', icon: <TeamOutlined />, scope: 'users:manage' },
-      { key: '/admin/audit', path: '/admin/audit', label: '审计日志', icon: <AuditOutlined />, scope: 'audit:read' },
-    ],
-  },
-];
+const COLLAPSE_KEY = 'paper-collect:sidebar-collapsed';
 
-const DETAIL_LABELS: Record<string, string> = {
-  packs: '套卷详情',
-  materials: '文件详情',
-  collections: '专题详情',
-  jobs: '处理详情',
-  imports: '导入中心',
-};
-
-function routeKey(pathname: string): string {
-  if (pathname === '/') return '/';
-  if (pathname.startsWith('/admin/nodes')) return '/admin/nodes';
-  if (pathname.startsWith('/admin/')) return pathname;
-  const first = pathname.split('/')[1] ?? '';
-  if (first === 'packs' || first === 'materials') return '/library';
-  return `/${first}`;
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSE_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
-function detailLabel(pathname: string, item: NavigationItem | undefined): string | null {
-  if (pathname.startsWith('/imports/')) return '导入详情';
-  if (!item || pathname === item.path) return null;
-  if (pathname.startsWith('/admin/nodes/')) return '节点详情';
-  if (pathname.startsWith('/admin/')) return null;
-  return DETAIL_LABELS[pathname.split('/')[1] ?? ''] ?? null;
+function useNavigation(can: (scope: Scope) => boolean): NavGroup[] {
+  return useMemo(() => {
+    const groups = new Map<NavSection, NavItem[]>();
+    for (const route of ROUTES) {
+      if (!route.nav || (route.scope && !can(route.scope))) continue;
+      const items = groups.get(route.nav.section) ?? [];
+      items.push({ path: route.path, label: route.title, icon: route.nav.icon, badge: route.nav.badge, preload: route.page.preload });
+      groups.set(route.nav.section, items);
+    }
+    const settings = SETTINGS.filter((s) => can(s.scope));
+    if (settings.length > 0) {
+      groups.set('system', [{ path: SETTINGS_NAV.path, label: SETTINGS_NAV.title, icon: SETTINGS_NAV.icon, preload: settings[0]!.page.preload }]);
+    }
+    return (Object.keys(NAV_SECTION_LABELS) as NavSection[])
+      .filter((key) => groups.has(key))
+      .map((key) => ({ key, label: NAV_SECTION_LABELS[key], items: groups.get(key)! }));
+  }, [can]);
 }
 
-function useNavigation(can: (scope: Scope) => boolean) {
-  return useMemo(
-    () =>
-      NAVIGATION.map((section) => ({
-        ...section,
-        items: section.items.filter((item) => !item.scope || can(item.scope)),
-      })).filter((section) => section.items.length > 0),
-    [can],
-  );
-}
-
-interface SidebarContentProps {
-  sections: NavigationSection[];
+interface SidebarProps {
+  groups: NavGroup[];
   activeKey: string;
-  reviewCount: number;
+  attention: number;
+  collapsed?: boolean;
   onNavigate?: () => void;
 }
 
-const SidebarContent = memo(function SidebarContent({ sections, activeKey, reviewCount, onNavigate }: SidebarContentProps) {
+const Sidebar = memo(function Sidebar({ groups, activeKey, attention, collapsed = false, onNavigate }: SidebarProps) {
   return (
     <div className="app-sidebar__inner">
-      <Link to="/" className="app-brand" onClick={onNavigate} aria-label="返回仪表盘">
+      <Link to="/" className="app-brand" onClick={onNavigate} aria-label="返回工作台">
         <span className="app-brand__mark" aria-hidden="true">
           <BookOutlined />
         </span>
-        <span className="app-brand__copy">
-          <span className="app-brand__title">中学资料库</span>
-          <span className="app-brand__subtitle">Paper Collect</span>
-        </span>
+        {collapsed ? null : (
+          <span className="app-brand__copy">
+            <span className="app-brand__title">中学资料库</span>
+            <span className="app-brand__subtitle">Paper Collect</span>
+          </span>
+        )}
       </Link>
       <nav className="app-nav" aria-label="主导航">
-        {sections.map((section) => (
-          <section key={section.key} className="app-nav__section">
-            <div className="app-nav__heading">{section.label}</div>
+        {groups.map((group) => (
+          <section key={group.key} className="app-nav__section">
+            {collapsed ? null : <div className="app-nav__heading">{group.label}</div>}
             <div className="app-nav__items">
-              {section.items.map((item) => {
-                const active = item.key === activeKey;
-                return (
+              {group.items.map((item) => {
+                const active = item.path === activeKey;
+                const showBadge = item.badge === 'attention' && attention > 0;
+                const link = (
                   <Link
-                    key={item.key}
+                    key={item.path}
                     to={item.path}
                     className={`app-nav__link${active ? ' is-active' : ''}`}
                     aria-current={active ? 'page' : undefined}
+                    aria-label={collapsed ? item.label : undefined}
                     onClick={onNavigate}
+                    onMouseEnter={() => void item.preload?.()}
+                    onFocus={() => void item.preload?.()}
                   >
-                    <span className="app-nav__icon" aria-hidden="true">{item.icon}</span>
-                    <span className="app-nav__label">{item.label}</span>
-                    {item.badge === 'review' && reviewCount > 0 ? (
-                        <span className="app-nav__badge" aria-label={`${reviewCount} 个需关注文件`}>
-                        <Badge count={reviewCount} size="small" overflowCount={999} />
+                    <span className="app-nav__icon" aria-hidden="true">
+                      {collapsed && showBadge ? <Badge dot>{item.icon}</Badge> : item.icon}
+                    </span>
+                    {collapsed ? null : <span className="app-nav__label">{item.label}</span>}
+                    {!collapsed && showBadge ? (
+                      <span className="app-nav__badge" aria-label={`${attention} 个需关注文件`}>
+                        <Badge count={attention} size="small" overflowCount={999} />
                       </span>
                     ) : null}
                   </Link>
+                );
+                return collapsed ? (
+                  <Tooltip key={item.path} title={item.label} placement="right">
+                    {link}
+                  </Tooltip>
+                ) : (
+                  link
                 );
               })}
             </div>
@@ -200,6 +161,17 @@ function AuthenticatedAppLayout() {
   );
 }
 
+function PaletteHost({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { can } = useAuth();
+  if (can('uploads:write')) return <PaletteWithImport open={open} onClose={onClose} />;
+  return <CommandPalette open={open} onClose={onClose} />;
+}
+
+function PaletteWithImport({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { openDialog } = useUploads();
+  return <CommandPalette open={open} onClose={onClose} onImport={openDialog} />;
+}
+
 function AppFrame() {
   const { user, can, signOut } = useAuth();
   const stats = useQuery({
@@ -208,28 +180,37 @@ function AppFrame() {
     enabled: can('materials:read'),
     refetchInterval: 30_000,
   });
-  const reviewCount = stats.data?.needs_attention ?? 0;
+  const attention = stats.data?.needs_attention ?? 0;
   const navigate = useNavigate();
   const location = useLocation();
   const { message } = AntdApp.useApp();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const navigation = useNavigation(can);
-  const activeKey = routeKey(location.pathname);
-  const activeItem = useMemo(
-    () => navigation.flatMap((section) => section.items).find((item) => item.key === activeKey),
-    [activeKey, navigation],
-  );
-  const detail = detailLabel(location.pathname, activeItem);
-  const contextLabel = activeItem?.label ?? (location.pathname.startsWith('/imports') ? '导入中心' : '管理台');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const groups = useNavigation(can);
+  const where = resolveLocation(location.pathname);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  useCommandShortcut(openPalette);
 
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
-    const current = detail ?? contextLabel;
-    document.title = `${current} · 中学资料库`;
-  }, [contextLabel, detail]);
+    document.title = `${where.detail ?? where.title} · 中学资料库`;
+  }, [where.detail, where.title]);
+
+  const toggleCollapsed = () => {
+    setCollapsed((value) => {
+      try {
+        window.localStorage.setItem(COLLAPSE_KEY, value ? '0' : '1');
+      } catch {
+        // 无痕模式等禁用存储时只影响本次会话。
+      }
+      return !value;
+    });
+  };
 
   const handleLogout = async () => {
     try {
@@ -242,11 +223,7 @@ function AppFrame() {
 
   const accountItems = useMemo<MenuProps['items']>(
     () => [
-      {
-        key: 'identity',
-        disabled: true,
-        label: user ? `${user.username} · ${USER_ROLE_LABELS[user.role]}` : '当前账户',
-      },
+      { key: 'identity', disabled: true, label: user ? `${user.username} · ${USER_ROLE_LABELS[user.role]}` : '当前账户' },
       { type: 'divider' },
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
     ],
@@ -254,9 +231,18 @@ function AppFrame() {
   );
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${collapsed ? ' is-collapsed' : ''}`}>
       <aside className="app-sidebar">
-        <SidebarContent sections={navigation} activeKey={activeKey} reviewCount={reviewCount} />
+        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} collapsed={collapsed} />
+        <button
+          type="button"
+          className="app-sidebar__toggle"
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
+          aria-expanded={!collapsed}
+        >
+          {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+        </button>
       </aside>
 
       <Drawer
@@ -269,12 +255,7 @@ function AppFrame() {
         rootClassName="app-mobile-drawer"
         styles={{ body: { padding: 0 } }}
       >
-        <SidebarContent
-          sections={navigation}
-          activeKey={activeKey}
-          reviewCount={reviewCount}
-          onNavigate={() => setMobileNavOpen(false)}
-        />
+        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} onNavigate={() => setMobileNavOpen(false)} />
       </Drawer>
 
       <div className="app-main">
@@ -290,30 +271,25 @@ function AppFrame() {
               <MenuOutlined />
             </button>
             <nav className="app-breadcrumb" aria-label="当前位置">
-              <span className="app-breadcrumb__root">资料库</span>
-              <span className="app-breadcrumb__separator" aria-hidden="true">
-                /
-              </span>
-              <span className="app-breadcrumb__current">{contextLabel}</span>
-              {detail ? (
+              {where.detail ? (
                 <>
-                  <span className="app-breadcrumb__separator app-breadcrumb__detail" aria-hidden="true">
-                    /
-                  </span>
-                  <span className="app-breadcrumb__detail">{detail}</span>
+                  <Link to={where.navKey || '/'} className="app-breadcrumb__current">{where.title}</Link>
+                  <span className="app-breadcrumb__separator" aria-hidden="true">/</span>
+                  <span className="app-breadcrumb__detail" aria-current="page">{where.detail}</span>
                 </>
-              ) : null}
+              ) : (
+                <span className="app-breadcrumb__current" aria-current="page">{where.title}</span>
+              )}
             </nav>
           </div>
 
           <div className="app-header__actions">
             {can('audit:read') ? <NetworkActivity /> : null}
-            {can('materials:read') ? (
-              <Link to="/search" className="app-header__search">
-                <SearchOutlined />
-                <span>搜题</span>
-              </Link>
-            ) : null}
+            <button type="button" className="app-header__search" onClick={openPalette} aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K">
+              <SearchOutlined />
+              <span>搜索或跳转</span>
+              <kbd className="app-header__kbd">⌘K</kbd>
+            </button>
             {can('uploads:write') ? <HeaderUploadButton /> : null}
             {user ? (
               <Dropdown
@@ -336,7 +312,7 @@ function AppFrame() {
           </div>
         </header>
 
-        <main className="app-content">
+        <main className="app-content" id="main-content">
           <div className="app-content__inner">
             <Suspense fallback={<LoadingState />}>
               <Outlet />
@@ -344,6 +320,7 @@ function AppFrame() {
           </div>
         </main>
       </div>
+      <PaletteHost open={paletteOpen} onClose={closePalette} />
     </div>
   );
 }

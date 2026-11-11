@@ -25,6 +25,7 @@ import {
   runtimeFormValues,
   type NodeRuntimeFormValues,
 } from './nodeUtils';
+import { href } from '../../app/routes';
 
 const PRIMARY = 'var(--ant-primary)';
 const SECOND = 'var(--chart-series-2)';
@@ -77,7 +78,7 @@ export function NodeDetailPage() {
   };
   return (
     <div className="page-stack">
-      <BackLink to="/admin/nodes">返回节点列表</BackLink>
+      <BackLink to={href.nodes()}>返回节点列表</BackLink>
       <PageHeader
         title={
           <Typography.Text
@@ -180,7 +181,7 @@ export function NodeDetailPage() {
           <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
             主端并发、任务类型、租约和心跳均在节点列表顶部统一配置。
           </Typography.Paragraph>
-          <Link to="/admin/nodes">前往集群调度设置</Link>
+          <Link to={href.nodes()}>前往集群调度设置</Link>
         </Card>
       ) : (
         <Card
@@ -238,7 +239,7 @@ export function NodeDetailPage() {
             scroll={{ x: 'max-content' }}
             locale={{ emptyText: '当前没有执行中的任务' }}
             columns={[
-              { title: '类型', key: 'kind', render: (_, job) => <Link to={`/jobs/${job.id}`}>{JOB_KIND_LABELS[job.kind]}</Link> },
+              { title: '类型', key: 'kind', render: (_, job) => <Link to={href.job(job.id)}>{JOB_KIND_LABELS[job.kind]}</Link> },
               { title: '进度', key: 'progress', render: (_, job) => job.progress_message || '—' },
               { title: '开始时间', key: 'started', render: (_, job) => formatDateTime(job.started_at) },
             ]}

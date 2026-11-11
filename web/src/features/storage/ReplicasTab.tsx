@@ -10,6 +10,7 @@ import { ReplicaStatusTag, ShareStatusTag } from '../../shared/ui/StatusTags';
 import { driveName } from './ruleUtils';
 import { useBulkReplicas, useDrives, useReplicas } from './queries';
 import type { ReplicaBulkAction } from './api';
+import { href } from '../../app/routes';
 
 const PAGE_SIZE = 20;
 
@@ -131,7 +132,7 @@ export function ReplicasTab({ canWrite }: { canWrite: boolean }) {
       title: '任务',
       key: 'job',
       width: 100,
-      render: (_: unknown, record) => <Link to={`/jobs?replica_id=${record.id}`}>任务</Link>,
+      render: (_: unknown, record) => <Link to={href.jobs({ replica_id: record.id })}>任务</Link>,
     },
     {
       title: '更新时间',

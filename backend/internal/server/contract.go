@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/catalogai"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/service"
@@ -250,6 +251,19 @@ func TypeScriptContract() ([]byte, error) {
 		}
 		fmt.Fprintf(b, "] as const;\nexport type %s = (typeof %s)[number];\n\n", e.Type, e.Const)
 	}
+	b.WriteString("/** Scopes granted to each role; the server checks them again on every request. */\n")
+	b.WriteString("export const ROLE_SCOPES: Record<UserRole, readonly Scope[]> = {\n")
+	for _, role := range []string{model.RoleAdmin, model.RoleEditor, model.RoleViewer} {
+		fmt.Fprintf(b, "  %s: [", role)
+		for i, scope := range auth.RoleScopes(role) {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(b, "%q", scope)
+		}
+		b.WriteString("],\n")
+	}
+	b.WriteString("};\n\n")
 	b.WriteString("export interface Page<T> {\n  items: T[];\n  total: number;\n  page: number;\n  page_size: number;\n}\n")
 	for _, t := range contractTypes {
 		rt := reflect.TypeOf(t.Value)

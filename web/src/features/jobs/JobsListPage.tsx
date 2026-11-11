@@ -15,6 +15,7 @@ import { JobKindTag, JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { useJobsList, useRetryJob } from './queries';
 import { progressText } from './JobProgress';
+import { href } from '../../app/routes';
 
 const FILTER_KEYS = ['status', 'kind', 'material_id', 'upload_id', 'replica_id', 'node_id'] as const;
 type FilterKey = (typeof FILTER_KEYS)[number];
@@ -46,7 +47,7 @@ export function JobsListPage() {
       width: 150,
       render: (_: unknown, job) => (
         <div className="cell-stack">
-          <Link to={`/jobs/${job.id}`} className="font-mono text-xs">
+          <Link to={href.job(job.id)} className="font-mono text-xs">
             {job.id.slice(0, 8)}
           </Link>
           <span className="table-subtext">更新 {formatDateTime(job.updated_at)}</span>
@@ -97,7 +98,7 @@ export function JobsListPage() {
       key: 'node',
       width: 110,
       render: (_: unknown, job) =>
-        job.node_id ? <Link to={`/jobs?node_id=${job.node_id}`}>{job.node_name || '节点'}</Link> : '—',
+        job.node_id ? <Link to={href.jobs({ node_id: job.node_id })}>{job.node_name || '节点'}</Link> : '—',
     },
     {
       title: '耗时',
@@ -113,11 +114,11 @@ export function JobsListPage() {
       width: 120,
       render: (_: unknown, job) => (
         <div className="flex flex-col text-xs">
-          {job.upload_id && can('uploads:write') ? <Link to={`/imports/${job.upload_id}`}>查看导入</Link> : null}
-          {job.material_id && can('materials:read') ? <Link to={`/materials/${job.material_id}`}>查看资料</Link> : null}
+          {job.upload_id && can('uploads:write') ? <Link to={href.upload(job.upload_id)}>查看导入</Link> : null}
+          {job.material_id && can('materials:read') ? <Link to={href.material(job.material_id)}>查看资料</Link> : null}
           {job.replica_id ? (
             <Tooltip title={job.replica_id}>
-              <Link to={`/jobs?replica_id=${job.replica_id}`}>同副本任务</Link>
+              <Link to={href.jobs({ replica_id: job.replica_id })}>同副本任务</Link>
             </Tooltip>
           ) : null}
         </div>
@@ -158,7 +159,7 @@ export function JobsListPage() {
       render: (_: unknown, job) => (
         <div className="compact-entity">
           <div className="compact-entity__heading">
-            <Link to={`/jobs/${job.id}`} className="compact-entity__title font-mono">
+            <Link to={href.job(job.id)} className="compact-entity__title font-mono">
               任务 {job.id.slice(0, 8)}
             </Link>
             <ArrowRightOutlined className="compact-entity__arrow" />
@@ -184,9 +185,9 @@ export function JobsListPage() {
             {job.node_name ? <span>节点 {job.node_name}</span> : null}
           </div>
           <div className="compact-entity__links">
-            {job.upload_id && can('uploads:write') ? <Link to={`/imports/${job.upload_id}`}>导入</Link> : null}
-            {job.material_id && can('materials:read') ? <Link to={`/materials/${job.material_id}`}>关联资料</Link> : null}
-            {job.replica_id ? <Link to={`/jobs?replica_id=${job.replica_id}`}>同副本任务</Link> : null}
+            {job.upload_id && can('uploads:write') ? <Link to={href.upload(job.upload_id)}>导入</Link> : null}
+            {job.material_id && can('materials:read') ? <Link to={href.material(job.material_id)}>关联资料</Link> : null}
+            {job.replica_id ? <Link to={href.jobs({ replica_id: job.replica_id })}>同副本任务</Link> : null}
             {canRetry && job.status === 'failed' ? (
               <Popconfirm
                 title="重新排队该任务？"

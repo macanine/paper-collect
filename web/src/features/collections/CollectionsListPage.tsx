@@ -10,6 +10,7 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { useAuth } from '../auth/AuthContext';
 import { useCollectionMutations, useCollectionsList } from './queries';
+import { href } from '../../app/routes';
 
 export function CollectionsListPage() {
   const { can } = useAuth();
@@ -63,7 +64,7 @@ export function CollectionsListPage() {
                 {query.data.items.map((collection) => (
                   <li key={collection.id} className="collection-list__item">
                     <div className="collection-list__content">
-                      <Link to={`/collections/${collection.id}`} className="collection-list__title">
+                      <Link to={href.collection(collection.id)} className="collection-list__title">
                         {collection.title}
                       </Link>
                       <span className="collection-list__description">

@@ -91,6 +91,13 @@ export type SyncActionKind = (typeof SYNC_ACTION_KINDS)[number];
 export const JOB_LOG_LEVELS = ["info", "error"] as const;
 export type JobLogLevel = (typeof JOB_LOG_LEVELS)[number];
 
+/** Scopes granted to each role; the server checks them again on every request. */
+export const ROLE_SCOPES: Record<UserRole, readonly Scope[]> = {
+  admin: ["materials:read", "materials:write", "collections:read", "collections:write", "uploads:write", "jobs:read", "jobs:write", "storage:read", "storage:write", "keys:manage", "users:manage", "audit:read", "ai:read", "ai:write", "search:read", "search:write", "nodes:manage"],
+  editor: ["materials:read", "materials:write", "collections:read", "collections:write", "uploads:write", "jobs:read"],
+  viewer: ["materials:read", "collections:read", "jobs:read"],
+};
+
 export interface Page<T> {
   items: T[];
   total: number;

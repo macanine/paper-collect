@@ -25,6 +25,7 @@ import { MovePackModal } from './MovePackModal';
 import { Completeness, PackMeta } from './PackBadges';
 import { PackCatalogFields, formToUpdate, packToForm, type CatalogFormValues } from './PackCatalogFields';
 import { usePack, usePackFacets, usePackMutations, useUpdatePack } from './queries';
+import { href } from '../../app/routes';
 
 function CatalogView({ pack }: { pack: Pack }) {
   const dash = (value: string | number | undefined) => (value ? value : '—');
@@ -153,7 +154,7 @@ export function PackDetailPage() {
       key: 'file',
       render: (_: unknown, member) => (
         <div className="flex flex-col gap-1">
-          <Link to={`/materials/${member.id}`}>{member.file_name}</Link>
+          <Link to={href.material(member.id)}>{member.file_name}</Link>
           <span className="table-subtext">
             {formatBytes(member.size_bytes)}
             {member.part === 'full' && member.answer_start_page > 0 ? ` · 答案从第 ${member.answer_start_page} 页开始` : ''}
@@ -309,7 +310,7 @@ export function PackDetailPage() {
         <Card title="所在专题">
           <Space wrap>
             {pack.collections.map((c) => (
-              <Link key={c.id} to={`/collections/${c.id}`}>
+              <Link key={c.id} to={href.collection(c.id)}>
                 <Tag>{c.title}</Tag>
               </Link>
             ))}

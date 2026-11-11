@@ -17,6 +17,7 @@ import { LinkButton } from '../../shared/ui/LinkButton';
 import { useAuth } from '../auth/AuthContext';
 import { Completeness, PackMeta } from '../packs/PackBadges';
 import { useLibraryStats, useRecentPacks, useRecentUploads } from './queries';
+import { href } from '../../app/routes';
 
 function StatCard({ to, title, value, icon, tone }: { to: string; title: string; value: number | undefined; icon: ReactNode; tone?: 'warning' | 'error' }) {
   return (
@@ -77,7 +78,7 @@ export function DashboardPage() {
               <ul className="dashboard-list">
                 {packs.data.items.map((pack) => (
                   <li key={pack.id} className="dashboard-list__item">
-                    <Link to={`/packs/${pack.id}`} className="dashboard-list__title">
+                    <Link to={href.pack(pack.id)} className="dashboard-list__title">
                       {pack.title}
                     </Link>
                     <div className="dashboard-list__meta">
@@ -103,7 +104,7 @@ export function DashboardPage() {
                 {uploads.data.items.map((upload) => (
                   <li key={upload.id} className="dashboard-list__item dashboard-list__item--upload">
                     <div className="dashboard-list__content">
-                      <Link to={`/imports/${upload.id}`} className="dashboard-list__title">
+                      <Link to={href.upload(upload.id)} className="dashboard-list__title">
                         {upload.title}
                       </Link>
                       <span className="dashboard-list__meta-text">

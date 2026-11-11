@@ -5,6 +5,7 @@ import { CopyButton } from '../../shared/ui/CopyButton';
 import { ReplicaStatusTag, ShareStatusTag, VerificationTag } from '../../shared/ui/StatusTags';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import type { Drive, Replica } from '../../shared/api/types';
+import { href } from '../../app/routes';
 
 interface ReplicaTableProps {
   replicas: Replica[];
@@ -110,7 +111,7 @@ export function ReplicaTable({ replicas, drives, canRefreshShare, refreshingId, 
       title: '任务',
       key: 'job',
       width: 100,
-      render: (_: unknown, record) => <Link to={`/jobs?replica_id=${record.id}`}>复制任务</Link>,
+      render: (_: unknown, record) => <Link to={href.jobs({ replica_id: record.id })}>复制任务</Link>,
     },
     {
       title: '更新时间',

@@ -10,6 +10,7 @@ import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { SubjectTags } from '../../shared/ui/StatusTags';
 import { searchQuestions } from './api';
 import { splitHighlights } from './highlight';
+import { href } from '../../app/routes';
 
 interface SearchFormValues {
   query: string;
@@ -87,7 +88,7 @@ export function SearchPage() {
   const handleOpenPage = (hit: SearchHit) => {
     if (!hit.material.file_name.toLowerCase().endsWith('.pdf')) {
       message.info(`这道题在第 ${hit.page_no} 页；非 PDF 请在资料详情中查看`);
-      navigate(`/materials/${hit.material.id}`);
+      navigate(href.material(hit.material.id));
       return;
     }
     setPreviewHit(hit);
@@ -205,14 +206,14 @@ export function SearchResultCard({ hit, onOpenPage }: { hit: SearchHit; onOpenPa
           />
         ) : null}
         <Space wrap>
-          {hit.pack?.id ? <Link to={`/packs/${hit.pack.id}`}>{hit.pack.title}</Link> : <Link to={`/materials/${hit.material.id}`}>{hit.material.title}</Link>}
+          {hit.pack?.id ? <Link to={href.pack(hit.pack.id)}>{hit.pack.title}</Link> : <Link to={href.material(hit.material.id)}>{hit.material.title}</Link>}
           {hit.also_in?.length ? (
             <Typography.Text type="secondary">
               也出现在：
               {hit.also_in.map((p, i) => (
                 <span key={p.id}>
                   {i > 0 ? '、' : ''}
-                  <Link to={`/packs/${p.id}`}>{p.title}</Link>
+                  <Link to={href.pack(p.id)}>{p.title}</Link>
                 </span>
               ))}
             </Typography.Text>

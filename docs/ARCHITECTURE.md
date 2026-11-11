@@ -460,7 +460,6 @@ RunIndex
 | `/login` | 登录 | 公开 |
 | `/` | 工作台（统计、最近套卷、上传入口） | 登录 |
 | `/inbox` | 需关注收件箱（AI 编目、校验问题、按套卷确认；AI 整理中、等待 AI） | materials:write |
-| `/entities` | 名称词典（学校、联盟、标签的规范名称、别名、合并与锁定） | materials:read |
 | `/library` | 资料库（套卷列表与筛选） | materials:read |
 | `/packs/:packId` | 套卷详情（文件、齐全度、专题、下载） | materials:read |
 | `/materials/:materialId` | 文件详情（AI 阅读记录、题目索引、归档与同步状态、副本） | materials:read |
@@ -470,10 +469,12 @@ RunIndex
 | `/trash` | 回收站（恢复、彻底删除） | materials:write |
 | `/jobs`、`/jobs/:jobId` | 任务列表/详情与重试 | jobs:read |
 | `/storage` | 网盘、同步规则（编辑、预览并保存）、副本（筛选、批量重试/删除远端/移除记录）、补齐副本 | storage:read |
-| `/admin/ai-models`、`/admin/ai-settings` | AI 模型/解析设置 | ai:read |
-| `/admin/api-keys`、`/admin/users`、`/admin/audit` | 密钥、用户、审计 | keys:manage / users:manage / audit:read |
+| `/nodes`、`/nodes/:nodeId` | 节点与集群调度 | nodes:manage |
+| `/settings/:section` | 设置中心：`ai-models`、`ai-parsing`、`entities`（名称词典）、`api-keys`、`users`、`audit`；只显示有权限的分区 | ai:read / materials:read / keys:manage / users:manage / audit:read |
 
-前端权限只是可见性镜像；服务端是唯一授权来源。搜索设置可通过 HTTP 或 MCP 访问，目前没有独立管理台页面。
+`web/src/app/routes.tsx` 是路由、侧栏、面包屑、页面标题、命令面板和站内链接（`href.*`）的唯一来源；页面按路由懒加载，侧栏和命令面板在悬停或选中时预加载目标页面。侧栏分「资料」「运维」「系统」三组，桌面端可收起为图标栏（记在本机），1024px 以下改为抽屉。`⌘K`/`Ctrl+K` 或 `/` 打开命令面板：跳转页面与设置分区、导入资料、按名称打开套卷、搜题。
+
+前端权限只是可见性镜像；服务端是唯一授权来源。角色权限表与响应类型由后端生成（`contract.gen.ts`）。搜索设置可通过 HTTP 或 MCP 访问，目前没有独立管理台页面。
 
 OneDrive 新建表单默认引导使用 OpenList 应用；服务端旧配置缺省 `auth_mode` 为 `direct`，以免切换已有账户。OpenList 模式通过第三方 HTTPS 接口续期，按上游协议把刷新令牌放在查询参数中；界面告知用户该数据流，本服务不记录请求 URL，且拒绝重定向。自有应用仍使用微软直连端点。不同应用签发的刷新令牌不能混用，切换模式必须提交新令牌。
 

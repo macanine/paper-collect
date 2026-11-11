@@ -11,6 +11,7 @@ import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { UploadStatusTag } from '../../shared/ui/StatusTags';
 import { listUploads } from './api';
 import { useUploads } from './UploadManager';
+import { href } from '../../app/routes';
 
 export function ImportCenterPage() {
   const navigate = useNavigate();
@@ -45,7 +46,7 @@ export function ImportCenterPage() {
             locale={{ emptyText: <EmptyState description="还没有导入资料" /> }}
             pagination={{ current: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: list.setPage, hideOnSinglePage: true }}
             columns={[
-              { title: '导入批次', key: 'title', render: (_: unknown, u) => <Link to={`/imports/${u.id}`}>{u.title}</Link> },
+              { title: '导入批次', key: 'title', render: (_: unknown, u) => <Link to={href.upload(u.id)}>{u.title}</Link> },
               { title: '状态', key: 'status', width: 110, render: (_: unknown, u) => <UploadStatusTag status={u.status} /> },
               {
                 title: '结果',

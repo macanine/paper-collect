@@ -29,6 +29,7 @@ import {
   workerEnv,
   type NodeRuntimeFormValues,
 } from './nodeUtils';
+import { href } from '../../app/routes';
 
 interface NodeFormValues extends NodeRuntimeFormValues {
   name: string;
@@ -113,7 +114,7 @@ export function NodesPage() {
       fixed: 'left',
       render: (_, node) => (
         <Space size={4} wrap>
-          <Link to={`/admin/nodes/${node.id}`}>{node.name}</Link>
+          <Link to={href.node(node.id)}>{node.name}</Link>
           {node.is_master ? <Tag>主端</Tag> : null}
           {node.protocol && masterProtocol && node.protocol !== masterProtocol ? <Tag color="error">协议不一致</Tag> : null}
         </Space>
@@ -173,7 +174,7 @@ export function NodesPage() {
       title: '近 1 小时',
       key: 'recent',
       render: (_, node) => (
-        <Link to={`/jobs?node_id=${node.id}`}>
+        <Link to={href.jobs({ node_id: node.id })}>
           成功 {node.succeeded_1h}，失败 {node.failed_1h}
         </Link>
       ),

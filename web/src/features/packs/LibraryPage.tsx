@@ -20,6 +20,7 @@ import { downloadPack, type PackSort } from './api';
 import { AddToCollectionModal, BulkEditModal, MergeModal } from './BulkModals';
 import { Completeness, PackMeta } from './PackBadges';
 import { usePackFacets, usePackMutations, usePacksList } from './queries';
+import { href } from '../../app/routes';
 
 const FILTER_KEYS = ['q', 'content', 'subject', 'grade', 'doc_type', 'cohort', 'region', 'organization', 'tag', 'stage', 'missing', 'collection_id', 'sort'] as const;
 
@@ -101,7 +102,7 @@ export function LibraryPage() {
         key: 'title',
         render: (_: unknown, pack) => (
           <div className="cell-stack">
-            <Link to={`/packs/${pack.id}`} className="font-semibold">
+            <Link to={href.pack(pack.id)} className="font-semibold">
               {pack.title}
             </Link>
             <PackMeta pack={pack} />
