@@ -212,6 +212,7 @@ type fakeMaster struct {
 	lost       []string
 	config     map[string]any
 	interrupts int
+	capacity   []map[string]int // capacity sent with each claim
 }
 
 func (m *fakeMaster) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
@@ -229,11 +230,16 @@ func (m *fakeMaster) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		writeData(map[string]any{"lost_job_ids": m.lost, "config": m.config})
 	case strings.HasSuffix(r.URL.Path, "/claim"):
 		m.claims.Add(1)
+		var body struct {
+			Capacity map[string]int `json:"capacity"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		m.capacity = append(m.capacity, body.Capacity)
 		if m.job == nil {
 			rw.WriteHeader(http.StatusNoContent)
 			return
 		}
-		writeData(m.job)
+		writeData(map[string]any{"jobs": []*jobexec.Input{m.job}})
 		m.job = nil
 	case strings.HasSuffix(r.URL.Path, "/complete"):
 		m.completes++
@@ -437,29 +443,39 @@ func TestClaimCapacityFollowsRuntimeShrink(t *testing.T) {
 	w := newWorker(t, &fakeMaster{}, func(c *Config) {
 		c.Slots = map[string]int{jobexec.KindAnalyze: 3}
 	})
-	for i := 0; i < 3; i++ {
-		if !w.reserveClaimSlot(jobexec.KindAnalyze) {
-			t.Fatalf("slot %d was not reserved", i+1)
-		}
+	for range 3 {
+		w.occupy(jobexec.KindAnalyze)
 	}
-	if w.reserveClaimSlot(jobexec.KindAnalyze) {
-		t.Fatal("claim capacity exceeded its configured limit")
+	if free := w.freeCapacity(); len(free) != 0 {
+		t.Fatalf("free = %v with every slot busy", free)
 	}
+	w.applyRemoteConfig(remoteConfig{Slots: map[string]int{jobexec.KindAnalyze: 1}, Revision: 2})
+	w.vacate(jobexec.KindAnalyze)
+	if free := w.freeCapacity(); len(free) != 0 {
+		t.Fatalf("free = %v: running executions were forgotten after shrinking", free)
+	}
+	w.vacate(jobexec.KindAnalyze)
+	w.vacate(jobexec.KindAnalyze)
+	if free := w.freeCapacity(); free[jobexec.KindAnalyze] != 1 {
+		t.Fatalf("free = %v, want the shrunken limit 1", free)
+	}
+}
 
-	w.applyRemoteConfig(remoteConfig{
-		Slots: map[string]int{jobexec.KindAnalyze: 1}, Revision: 2,
+// An idle node holds one long poll for all of its slots, not one per slot.
+func TestOneClaimCoversEverySlot(t *testing.T) {
+	master := &fakeMaster{}
+	w := newWorker(t, master, func(c *Config) {
+		c.Slots = map[string]int{jobexec.KindAnalyze: 3, jobexec.KindReplicate: 2}
 	})
-	if w.reserveClaimSlot(jobexec.KindAnalyze) {
-		t.Fatal("old in-flight claims were forgotten after shrinking")
+	w.claimWait = time.Millisecond
+	runFor(w, 150*time.Millisecond)
+	master.mu.Lock()
+	defer master.mu.Unlock()
+	if len(master.capacity) != 1 {
+		t.Fatalf("%d claims in 150ms, want a single claim for every slot", len(master.capacity))
 	}
-	w.releaseClaimSlot(jobexec.KindAnalyze)
-	w.releaseClaimSlot(jobexec.KindAnalyze)
-	if w.reserveClaimSlot(jobexec.KindAnalyze) {
-		t.Fatal("replacement loops exceeded the shrunken capacity")
-	}
-	w.releaseClaimSlot(jobexec.KindAnalyze)
-	if !w.reserveClaimSlot(jobexec.KindAnalyze) {
-		t.Fatal("released capacity was not reusable")
+	if got := master.capacity[0]; got[jobexec.KindAnalyze] != 3 || got[jobexec.KindReplicate] != 2 {
+		t.Fatalf("claimed capacity = %v", got)
 	}
 }
 

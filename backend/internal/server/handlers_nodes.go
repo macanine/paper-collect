@@ -59,28 +59,28 @@ func (s *Server) handleNodeHeartbeat(c *gin.Context) {
 
 func (s *Server) handleNodeClaim(c *gin.Context) {
 	var req struct {
-		Kinds          []string `json:"kinds"`
-		OCRProviderIDs []string `json:"ocr_provider_ids"`
-		WaitMS         int      `json:"wait_ms"`
-		Protocol       int      `json:"protocol"`
+		Capacity       map[string]int `json:"capacity"`
+		OCRProviderIDs []string       `json:"ocr_provider_ids"`
+		WaitMS         int            `json:"wait_ms"`
+		Protocol       int            `json:"protocol"`
 	}
 	if ae := decodeJSON(c, &req); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	in, err := s.svc.ClaimForNode(c.Request.Context(), currentNode(c), service.NodeClaim{
-		Kinds: req.Kinds, OCRProviderIDs: req.OCRProviderIDs,
+	jobs, err := s.svc.ClaimForNode(c.Request.Context(), currentNode(c), service.NodeClaim{
+		Capacity: req.Capacity, OCRProviderIDs: req.OCRProviderIDs,
 		Wait: time.Duration(req.WaitMS) * time.Millisecond, Protocol: req.Protocol,
 	})
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	if in == nil {
+	if len(jobs) == 0 {
 		respondNoContent(c)
 		return
 	}
-	s.respondData(c, http.StatusOK, in)
+	s.respondData(c, http.StatusOK, gin.H{"jobs": jobs})
 }
 
 func (s *Server) handleNodeProgress(c *gin.Context) {

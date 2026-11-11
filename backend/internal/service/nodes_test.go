@@ -198,11 +198,11 @@ func TestDrainingNodeWaitsThenResumesOnWake(t *testing.T) {
 	svc, conn := newWorkerTestService(t, t.TempDir(), "master")
 	job := addReplicateJob(t, conn, model.KindWebDAV)
 	node := addWorkerNode(t, conn, true)
-	req := NodeClaim{Kinds: []string{model.JobReplicate}, Wait: 80 * time.Millisecond, Protocol: jobexec.Protocol}
+	req := NodeClaim{Capacity: map[string]int{model.JobReplicate: 1}, Wait: 80 * time.Millisecond, Protocol: jobexec.Protocol}
 
 	started := time.Now()
 	in, err := svc.ClaimForNode(context.Background(), node, req)
-	if err != nil || in != nil {
+	if err != nil || len(in) != 0 {
 		t.Fatalf("draining claim = %+v, %v", in, err)
 	}
 	if elapsed := time.Since(started); elapsed < 80*time.Millisecond {
@@ -241,13 +241,13 @@ func TestClaimRejectsOtherProtocolAndDisabledNode(t *testing.T) {
 	job := addReplicateJob(t, conn, model.KindWebDAV)
 	node := addWorkerNode(t, conn, false)
 	var ae *apperr.Error
-	if _, err := svc.ClaimForNode(context.Background(), node, NodeClaim{Kinds: []string{model.JobReplicate}, Protocol: jobexec.Protocol + 1}); !errors.As(err, &ae) || ae.Status != 409 {
+	if _, err := svc.ClaimForNode(context.Background(), node, NodeClaim{Capacity: map[string]int{model.JobReplicate: 1}, Protocol: jobexec.Protocol + 1}); !errors.As(err, &ae) || ae.Status != 409 {
 		t.Fatalf("other protocol = %v, want 409", err)
 	}
 	if err := conn.Model(&model.Node{}).Where("id = ?", node.ID).Update("enabled", false).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ClaimForNode(context.Background(), node, NodeClaim{Kinds: []string{model.JobReplicate}, Protocol: jobexec.Protocol}); !errors.As(err, &ae) || ae.Status != 401 {
+	if _, err := svc.ClaimForNode(context.Background(), node, NodeClaim{Capacity: map[string]int{model.JobReplicate: 1}, Protocol: jobexec.Protocol}); !errors.As(err, &ae) || ae.Status != 401 {
 		t.Fatalf("disabled node = %v, want 401", err)
 	}
 	var got model.Job

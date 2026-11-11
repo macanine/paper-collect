@@ -164,57 +164,6 @@ var errNoJob = errors.New("no pending job")
 
 const claimAttempts = 64
 
-// StartWorker launches bounded local runners. Ingest, group and replicas on a
-// local drive only ever run on the master. Other replicate, analyze and index
-// jobs run here for the kinds the master keeps for itself; worker nodes claim
-// them over HTTP.
-func (s *Service) StartWorker(ctx context.Context) {
-	go s.reaperLoop(ctx)
-	s.runnerMu.Lock()
-	s.runnerParent, s.runnerActive = ctx, true
-	s.restartLocalRunnersLocked()
-	s.runnerMu.Unlock()
-}
-
-func (s *Service) restartLocalRunners() {
-	s.runnerMu.Lock()
-	defer s.runnerMu.Unlock()
-	if !s.runnerActive {
-		return
-	}
-	s.restartLocalRunnersLocked()
-}
-
-func (s *Service) restartLocalRunnersLocked() {
-	if s.runnerCancel != nil {
-		s.runnerCancel()
-	}
-	loopCtx, cancel := context.WithCancel(s.runnerParent)
-	s.runnerCancel = cancel
-	settings := s.workerSettings()
-	limits := map[string]int{
-		model.JobIngest:    settings.IngestConcurrency,
-		model.JobReplicate: settings.ReplicateConcurrency,
-		model.JobAnalyze:   settings.AnalyzeConcurrency,
-		model.JobIndex:     settings.IndexConcurrency,
-		model.JobGroup:     1,
-		model.JobDecide:    max(settings.AnalyzeConcurrency, 1),
-		model.JobEntity:    1,
-	}
-	// Group, decide and entity jobs need the database, so the master always runs them.
-	kinds := []string{model.JobIngest, model.JobGroup, model.JobDecide, model.JobEntity, model.JobReplicate}
-	for _, kind := range settings.Kinds {
-		if kind != model.JobReplicate {
-			kinds = append(kinds, kind)
-		}
-	}
-	for _, kind := range slices.Compact(kinds) {
-		for range limits[kind] {
-			go s.workerLoop(loopCtx, s.runnerParent, kind)
-		}
-	}
-}
-
 func (s *Service) reaperLoop(ctx context.Context) {
 	lastPurge := time.Time{}
 	for {
@@ -245,39 +194,6 @@ func (s *Service) reaperLoop(ctx context.Context) {
 	}
 }
 
-func (s *Service) workerLoop(loopCtx, jobCtx context.Context, kind string) {
-	for {
-		if loopCtx.Err() != nil {
-			return
-		}
-		if !s.reserveWorkerSlot(kind) {
-			timer := time.NewTimer(s.workerSettings().PollInterval)
-			select {
-			case <-loopCtx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-			continue
-		}
-		processed := s.processNextKind(jobCtx, kind)
-		s.releaseWorkerSlot(kind)
-		if processed {
-			continue
-		}
-		timer := time.NewTimer(s.workerSettings().PollInterval)
-		wake := s.wakeSignal()
-		select {
-		case <-loopCtx.Done():
-			timer.Stop()
-			return
-		case <-wake:
-			timer.Stop()
-		case <-timer.C:
-		}
-	}
-}
-
 // ProcessNext claims and runs at most one pending job of any kind. It is kept
 // for operational smoke checks and tests.
 func (s *Service) ProcessNext(ctx context.Context) bool {
@@ -292,19 +208,6 @@ func (s *Service) ProcessNext(ctx context.Context) bool {
 			return false
 		}
 		s.logf("claim job: %v", err)
-		return false
-	}
-	s.executeJob(ctx, job)
-	return true
-}
-
-func (s *Service) processNextKind(ctx context.Context, kind string) bool {
-	job, err := s.claimJob(ctx, kind)
-	if err != nil {
-		if errors.Is(err, errNoJob) || ctx.Err() != nil {
-			return false
-		}
-		s.logf("claim %s job: %v", kind, err)
 		return false
 	}
 	s.executeJob(ctx, job)
@@ -481,97 +384,6 @@ func (s *Service) applyRouteScope(tx *gorm.DB, owner claimer) (claimer, error) {
 	return owner, nil
 }
 
-// claimJobFor leases the oldest pending job of the given kinds (any kind when
-// empty) to one node.
-func (s *Service) claimJobFor(ctx context.Context, owner claimer, kinds []string) (model.Job, error) {
-	db := s.db.WithContext(ctx)
-	var claimed model.Job
-	err := db.Transaction(func(tx *gorm.DB) error {
-		var err error
-		owner, err = s.applyRouteScope(tx, owner)
-		if err != nil {
-			return err
-		}
-		if s.db.Dialector.Name() == "sqlite" {
-			return s.claimJobSQLite(tx, owner, kinds, &claimed)
-		}
-		return s.claimJobPostgres(tx, owner, kinds, &claimed)
-	})
-	if err != nil {
-		return model.Job{}, err
-	}
-	return claimed, nil
-}
-
-func (s *Service) claimJobPostgres(tx *gorm.DB, owner claimer, kinds []string, claimed *model.Job) error {
-	tried := make([]string, 0, claimAttempts)
-	for attempts := 0; attempts < claimAttempts; attempts++ {
-		var job model.Job
-		query := owner.scope(tx.Where("status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)", model.JobPending, s.now()))
-		if len(kinds) > 0 {
-			query = query.Where("kind IN ?", kinds)
-		}
-		if len(tried) > 0 {
-			query = query.Where("id NOT IN ?", tried)
-		}
-		err := query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Order("created_at ASC").Order("id ASC").First(&job).Error
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errNoJob
-			}
-			return err
-		}
-		tried = append(tried, job.ID)
-		if err := s.tryClaim(tx, owner, job, claimed); err != nil {
-			if errors.Is(err, errJobLocked) {
-				continue
-			}
-			if errors.Is(err, errJobClaimed) {
-				continue
-			}
-			return err
-		}
-		return nil
-	}
-	return errNoJob
-}
-
-// claimJobSQLite uses the database write lock from BEGIN IMMEDIATE as the
-// cross-process exclusion primitive. A read-then-update would otherwise race
-// between separate server processes.
-func (s *Service) claimJobSQLite(tx *gorm.DB, owner claimer, kinds []string, claimed *model.Job) error {
-	tried := make([]string, 0, claimAttempts)
-	for attempts := 0; attempts < claimAttempts; attempts++ {
-		var job model.Job
-		query := owner.scope(tx.Where("status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)", model.JobPending, s.now()))
-		if len(kinds) > 0 {
-			query = query.Where("kind IN ?", kinds)
-		}
-		if len(tried) > 0 {
-			query = query.Where("id NOT IN ?", tried)
-		}
-		if err := query.Order("created_at ASC").Order("id ASC").First(&job).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errNoJob
-			}
-			return err
-		}
-		tried = append(tried, job.ID)
-		if err := s.tryClaim(tx, owner, job, claimed); err != nil {
-			if errors.Is(err, errJobLocked) {
-				continue
-			}
-			if errors.Is(err, errJobClaimed) {
-				continue
-			}
-			return err
-		}
-		return nil
-	}
-	return errNoJob
-}
-
 func (s *Service) tryClaim(tx *gorm.DB, owner claimer, job model.Job, claimed *model.Job) error {
 	now := s.now()
 	until := now.Add(s.workerSettings().LeaseDuration)
@@ -672,9 +484,9 @@ func (s *Service) executeJob(ctx context.Context, job model.Job) {
 	s.running.Add(1)
 	defer s.running.Add(-1)
 	runCtx, cancel := context.WithCancelCause(ctx)
-	stopHeartbeat := s.heartbeat(runCtx, cancel, job)
+	release := s.holdLease(job, cancel)
 	defer func() {
-		stopHeartbeat()
+		release()
 		cancel(nil)
 		if r := recover(); r != nil {
 			s.logf("job %s panicked", job.ID)
@@ -817,61 +629,6 @@ func (s *Service) recordFailure(job model.Job, class, message string, extra map[
 // interruptJob returns a job whose executor stopped early to the queue.
 func (s *Service) interruptJob(job model.Job) {
 	s.requeueJob(job.ID, job.LeaseOwner, func(tx *gorm.DB) error { return s.resetProjectionTx(tx, []string{job.ID}, s.now()) })
-}
-
-func (s *Service) heartbeat(parent context.Context, cancel context.CancelCauseFunc, job model.Job) func() {
-	ctx, stop := context.WithCancel(parent)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			settings := s.workerSettings()
-			timer := time.NewTimer(settings.HeartbeatInterval)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-				now := s.now()
-				until := now.Add(settings.LeaseDuration)
-				err := s.db.Transaction(func(tx *gorm.DB) error {
-					res := tx.Model(&model.Job{}).
-						Where("id = ? AND status = ? AND lease_owner = ? AND lease_until IS NOT NULL AND lease_until >= ?",
-							job.ID, model.JobRunning, job.LeaseOwner, now).
-						Updates(map[string]any{"lease_until": until, "heartbeat_at": now, "updated_at": now})
-					if res.Error != nil {
-						return res.Error
-					}
-					if res.RowsAffected != 1 {
-						return errLeaseLost
-					}
-					if key := jobLockKey(job); key != "" {
-						res = tx.Model(&model.JobLock{}).Where("key = ? AND job_id = ?", key, job.ID).
-							Updates(map[string]any{"lease_until": until, "updated_at": now})
-						if res.Error != nil {
-							return res.Error
-						}
-						if res.RowsAffected != 1 {
-							return errLeaseLost
-						}
-					}
-					return nil
-				})
-				if err != nil {
-					if errors.Is(err, errLeaseLost) {
-						s.logf("job %s lost its lease; stopping worker", job.ID)
-						cancel(errLeaseLost)
-						return
-					}
-					s.logf("heartbeat job %s: %v", job.ID, err)
-				}
-			}
-		}
-	}()
-	return func() {
-		stop()
-		<-done
-	}
 }
 
 var errLeaseLost = errors.New("job lease lost")

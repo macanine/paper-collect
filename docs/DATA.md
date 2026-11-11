@@ -8,7 +8,7 @@
 - 本机开发默认在启动时执行 GORM `AutoMigrate` 增量建表/加列；Compose 由一次性 `migrate` 服务执行，应用设置 `DB_AUTO_MIGRATE=false`。**没有版本化迁移记录**，`AutoMigrate` 也不会删除或重命名已有表/列/索引。升级前必须先备份。
 - SQLite 使用 pragma：`foreign_keys(1)`、`busy_timeout(5000)`、`journal_mode(WAL)`、`_txlock=immediate`；连接池固定 1 个连接，避免多 writer 锁争用。PostgreSQL 默认 10 个打开连接、5 个空闲连接、30 分钟连接寿命。
 - GORM 日志级别为 silent，避免 SQL 参数中的密文/哈希进入进程日志。
-- 任务使用 `lease_owner`、`lease_until`、`heartbeat_at` 和 `job_locks`。PostgreSQL 通过 `FOR UPDATE SKIP LOCKED` 领取，SQLite 通过 `BEGIN IMMEDIATE` 条件更新领取；所有领取都在主端完成，从端通过 HTTP 请求主端。
+- 任务使用 `lease_owner`、`lease_until`、`heartbeat_at` 和 `job_locks`。PostgreSQL 通过 `FOR UPDATE SKIP LOCKED` 领取，SQLite 通过 `BEGIN IMMEDIATE` 条件更新领取；所有领取都在主端完成，一次事务可为多个类型批量领取，从端通过 HTTP 请求主端。
 - 数据库保存元数据、任务/副本状态、凭据密文和分析/索引结果；原件和 `local` 网盘副本在文件系统。两者不是同一事务，必须一起备份。
 
 ## 2. 表清单

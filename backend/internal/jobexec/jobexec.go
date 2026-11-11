@@ -29,7 +29,7 @@ const (
 
 // Protocol is the master/worker wire version. A worker with another version may
 // heartbeat, so it stays visible, but cannot claim jobs.
-const Protocol = 3
+const Protocol = 4
 
 // RemoteKinds lists the kinds that can leave the master.
 var RemoteKinds = []string{KindReplicate, KindAnalyze, KindIndex}

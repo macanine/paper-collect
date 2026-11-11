@@ -36,6 +36,7 @@ const (
 	nodeMetricsRetained = 360 // one hour at the heartbeat interval
 	nodeStatsWindow     = time.Hour
 	maxClaimWait        = 25 * time.Second
+	maxNodeSlots        = 64 // per kind, matching the worker's own cap
 )
 
 // NodeView is a node with its derived status.
@@ -53,7 +54,9 @@ type NodeView struct {
 
 // NodeClaim is one worker request for work.
 type NodeClaim struct {
-	Kinds          []string
+	// Capacity is the number of free slots per job kind. A node sends one claim
+	// for all its free slots, so it holds a single long poll however many it has.
+	Capacity       map[string]int
 	OCRProviderIDs []string
 	Wait           time.Duration
 	Protocol       int
@@ -566,33 +569,36 @@ func (s *Service) NodeHeartbeat(ctx context.Context, n model.Node, hb Heartbeat,
 	return reply, nil
 }
 
-// ClaimForNode leases one job to a worker and returns its prepared input. It
-// waits up to req.Wait for work; a nil input means nothing is available. A
-// draining node and a node with nothing it can run wait like an idle one, so
-// workers never spin on immediate empty replies.
-func (s *Service) ClaimForNode(ctx context.Context, n model.Node, req NodeClaim) (*jobexec.Input, error) {
+// ClaimForNode leases up to the node's free capacity in one transaction and
+// returns the prepared inputs. It waits up to req.Wait for work; an empty
+// result means nothing is available. A draining node and a node with nothing it
+// can run wait like an idle one, so workers never spin on immediate empty replies.
+func (s *Service) ClaimForNode(ctx context.Context, n model.Node, req NodeClaim) ([]jobexec.Input, error) {
 	if req.Protocol != jobexec.Protocol {
 		return nil, apperr.Conflict(fmt.Sprintf("节点协议版本 %d 与主端 %d 不一致，请升级节点", req.Protocol, jobexec.Protocol))
 	}
+	capacity := map[string]int{}
 	kinds := []string{}
-	for _, k := range uniqueStrings(req.Kinds) {
-		if jobexec.IsRemoteKind(k) {
+	for _, k := range jobexec.RemoteKinds {
+		if count := req.Capacity[k]; count > 0 {
+			capacity[k] = min(count, maxNodeSlots)
 			kinds = append(kinds, k)
 		}
 	}
 	if len(kinds) == 0 {
-		return nil, apperr.Validation("kinds 至少包含 replicate、analyze、index 中的一项")
+		return nil, apperr.Validation("capacity 至少为 replicate、analyze、index 中的一项提供空闲数")
 	}
 	kinds, ocrProviderID, err := s.reachableKinds(ctx, kinds, req.OCRProviderIDs)
 	if err != nil {
 		return nil, apperr.Internal(err)
 	}
-	wait := req.Wait
-	if wait > maxClaimWait {
-		wait = maxClaimWait
-	}
-	deadline := time.Now().Add(wait)
 	owner := claimer{ID: n.ID, Name: n.Name, RemoteOnly: true}
+	reqs := make([]claimRequest, 0, len(kinds))
+	for _, k := range kinds {
+		reqs = append(reqs, claimRequest{Kind: k, Limit: capacity[k], Owner: owner})
+	}
+	wait := min(req.Wait, maxClaimWait)
+	deadline := time.Now().Add(wait)
 	for ctx.Err() == nil {
 		wake := s.wakeSignal()
 		var current model.Node
@@ -605,25 +611,34 @@ func (s *Service) ClaimForNode(ctx context.Context, n model.Node, req NodeClaim)
 		if !current.Enabled {
 			return nil, apperr.Unauthorized("节点已停用")
 		}
-		if !current.Draining && len(kinds) > 0 {
-			job, err := s.claimJobFor(ctx, owner, kinds)
-			if err == nil {
+		if !current.Draining && len(reqs) > 0 {
+			jobs, err := s.claimBatch(ctx, reqs)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, nil
+				}
+				return nil, apperr.Internal(err)
+			}
+			inputs := make([]jobexec.Input, 0, len(jobs))
+			for _, job := range jobs {
 				in, err := s.prepareJob(ctx, job, ocrProviderID)
 				if err != nil {
 					s.handlePrepareError(ctx, job, err)
 					continue
 				}
-				if ctx.Err() != nil { // the worker hung up; nobody would run it
-					s.interruptJob(job)
-					return nil, nil
-				}
-				return &in, nil
+				inputs = append(inputs, in)
 			}
-			if !errors.Is(err, errNoJob) {
-				if ctx.Err() != nil {
-					return nil, nil
+			if ctx.Err() != nil { // the worker hung up; nobody would run them
+				for _, job := range jobs {
+					s.interruptJob(job)
 				}
-				return nil, apperr.Internal(err)
+				return nil, nil
+			}
+			if len(inputs) > 0 {
+				return inputs, nil
+			}
+			if len(jobs) > 0 {
+				continue // every claimed job was settled during preparation
 			}
 		}
 		remaining := time.Until(deadline)

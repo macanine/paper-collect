@@ -19,7 +19,6 @@ import (
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/blob"
 	"github.com/nic/paper-collect/backend/internal/cryptobox"
-	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/office"
 	"github.com/nic/paper-collect/backend/internal/storage"
 	"gorm.io/gorm"
@@ -88,12 +87,12 @@ type Service struct {
 	wakeMu       sync.Mutex
 	worker       WorkerSettings
 	workerMu     sync.RWMutex
-	runnerMu     sync.Mutex
-	runnerParent context.Context
-	runnerCancel context.CancelFunc
-	runnerActive bool
+	kick         chan struct{} // coalesced dispatcher wake-up
 	slotMu       sync.Mutex
 	activeSlots  map[string]int
+	leaseMu      sync.Mutex
+	leases       map[string]*localLease
+	renewing     bool
 	pullCacheTTL time.Duration
 	pullCacheDir string
 	metrics      nodeMetrics
@@ -190,17 +189,21 @@ func New(opts Options) (*Service, error) {
 		logf:         logf,
 		wake:         make(chan struct{}),
 		worker:       worker,
+		kick:         make(chan struct{}, 1),
 		activeSlots:  map[string]int{},
+		leases:       map[string]*localLease{},
 		pullCacheTTL: pullCacheTTL,
 		pullCacheDir: pullCacheDir,
 	}, nil
 }
 
+// notify wakes the local dispatcher and every node waiting in a long poll.
 func (s *Service) notify() {
 	s.wakeMu.Lock()
 	close(s.wake)
 	s.wake = make(chan struct{})
 	s.wakeMu.Unlock()
+	s.kickDispatcher()
 }
 
 func (s *Service) wakeSignal() <-chan struct{} {
@@ -223,45 +226,6 @@ func (s *Service) setWorkerSettings(worker WorkerSettings) WorkerSettings {
 	worker.Kinds = append([]string(nil), worker.Kinds...)
 	s.worker = worker
 	return worker
-}
-
-func (s *Service) reserveWorkerSlot(kind string) bool {
-	settings := s.workerSettings()
-	limit := 0
-	switch kind {
-	case model.JobIngest:
-		limit = settings.IngestConcurrency
-	case model.JobGroup, model.JobEntity:
-		limit = 1
-	case model.JobDecide:
-		limit = max(settings.AnalyzeConcurrency, 1)
-	case model.JobReplicate:
-		limit = settings.ReplicateConcurrency
-	case model.JobAnalyze:
-		limit = settings.AnalyzeConcurrency
-	case model.JobIndex:
-		limit = settings.IndexConcurrency
-	}
-	if limit <= 0 {
-		return false
-	}
-	s.slotMu.Lock()
-	defer s.slotMu.Unlock()
-	if s.activeSlots[kind] >= limit {
-		return false
-	}
-	s.activeSlots[kind]++
-	return true
-}
-
-func (s *Service) releaseWorkerSlot(kind string) {
-	s.slotMu.Lock()
-	defer s.slotMu.Unlock()
-	if s.activeSlots[kind] <= 1 {
-		delete(s.activeSlots, kind)
-		return
-	}
-	s.activeSlots[kind]--
 }
 
 func newID() string { return uuid.NewString() }

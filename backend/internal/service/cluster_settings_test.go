@@ -142,30 +142,36 @@ func TestLocalRunnerCapacityFollowsRuntimeShrink(t *testing.T) {
 	settings := svc.workerSettings()
 	settings.AnalyzeConcurrency = 3
 	svc.setWorkerSettings(settings)
-
-	for i := 0; i < 3; i++ {
-		if !svc.reserveWorkerSlot(model.JobAnalyze) {
-			t.Fatalf("slot %d was not reserved", i+1)
+	free := func() int {
+		t.Helper()
+		reqs, err := svc.localClaims(context.Background())
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, req := range reqs {
+			if req.Kind == model.JobAnalyze {
+				return req.Limit
+			}
+		}
+		return 0
 	}
-	if svc.reserveWorkerSlot(model.JobAnalyze) {
-		t.Fatal("claim capacity exceeded its configured limit")
+	if got := free(); got != 3 {
+		t.Fatalf("free analyze capacity = %d, want 3", got)
 	}
-
-	settings = svc.workerSettings()
+	svc.activeSlots[model.JobAnalyze] = 3
+	if got := free(); got != 0 {
+		t.Fatalf("free capacity with every slot busy = %d", got)
+	}
 	settings.AnalyzeConcurrency = 1
 	svc.setWorkerSettings(settings)
-	if svc.reserveWorkerSlot(model.JobAnalyze) {
-		t.Fatal("old in-flight claims were forgotten after shrinking")
+	svc.releaseWorkerSlot(model.JobAnalyze)
+	if got := free(); got != 0 {
+		t.Fatalf("running jobs were forgotten after shrinking: free = %d", got)
 	}
 	svc.releaseWorkerSlot(model.JobAnalyze)
 	svc.releaseWorkerSlot(model.JobAnalyze)
-	if svc.reserveWorkerSlot(model.JobAnalyze) {
-		t.Fatal("replacement runners exceeded the shrunken capacity")
-	}
-	svc.releaseWorkerSlot(model.JobAnalyze)
-	if !svc.reserveWorkerSlot(model.JobAnalyze) {
-		t.Fatal("released capacity was not reusable")
+	if got := free(); got != 1 {
+		t.Fatalf("released capacity = %d, want the shrunken limit 1", got)
 	}
 }
 

@@ -106,8 +106,7 @@ func (s *Service) manageReplica(ctx context.Context, p auth.Principal, id, actio
 	}
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	stopHeartbeat := s.heartbeat(runCtx, cancel, deletionJob)
-	defer stopHeartbeat()
+	defer s.holdLease(deletionJob, cancel)()
 	adapter, err := s.adapterFor(d)
 	if err == nil && r.RemoteID != "" {
 		deleter, ok := adapter.(storage.Deleter)

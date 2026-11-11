@@ -163,20 +163,25 @@ func TestNodeCannotCompleteAnotherNodesJob(t *testing.T) {
 	}
 	a := map[string]string{"Authorization": "Bearer " + token("A")}
 	b := map[string]string{"Authorization": "Bearer " + token("B")}
-	status, body := env.do(t, http.MethodPost, "/internal/v1/jobs/claim", map[string]any{"kinds": []string{"replicate"}, "protocol": jobexec.Protocol}, a)
-	var claimed struct {
+	status, body := env.do(t, http.MethodPost, "/internal/v1/jobs/claim", map[string]any{"capacity": map[string]int{"replicate": 1}, "protocol": jobexec.Protocol}, a)
+	var reply struct {
 		Data struct {
-			JobID     string `json:"job_id"`
-			Replicate struct {
-				Drive struct {
-					Kind string `json:"kind"`
-				} `json:"drive"`
-			} `json:"replicate"`
+			Jobs []struct {
+				JobID     string `json:"job_id"`
+				Replicate struct {
+					Drive struct {
+						Kind string `json:"kind"`
+					} `json:"drive"`
+				} `json:"replicate"`
+			} `json:"jobs"`
 		} `json:"data"`
 	}
-	if status != http.StatusOK || json.Unmarshal(body, &claimed) != nil || claimed.Data.JobID == "" || claimed.Data.Replicate.Drive.Kind != "webdav" {
+	if status != http.StatusOK || json.Unmarshal(body, &reply) != nil || len(reply.Data.Jobs) != 1 ||
+		reply.Data.Jobs[0].JobID == "" || reply.Data.Jobs[0].Replicate.Drive.Kind != "webdav" {
 		t.Fatalf("claim %d: %s", status, body)
 	}
+	claimed := struct{ Data struct{ JobID string } }{}
+	claimed.Data.JobID = reply.Data.Jobs[0].JobID
 	if status, _ := env.do(t, http.MethodPost, "/internal/v1/jobs/"+claimed.Data.JobID+"/fail", map[string]any{"error": "x"}, b); status != http.StatusConflict {
 		t.Fatalf("other node fail = %d, want 409", status)
 	}
