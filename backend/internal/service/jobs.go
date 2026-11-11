@@ -200,6 +200,9 @@ const claimAttempts = 64
 
 func (s *Service) reaperLoop(ctx context.Context) {
 	lastPurge := time.Time{}
+	// The first retention pass waits a full interval so a restart loop never
+	// walks the whole store repeatedly.
+	lastRetention := time.Now()
 	for {
 		settings := s.workerSettings()
 		timer := time.NewTimer(settings.HeartbeatInterval)
@@ -214,6 +217,17 @@ func (s *Service) reaperLoop(ctx context.Context) {
 					s.logf("purge expired trash: %v", err)
 				} else if n > 0 {
 					s.logf("purged %d expired trashed packs", n)
+				}
+			}
+			if time.Since(lastRetention) > retentionInterval {
+				lastRetention = time.Now()
+				report, err := s.RunRetention(ctx)
+				if err != nil {
+					s.logf("retention: %v", err)
+				}
+				if report != (RetentionReport{}) {
+					s.logf("retention removed %d orphan originals, %d previews, %d temp files, %d old jobs (%d bytes)",
+						report.OrphanBlobs, report.OrphanRenders, report.StaleTemp, report.Jobs, report.FreedBytes)
 				}
 			}
 			recovered, err := s.RecoverExpiredLeases(ctx)

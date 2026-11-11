@@ -122,6 +122,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 
 - `DATABASE_DSN` 若指向 `DATA_DIR` 外的 SQLite 文件或 PostgreSQL，数据库不在上述默认位置；CAS/临时文件/分析 Markdown/`local` 网盘副本仍在 `DATA_DIR`。
 - CAS 以内容 SHA-256 寻址；相同内容只存一份。`Publish` 用原子 rename 落盘，重复内容丢弃临时文件。
+- **自动保留期清理**：主端每 24 小时（启动后满一个周期才首次运行）执行一次：删除没有 `blobs` 行且修改时间早于 24 小时的 CAS 原件（purge 提交后、删除文件前崩溃留下的残留）；删除原件已不存在的 Office 预览缓存；删除 `tmp/` 下超过 24 小时的 `*.part` 临时文件（`upload-archives/`、`material-pulls/` 由各自流程管理，不在此清理）；删除完成超过 30 天、且没有被 `uploads`、`file_cards`、`pack_decisions`、`material_index_states` 引用的 succeeded 任务。failed 任务一律保留以便重试。24 小时宽限保证刚写入 CAS、尚未提交数据库的导入不受影响。
 - `tmp/material-pulls/<sha256>` 是按需拉取缓存，不是 CAS。写入前校验资料声明的大小和 SHA-256，过期后由读取或后续拉取机会性清理；保留期由 `PULL_CACHE_TTL` 控制，不参与资料归档或副本状态。
 - DOCX 预览是可重建的派生文件，原件最后一个资料引用删除时一并清理；转换异常退出时可能留下临时目录。预览和临时文件也可能包含资料正文，备份和权限应与原件一致。
 - 原始上传在 `tmp/` 完成后才发布到 CAS；失败不会标记 entry received，但极端情况下可能留下未被引用的 CAS 文件。
