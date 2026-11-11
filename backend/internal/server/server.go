@@ -86,10 +86,10 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.POST("/ai/providers/probe", s.requireScope(model.ScopeAIWrite), s.handleProbeAIProviders)
 	authGroup.POST("/ai/providers/:id/probe", s.requireScope(model.ScopeAIWrite), s.handleProbeSavedAIProvider)
 	authGroup.POST("/ai/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.handleTestAIProvider)
-	authGroup.GET("/ocr/providers", s.requireScope(model.ScopeAIRead), s.handleListOCRProviders)
-	authGroup.POST("/ocr/providers", s.requireScope(model.ScopeAIWrite), s.handleCreateOCRProvider)
-	authGroup.PATCH("/ocr/providers/:id", s.requireScope(model.ScopeAIWrite), s.handlePatchOCRProvider)
-	authGroup.POST("/ocr/providers/:id/test", s.requireScope(model.ScopeAIWrite), s.handleTestOCRProvider)
+	authGroup.GET("/ai/ocr-providers", s.requireScope(model.ScopeAIRead), s.handleListOCRProviders)
+	authGroup.POST("/ai/ocr-providers", s.requireScope(model.ScopeAIWrite), s.handleCreateOCRProvider)
+	authGroup.PATCH("/ai/ocr-providers/:id", s.requireScope(model.ScopeAIWrite), s.handlePatchOCRProvider)
+	authGroup.POST("/ai/ocr-providers/:id/test", s.requireScope(model.ScopeAIWrite), s.handleTestOCRProvider)
 	authGroup.GET("/ai/settings", s.requireScope(model.ScopeAIRead), s.handleGetAISettings)
 	authGroup.PUT("/ai/settings", s.requireScope(model.ScopeAIWrite), s.handlePutAISettings)
 
@@ -106,7 +106,7 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.GET("/packs/:id/download", s.requireScope(model.ScopeMaterialsRead), s.handleDownloadPack)
 
 	authGroup.GET("/materials", s.requireScope(model.ScopeMaterialsRead), s.handleListMaterials)
-	authGroup.GET("/materials/review-packs", s.requireScope(model.ScopeMaterialsRead), s.handleListReviewPacks)
+	authGroup.GET("/inbox", s.requireScope(model.ScopeMaterialsRead), s.handleListReviewPacks)
 	authGroup.GET("/materials/stats", s.requireScope(model.ScopeMaterialsRead), s.handleLibraryStats)
 	authGroup.POST("/materials/accept", s.requireScope(model.ScopeMaterialsWrite), s.handleAcceptMaterials)
 	authGroup.GET("/materials/:id", s.requireScope(model.ScopeMaterialsRead), s.handleGetMaterial)

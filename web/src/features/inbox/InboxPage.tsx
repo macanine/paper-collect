@@ -3,7 +3,7 @@ import { Alert, App, Button, Card, Checkbox, Collapse, Empty, Form, InputNumber,
 import { EyeOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PackMember, Part, ReviewPack, Stage } from '../../shared/api/types';
+import type { PackMember, Part, InboxPack, Stage } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { ATTENTION_REASON_LABELS, attentionReasonLabel } from '../../shared/lib/labels';
@@ -23,7 +23,7 @@ import { usePackFacets } from '../packs/queries';
 const PRIMARY_CATALOG_FIELDS: CatalogField[] = ['doc_type', 'subject_codes', 'grade', 'cohort', 'region', 'organization', 'exam_name'];
 const ADVANCED_CATALOG_FIELDS: CatalogField[] = ['term', 'exam_date', 'chapter', 'tags'];
 const CATALOG_FIELDS = [...PRIMARY_CATALOG_FIELDS, ...ADVANCED_CATALOG_FIELDS];
-const EMPTY_REVIEW_PACKS: ReviewPack[] = [];
+const EMPTY_REVIEW_PACKS: InboxPack[] = [];
 
 interface MemberEdit {
   part: Part;
@@ -34,12 +34,12 @@ function initialMemberEdits(members: PackMember[]): Record<string, MemberEdit> {
   return Object.fromEntries(members.map((member) => [member.id, { part: member.part, answer_start_page: member.answer_start_page }]));
 }
 
-function packReasons(group: ReviewPack): string[] {
+function packReasons(group: InboxPack): string[] {
   return group.items.flatMap((item) => item.attention_reasons).filter((reason, index, all) => all.indexOf(reason) === index);
 }
 
 /** 右侧：一套需关注资料。AI 的编目与校验问题在上，人工修改（会被锁定）在下。 */
-function AttentionPanel({ group, stage, onDone }: { group: ReviewPack; stage: Stage; onDone: () => void }) {
+function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Stage; onDone: () => void }) {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const facets = usePackFacets();

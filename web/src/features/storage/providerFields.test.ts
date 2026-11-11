@@ -38,7 +38,7 @@ describe('网盘字段表', () => {
     expect(validateProviderForm({ ...values, config: { auth_mode: 'direct' } }, 'create').errors['config.client_id']).toBeDefined();
     const previous: Drive = {
       id: 'old', name: '旧端点', kind: 'onedrive', enabled: true,
-      root_path: '', max_file_bytes: 0, allowed_exts: [], read_order: 100, on_path_change: 'move',
+      root_path: '', max_file_bytes: 0, allowed_exts: [], read_order: 100, on_path_change: 'move', route_mode: 'pool', routes: [],
       config: { client_id: 'old' }, secret_configured: true,
       capabilities: { upload: true, download: true, share: true, folders: true, move: true, delete: true },
       stats: {}, created_at: '', updated_at: '',

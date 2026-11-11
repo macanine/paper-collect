@@ -289,7 +289,7 @@ func fakeCatalogDecision(text string) string {
 
 func configureOCRProvider(t *testing.T, env *testEnv, baseURL, kind, token string) string {
 	t.Helper()
-	status, body := env.do(t, http.MethodPost, "/api/v1/ocr/providers", map[string]any{
+	status, body := env.do(t, http.MethodPost, "/api/v1/ai/ocr-providers", map[string]any{
 		"name": kind + " 测试服务", "kind": kind, "base_url": baseURL, "token": token, "enabled": true, "priority": 1,
 	}, nil)
 	if status != http.StatusCreated {

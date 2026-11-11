@@ -190,7 +190,7 @@ Compose 的 RapidOCR 使用独立 `rapidocr-jobs` 卷保存上传原件和 JSONL
 - [ ] 资料列表、详情、SHA 与大小正确。
 - [ ] 至少下载一份原件（本地 CAS 与云端副本各抽一份，如适用）。
 - [ ] 任务列表没有异常的 running 状态；必要时等待启动恢复或手动重试 failed。
-- [ ] 如使用 AI：`/ai/settings`、`/ai/providers`、`/ocr/providers` 可读且密钥配置状态正确，OCR/模型测试成功（真实联网能力另行确认）。
+- [ ] 如使用 AI：`/ai/settings`、`/ai/providers`、`/ai/ocr-providers` 可读且密钥配置状态正确，OCR/模型测试成功（真实联网能力另行确认）。
 - [ ] 如使用索引：抽查题目索引和搜题结果；重建失败时旧索引是否仍可查询。
 - [ ] 如使用网盘：确认网盘健康、同步规则正确，副本 ready/失败/规则外状态与远端实际文件一致。
 - [ ] 备份文件和 `MASTER_KEY` 已分别妥善保存，恢复演练记录已更新。

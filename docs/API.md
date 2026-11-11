@@ -1,6 +1,8 @@
 # HTTP API v1 接口合同
 
-版本 1.7.0 · 2026-11-08。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+版本 1.8.0 · 2026-11-10。基础路径 `/api/v1`；MCP 路径 `/mcp`。以下为实现合同，不是云盘真实联调完成声明。
+
+响应类型与枚举的唯一来源是后端 DTO：`backend/internal/server/contract.go` 生成 `web/src/shared/api/contract.gen.ts`（`make contract`），测试会拒绝过期的生成文件。本文件中的字段说明与生成类型冲突时以生成类型为准。1.8.0 变更：`GET /materials/review-packs` 改为 `GET /inbox`（MCP `inbox_list`）；OCR 服务商接口移到 `/ai/ocr-providers`；AI/OCR 测试统一返回 `ProviderTestResult`。
 
 ## 通用规范
 
@@ -21,7 +23,7 @@
 
 `Material`（文件）：`id,pack_id,position:integer,part:Part,answer_start_page:integer,title(1..255),file_name,original_name,stage:Stage,ai_step:""|read|group|decide,attention_reasons:string[],part_locked:boolean,status:MaterialStatus,sync_status:SyncStatus,sync_planned_at:date-time|null,media_type,size_bytes,sha256(64 位小写十六进制，全局唯一),created_at,updated_at,pack?:Pack`。**一个 SHA-256 只对应一个 Material**：同一内容再次上传只追加 `MaterialSource`，不重复解析、计费或新建套卷。**Part 有且只有 8 类**：questions=试题，只有题目；answers=答案，只有答案或解析；full=题目+答案在同一文件（后部集中答案）；teacher=教师版，每题后紧跟答案；answer_sheet=空白答题卡；listening=听力音频或原文；main=单文档资料正文（讲义、课件、指南）；other=无法判断。详情额外含 `sources:MaterialSource[]`、`replicas:Replica[]` 和 `pack:Pack`。**MaterialStatus** 只回答原件是否安全：archived=原件在本机 CAS；missing=本机原件缺失，只能从网盘副本读取。**SyncStatus** 单独回答网盘同步进度：waiting_catalog=等待编目确定（规则依赖编目，尚未生成计划）；not_required=命中的规则不上传任何网盘；syncing=有副本在等待、上传或移动；synced=全部必需目标已就绪；attention=必需目标失败、必需目标的分享失败，或副本路径已偏离（网盘设置为保持原位）。`sync_planned_at` 为最近一次生成同步计划的时间。`ai_step` 是处理中文件所在的 AI 步骤。`attention_reasons` 为需关注原因：ai_failed（模型多次失败）、group_unverified（分组没有可靠结果，暂时单独成套）、metadata_only（没有读到正文，只依据文件名判断），以及未通过的关键校验代码（可带 `:字段` 后缀，如 duplicate_role:files、subjects_missing:subjects、grade_missing:grade、doc_type_missing:doc_type、answer_page:files、missing_file:files）。`part_locked=true` 表示部件由人工设定，AI 编目不会改动。
 
-`ReviewPack`：`pack:Pack,items:ReviewPackItem[]`；`ReviewPackItem` 为 `id,stage,attention_reasons[]`，只包含当前 stage/reason 命中的文件，`pack.members` 仍包含整套文件。尚未归入套卷的文件（仍在阅读或分组）不出现在此列表。
+`InboxPack`：`pack:Pack,items:InboxItem[]`；`InboxItem` 为 `id,stage,attention_reasons[]`，只包含当前 stage/reason 命中的文件，`pack.members` 仍包含整套文件。尚未归入套卷的文件（仍在阅读或分组）不出现在此列表。
 
 `MaterialSource`：`id,material_id,upload_id,user_id,path,duplicate:boolean,created_at`；记录每一次到达。`duplicate=true` 表示这次上传的内容此前已经归档。
 
@@ -119,9 +121,9 @@ JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。tr
 
 查询：page、page_size、`q`（标题/原始文件名，<=200）、`stage`（Stage）、`part`（Part）、`status`（MaterialStatus）、`sync_status`（SyncStatus）、`reason`（需关注原因或校验代码前缀，小写字母与下划线）、`pack_id`、`sha256`（64 位十六进制，精确查询相同内容）。200 Page<Material>；`stage=attention` 按 created_at 升序，其余按时间倒序。
 
-### GET /materials/review-packs（materials:read）
+### GET /inbox（materials:read）
 
-按套卷分页读取需处理的文件，查询 `page`、`page_size`、`stage`（默认 `attention`）和 `reason`。200 Page<ReviewPack>；每个套卷只返回一次，`pack` 包含全部成员，`items` 只包含命中当前 stage/reason 的文件及其需关注原因。适合管理台按套卷核对，避免同一套卷跨页重复。
+按套卷分页读取需处理的文件，查询 `page`、`page_size`、`stage`（默认 `attention`）和 `reason`。200 Page<InboxPack>；每个套卷只返回一次，`pack` 包含全部成员，`items` 只包含命中当前 stage/reason 的文件及其需关注原因。适合管理台按套卷核对，避免同一套卷跨页重复。
 
 ### GET /materials/stats（materials:read）
 
@@ -334,10 +336,10 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 `OCRProvider`：`id,name(1..128),kind:mineru|paddleocr|rapidocr,base_url(http/https),model(<=200；PaddleOCR 默认 PP-OCRv6，RapidOCR 默认 PP-OCRv5，MinerU 可为空),enabled:boolean,priority:integer(0..1000),token_configured:boolean,created_at,updated_at`。请求字段为 `{"name":"RapidOCR（自建）","kind":"rapidocr","base_url":"http://rapidocr:9003","model":"PP-OCRv5","enabled":true,"priority":10}`；自建 RapidOCR 可以省略 `token`。外部 PaddleOCR/MinerU 的 `token` 只写不读，PATCH 省略保留、空串清除。kind 创建后不可修改；不提供物理删除，使用 `enabled=false` 停用。PaddleOCR token 从 [AI Studio PaddleOCR 任务页](https://aistudio.baidu.com/paddleocr/task) 获取。
 
-- `GET /ocr/providers`（ai:read）：200 OCRProvider 数组，按 priority 升序。
-- `POST /ocr/providers`（ai:write）：201 OCRProvider。缺少 `kind` 时按 paddleocr；PaddleOCR 缺少 model 时默认 `PP-OCRv6`，RapidOCR 缺少 model 时默认 `PP-OCRv5`。
-- `PATCH /ocr/providers/{id}`（ai:write）：200 OCRProvider。
-- `POST /ocr/providers/{id}/test`（ai:write）：用已保存配置探测可达性与令牌；200 `{"healthy":boolean,"message":"脱敏说明"}`，不伪造成功。
+- `GET /ai/ocr-providers`（ai:read）：200 OCRProvider 数组，按 priority 升序。
+- `POST /ai/ocr-providers`（ai:write）：201 OCRProvider。缺少 `kind` 时按 paddleocr；PaddleOCR 缺少 model 时默认 `PP-OCRv6`，RapidOCR 缺少 model 时默认 `PP-OCRv5`。
+- `PATCH /ai/ocr-providers/{id}`（ai:write）：200 OCRProvider。
+- `POST /ai/ocr-providers/{id}/test`（ai:write）：用已保存配置探测可达性与令牌；200 `{"healthy":boolean,"message":"脱敏说明"}`，不伪造成功。
 
 `AISettings`：`ocr_provider_id:string`（当前选中的 OCRProvider；为空时选择 priority 最小的启用服务商）,`max_pages:integer(1..10，默认 3；参与限制发送给视觉模型的图片数量，OCR 仍解析全文，文本另有长度上限)`,`max_images:integer(0..4，默认 2)`,`ocr_configured:boolean`（当前服务商令牌状态）,`updated_at`。编目始终由 AI 完成，没有开关。
 

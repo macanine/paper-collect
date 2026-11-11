@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/catalogai"
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/service"
 	"github.com/nic/paper-collect/backend/internal/storage"
@@ -63,27 +64,27 @@ type jobStatsDTO struct {
 }
 
 type materialDTO struct {
-	ID              string        `json:"id"`
-	PackID          string        `json:"pack_id"`
-	Position        int           `json:"position"`
-	Part            string        `json:"part"`
-	AnswerStartPage int           `json:"answer_start_page"`
-	Title           string        `json:"title"`
-	FileName        string        `json:"file_name"`
-	OriginalName    string        `json:"original_name"`
-	Stage           string        `json:"stage"`
-	AIStep          string        `json:"ai_step"`
-	Attention       []string      `json:"attention_reasons"`
-	PartLocked      bool          `json:"part_locked"`
-	Status          string        `json:"status"`
-	SyncStatus      string        `json:"sync_status"`
-	SyncPlannedAt   *time.Time    `json:"sync_planned_at"`
-	MediaType       string        `json:"media_type"`
-	SizeBytes       int64         `json:"size_bytes"`
-	SHA256          string        `json:"sha256"`
-	CreatedAt       time.Time     `json:"created_at"`
-	UpdatedAt       time.Time     `json:"updated_at"`
-	Pack            *packDTO      `json:"pack,omitempty"`
+	ID              string     `json:"id"`
+	PackID          string     `json:"pack_id"`
+	Position        int        `json:"position"`
+	Part            string     `json:"part"`
+	AnswerStartPage int        `json:"answer_start_page"`
+	Title           string     `json:"title"`
+	FileName        string     `json:"file_name"`
+	OriginalName    string     `json:"original_name"`
+	Stage           string     `json:"stage"`
+	AIStep          string     `json:"ai_step"`
+	Attention       []string   `json:"attention_reasons"`
+	PartLocked      bool       `json:"part_locked"`
+	Status          string     `json:"status"`
+	SyncStatus      string     `json:"sync_status"`
+	SyncPlannedAt   *time.Time `json:"sync_planned_at"`
+	MediaType       string     `json:"media_type"`
+	SizeBytes       int64      `json:"size_bytes"`
+	SHA256          string     `json:"sha256"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	Pack            *packDTO   `json:"pack,omitempty"`
 }
 
 type materialSourceDTO struct {
@@ -131,32 +132,32 @@ type packMemberDTO struct {
 }
 
 type packDTO struct {
-	ID            string          `json:"id"`
-	Title         string          `json:"title"`
-	LockedFields  []string        `json:"locked_fields"`
-	DocType       string          `json:"doc_type"`
-	SubjectCodes  []string        `json:"subject_codes"`
-	Grade         string          `json:"grade"`
-	Term          string          `json:"term"`
-	Cohort        int             `json:"cohort"`
-	Region        string          `json:"region"`
-	Organization  string          `json:"organization"`
-	OrgID         string          `json:"organization_id"`
-	ExamDate      string          `json:"exam_date"`
-	ExamName      string          `json:"exam_name"`
-	Chapter       string          `json:"chapter"`
-	Tags          []string        `json:"tags"`
-	Description   string          `json:"description"`
-	Stage         string          `json:"stage"`
-	IsExam        bool            `json:"is_exam"`
-	HasQuestions  bool            `json:"has_questions"`
-	HasAnswers    bool            `json:"has_answers"`
-	HasSheet      bool            `json:"has_answer_sheet"`
-	Members       []packMemberDTO `json:"members"`
-	Collections   []collectionDTO `json:"collections,omitempty"`
-	DeletedAt     *time.Time      `json:"deleted_at"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	ID           string          `json:"id"`
+	Title        string          `json:"title"`
+	LockedFields []string        `json:"locked_fields"`
+	DocType      string          `json:"doc_type"`
+	SubjectCodes []string        `json:"subject_codes"`
+	Grade        string          `json:"grade"`
+	Term         string          `json:"term"`
+	Cohort       int             `json:"cohort"`
+	Region       string          `json:"region"`
+	Organization string          `json:"organization"`
+	OrgID        string          `json:"organization_id"`
+	ExamDate     string          `json:"exam_date"`
+	ExamName     string          `json:"exam_name"`
+	Chapter      string          `json:"chapter"`
+	Tags         []string        `json:"tags"`
+	Description  string          `json:"description"`
+	Stage        string          `json:"stage"`
+	IsExam       bool            `json:"is_exam"`
+	HasQuestions bool            `json:"has_questions"`
+	HasAnswers   bool            `json:"has_answers"`
+	HasSheet     bool            `json:"has_answer_sheet"`
+	Members      []packMemberDTO `json:"members"`
+	Collections  []collectionDTO `json:"collections,omitempty"`
+	DeletedAt    *time.Time      `json:"deleted_at"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
 type facetValueDTO struct {
@@ -338,6 +339,38 @@ type reconcileDTO struct {
 type finalizeDTO struct {
 	JobID    string `json:"job_id"`
 	UploadID string `json:"upload_id"`
+}
+
+type probeDTO struct {
+	Models []string `json:"models"`
+	Count  int      `json:"count"`
+}
+
+// providerTestDTO answers an AI or OCR provider test; model is empty for OCR.
+type providerTestDTO struct {
+	Healthy bool   `json:"healthy"`
+	Model   string `json:"model,omitempty"`
+	Message string `json:"message"`
+}
+
+type queuedDTO struct {
+	Queued bool `json:"queued"`
+}
+
+type indexQueuedDTO struct {
+	JobID string        `json:"job_id"`
+	State indexStateDTO `json:"state"`
+}
+
+type nodeClaimDTO struct {
+	Jobs []jobexec.Input `json:"jobs"`
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 type pageDTO[T any] struct {

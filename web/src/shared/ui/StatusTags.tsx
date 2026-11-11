@@ -135,7 +135,8 @@ export function ShareStatusTag({ status }: { status: ShareStatus }) {
   return <Tag color={SHARE_STATUS_COLORS[status]}>{SHARE_STATUS_LABELS[status]}</Tag>;
 }
 
-export function VerificationTag({ verification }: { verification: Verification }) {
+export function VerificationTag({ verification }: { verification: Verification | '' }) {
+  if (!verification) return <Tag>未校验</Tag>;
   return <Tag color={verification === 'sha256' ? 'success' : 'default'}>{VERIFICATION_LABELS[verification]}</Tag>;
 }
 

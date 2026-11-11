@@ -6,12 +6,12 @@ import type {
   MaterialPullCache,
   MaterialUpdate,
   Page,
-  ReviewPack,
+  InboxPack,
   Stage,
 } from '../../shared/api/types';
 
-export function listReviewPacks(params: { page: number; page_size: number; stage?: Stage; reason?: string }, signal?: AbortSignal): Promise<Page<ReviewPack>> {
-  return apiRequest<Page<ReviewPack>>('/materials/review-packs', { query: params, signal });
+export function listInbox(params: { page: number; page_size: number; stage?: Stage; reason?: string }, signal?: AbortSignal): Promise<Page<InboxPack>> {
+  return apiRequest<Page<InboxPack>>('/inbox', { query: params, signal });
 }
 
 export function getLibraryStats(signal?: AbortSignal): Promise<LibraryStats> {

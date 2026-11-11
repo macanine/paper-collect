@@ -103,10 +103,10 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `ai_providers_probe` | `POST /api/v1/ai/providers/probe` | `ai:write` |
 | `ai_providers_probe_saved` | `POST /api/v1/ai/providers/:id/probe` | `ai:write` |
 | `ai_providers_test` | `POST /api/v1/ai/providers/:id/test` | `ai:write` |
-| `ocr_providers_list` | `GET /api/v1/ocr/providers` | `ai:read` |
-| `ocr_providers_create` | `POST /api/v1/ocr/providers` | `ai:write` |
-| `ocr_providers_update` | `PATCH /api/v1/ocr/providers/:id` | `ai:write` |
-| `ocr_providers_test` | `POST /api/v1/ocr/providers/:id/test` | `ai:write` |
+| `ocr_providers_list` | `GET /api/v1/ai/ocr-providers` | `ai:read` |
+| `ocr_providers_create` | `POST /api/v1/ai/ocr-providers` | `ai:write` |
+| `ocr_providers_update` | `PATCH /api/v1/ai/ocr-providers/:id` | `ai:write` |
+| `ocr_providers_test` | `POST /api/v1/ai/ocr-providers/:id/test` | `ai:write` |
 | `ai_settings_get` | `GET /api/v1/ai/settings` | `ai:read` |
 | `ai_settings_update` | `PUT /api/v1/ai/settings` | `ai:write` |
 | `ai_rerun` | `POST /api/v1/ai/rerun` | `ai:write` |
@@ -127,7 +127,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `packs_purge` | `POST /api/v1/packs/purge` | `materials:write` |
 | `packs_download` | `GET /api/v1/packs/:id/download` | `materials:read` |
 | `materials_search` | `GET /api/v1/materials` | `materials:read` |
-| `materials_review_packs` | `GET /api/v1/materials/review-packs` | `materials:read` |
+| `inbox_list` | `GET /api/v1/inbox` | `materials:read` |
 | `materials_stats` | `GET /api/v1/materials/stats` | `materials:read` |
 | `materials_accept` | `POST /api/v1/materials/accept` | `materials:write` |
 | `materials_get` | `GET /api/v1/materials/:id` | `materials:read` |
@@ -174,7 +174,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `storage_reconcile` | `POST /api/v1/storage/reconcile` | `storage:write` |
 | `storage_replica_share` | `POST /api/v1/storage/replicas/:id/share` | `storage:write` |
 
-资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。编目全部由 AI 完成：`materials_search` 的 `stage=attention` 是需关注的文件（`materials_review_packs` 按套卷列出），`materials_accept` 按当前编目确认；`packs_ai_get` 查看 AI 编目与校验问题，`packs_ai_redecide` 让 AI 重新编目，`packs_update` 修改的字段会被锁定；学校、联盟和标签的规范名称用 `entities_*` 维护；`status` 按归档状态、`sync_status` 按网盘同步状态筛选。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
+资料库以套卷为单位：`packs_search` 支持按 `q`、`subject`、`grade`、`doc_type`、`term`、`cohort`、`region`、`organization`、`tag`、`stage`、`missing=answers`、`collection_id` 筛选，`content=true` 同时匹配正文，`trashed=true` 列出回收站。编目全部由 AI 完成：`materials_search` 的 `stage=attention` 是需关注的文件（`inbox_list` 按套卷列出），`materials_accept` 按当前编目确认；`packs_ai_get` 查看 AI 编目与校验问题，`packs_ai_redecide` 让 AI 重新编目，`packs_update` 修改的字段会被锁定；学校、联盟和标签的规范名称用 `entities_*` 维护；`status` 按归档状态、`sync_status` 按网盘同步状态筛选。`questions_search` 的 `academic_year` 表示届别。`collections_items_replace` 会整体替换专题中的套卷；删除套卷先进回收站（`packs_trash`），`packs_purge` 才会彻底删除。
 
 网盘同步分三步：先用 `storage_drives_create` 添加网盘，再用 `storage_rules_list` 取得当前规则、修改后调用 `storage_rules_preview` 查看影响并拿到 `preview_token`，最后把同一份规则和令牌交给 `storage_rules_replace`。令牌 15 分钟有效，期间规则或网盘被修改需重新预览。`storage_rules_explain` 说明某个文件为什么去了哪个网盘；规则外副本用 `storage_replicas_list`（`status=orphaned`）查看，再用 `storage_replicas_bulk` 删除远端或只移除记录。
 

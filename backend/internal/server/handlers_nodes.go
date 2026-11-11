@@ -80,7 +80,7 @@ func (s *Server) handleNodeClaim(c *gin.Context) {
 		respondNoContent(c)
 		return
 	}
-	s.respondData(c, http.StatusOK, gin.H{"jobs": jobs})
+	s.respondData(c, http.StatusOK, nodeClaimDTO{Jobs: jobs})
 }
 
 func (s *Server) handleNodeProgress(c *gin.Context) {

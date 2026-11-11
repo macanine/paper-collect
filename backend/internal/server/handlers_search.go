@@ -101,7 +101,7 @@ func (s *Server) handleEnqueueIndex(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusAccepted, gin.H{"job_id": jobID, "state": toIndexState(state)})
+	s.respondData(c, http.StatusAccepted, indexQueuedDTO{JobID: jobID, State: toIndexState(state)})
 }
 
 func (s *Server) handleGetSearchSettings(c *gin.Context) {

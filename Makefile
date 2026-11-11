@@ -1,4 +1,8 @@
-.PHONY: check test-all
+.PHONY: check test-all contract
+
+# Regenerate the TypeScript HTTP contract from the Go DTOs.
+contract:
+	cd backend && go run ./cmd/apigen ../web/src/shared/api/contract.gen.ts
 
 # Quick pre-commit check: skips slow LibreOffice/formula tests.
 check:

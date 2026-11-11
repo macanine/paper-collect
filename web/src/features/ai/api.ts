@@ -2,13 +2,12 @@ import { apiRequest } from '../../shared/api/client';
 import { segment } from '../../shared/api/paths';
 import type {
   AISettings,
-  AITestResult,
   AIProvider,
   AIProbeResult,
+  ProviderTestResult,
   Entity,
   EntityKind,
   MaterialCard,
-  OCRTestResult,
   OCRProvider,
   OCRProviderKind,
   Page,
@@ -49,8 +48,8 @@ export function probeSavedProvider(id: string): Promise<AIProbeResult> {
   return apiRequest<AIProbeResult>(`/ai/providers/${segment(id)}/probe`, { method: 'POST' });
 }
 
-export function testAIProvider(id: string, model: string): Promise<AITestResult> {
-  return apiRequest<AITestResult>(`/ai/providers/${segment(id)}/test`, { method: 'POST', body: { model } });
+export function testAIProvider(id: string, model: string): Promise<ProviderTestResult> {
+  return apiRequest<ProviderTestResult>(`/ai/providers/${segment(id)}/test`, { method: 'POST', body: { model } });
 }
 
 export function getAISettings(): Promise<AISettings> {
@@ -74,19 +73,19 @@ export interface OCRProviderDraft {
 export type OCRProviderPatch = Partial<Omit<OCRProviderDraft, 'kind'>>;
 
 export function listOCRProviders(): Promise<OCRProvider[]> {
-  return apiRequest<OCRProvider[]>('/ocr/providers');
+  return apiRequest<OCRProvider[]>('/ai/ocr-providers');
 }
 
 export function createOCRProvider(draft: OCRProviderDraft): Promise<OCRProvider> {
-  return apiRequest<OCRProvider>('/ocr/providers', { method: 'POST', body: draft });
+  return apiRequest<OCRProvider>('/ai/ocr-providers', { method: 'POST', body: draft });
 }
 
 export function updateOCRProvider(id: string, patch: OCRProviderPatch): Promise<OCRProvider> {
-  return apiRequest<OCRProvider>(`/ocr/providers/${segment(id)}`, { method: 'PATCH', body: patch });
+  return apiRequest<OCRProvider>(`/ai/ocr-providers/${segment(id)}`, { method: 'PATCH', body: patch });
 }
 
-export function testOCRProvider(id: string): Promise<OCRTestResult> {
-  return apiRequest<OCRTestResult>(`/ocr/providers/${segment(id)}/test`, { method: 'POST', body: {} });
+export function testOCRProvider(id: string): Promise<ProviderTestResult> {
+  return apiRequest<ProviderTestResult>(`/ai/ocr-providers/${segment(id)}/test`, { method: 'POST', body: {} });
 }
 
 /** AI 对单个文件的阅读记录。 */

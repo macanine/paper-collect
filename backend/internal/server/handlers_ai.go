@@ -100,7 +100,7 @@ func (s *Server) handleProbeAIProviders(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, gin.H{"models": result.Models, "count": result.Count})
+	s.respondData(c, http.StatusOK, probeDTO{Models: nonNilStrings(result.Models), Count: result.Count})
 }
 
 func (s *Server) handleProbeSavedAIProvider(c *gin.Context) {
@@ -109,7 +109,7 @@ func (s *Server) handleProbeSavedAIProvider(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, gin.H{"models": result.Models, "count": result.Count})
+	s.respondData(c, http.StatusOK, probeDTO{Models: nonNilStrings(result.Models), Count: result.Count})
 }
 
 func (s *Server) handleTestAIProvider(c *gin.Context) {
@@ -127,7 +127,7 @@ func (s *Server) handleTestAIProvider(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, gin.H{"healthy": result.Healthy, "model": result.Model, "message": result.Message})
+	s.respondData(c, http.StatusOK, providerTestDTO{Healthy: result.Healthy, Model: result.Model, Message: result.Message})
 }
 
 func (s *Server) handleGetAISettings(c *gin.Context) {
@@ -237,7 +237,7 @@ func (s *Server) handleTestOCRProvider(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusOK, gin.H{"healthy": result.Healthy, "message": result.Message})
+	s.respondData(c, http.StatusOK, providerTestDTO{Healthy: result.Healthy, Message: result.Message})
 }
 
 // handleRereadMaterial lets the AI read one file again; its set is then
@@ -251,7 +251,7 @@ func (s *Server) handleRereadMaterial(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusAccepted, gin.H{"queued": true})
+	s.respondData(c, http.StatusAccepted, queuedDTO{Queued: true})
 }
 
 func (s *Server) handleGetMaterialCard(c *gin.Context) {
@@ -281,7 +281,7 @@ func (s *Server) handleRedecidePack(c *gin.Context) {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusAccepted, gin.H{"queued": true})
+	s.respondData(c, http.StatusAccepted, queuedDTO{Queued: true})
 }
 
 func (s *Server) handleRerunAI(c *gin.Context) {
