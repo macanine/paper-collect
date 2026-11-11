@@ -1,4 +1,4 @@
-package service
+package jobexec
 
 import (
 	"strings"
@@ -7,7 +7,7 @@ import (
 
 func TestRedactOpaqueAPIKeys(t *testing.T) {
 	newKey := "sk-" + strings.Repeat("a", 43)
-	got := redact("diagnostic " + newKey)
+	got := Redact("diagnostic " + newKey)
 	if strings.Contains(got, newKey) || !strings.Contains(got, "<api-key>") {
 		t.Fatal("raw API key was not redacted")
 	}

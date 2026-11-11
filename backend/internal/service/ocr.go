@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/nic/paper-collect/backend/internal/ai"
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/blob"
 	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
@@ -216,16 +219,16 @@ func (s *Service) TestOCRProvider(ctx context.Context, id string) (OCRTestResult
 	}
 	cfg, err := s.ocrProviderConfig(row)
 	if err != nil {
-		return OCRTestResult{Healthy: false, Message: redact(ai.Sanitize(err.Error()))}, nil
+		return OCRTestResult{Healthy: false, Message: jobexec.Redact(ai.Sanitize(err.Error()))}, nil
 	}
 	client, err := jobexec.NewOCRClient(cfg)
 	if err != nil {
-		return OCRTestResult{Healthy: false, Message: redact(ai.Sanitize(err.Error()))}, nil
+		return OCRTestResult{Healthy: false, Message: jobexec.Redact(ai.Sanitize(err.Error()))}, nil
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, ocrHealthTimeout)
 	defer cancel()
 	if err := client.Health(probeCtx); err != nil {
-		return OCRTestResult{Healthy: false, Message: redact(ai.Sanitize(err.Error()))}, nil
+		return OCRTestResult{Healthy: false, Message: jobexec.Redact(ai.Sanitize(err.Error()))}, nil
 	}
 	if row.Kind == model.OCRKindRapidOCR {
 		return OCRTestResult{Healthy: true, Message: "RapidOCR 服务可达且模型已加载"}, nil
@@ -375,4 +378,16 @@ func (s *Service) saveParsedText(ctx context.Context, materialID string, p *jobe
 	}).Error; err != nil {
 		s.logf("parsed text cache unavailable")
 	}
+}
+
+// textParseKey identifies one OCR configuration, so cached parsed text is
+// reused only while the provider, model and DOCX handling are unchanged.
+func textParseKey(provider model.OCRProvider, mediaType string) string {
+	value := "ocr-text-v2:" + strings.TrimSpace(provider.Kind) + ":" +
+		strings.TrimSpace(provider.BaseURL) + ":" + strings.TrimSpace(provider.Model)
+	if provider.Kind == model.OCRKindRapidOCR && mediaType == blob.MediaTypes[blob.KindDOCX] {
+		value += ":docx-native-v2"
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

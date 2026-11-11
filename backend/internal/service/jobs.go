@@ -652,7 +652,7 @@ func (s *Service) CommitJob(ctx context.Context, job model.Job, out jobexec.Resu
 // recordFailure applies a failure. AI jobs follow the AI failure policy;
 // other jobs retry temporary failures with backoff before they fail.
 func (s *Service) recordFailure(job model.Job, class, message string, extra map[string]int) {
-	message = redact(message)
+	message = jobexec.Redact(message)
 	if class == "" {
 		class = jobexec.ClassPermanent
 	}
@@ -717,7 +717,7 @@ func (s *Service) finishJobTx(tx *gorm.DB, jobID, owner, status, message string)
 
 func (s *Service) finishJobTxWithMetrics(tx *gorm.DB, jobID, owner, status, message string, metrics map[string]any) error {
 	now := s.now()
-	message = redact(message)
+	message = jobexec.Redact(message)
 	var job model.Job
 	if err := tx.Select("id", "log_json", "started_at").Where("id = ?", jobID).First(&job).Error; err != nil {
 		return err
@@ -736,9 +736,9 @@ func (s *Service) finishJobTxWithMetrics(tx *gorm.DB, jobID, owner, status, mess
 	}
 	progress, level := "处理完成", "info"
 	if status == model.JobSucceeded && message != "" {
-		progress = redact(message)
+		progress = jobexec.Redact(message)
 	} else if status == model.JobFailed {
-		progress, level = "处理失败："+redact(message), "error"
+		progress, level = "处理失败："+jobexec.Redact(message), "error"
 	} else if status == model.JobPending {
 		progress = "处理已中断，等待重新执行"
 	}

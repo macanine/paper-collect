@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/nic/paper-collect/backend/internal/jobexec"
+
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
@@ -47,7 +49,7 @@ func (s *Service) BulkReplicas(ctx context.Context, p auth.Principal, ids []stri
 		err := s.manageReplica(ctx, p, id, action)
 		r := ReplicaBulkResult{ID: id, Success: err == nil}
 		if err != nil {
-			r.Error = storageErrorText(err)
+			r.Error = jobexec.StorageErrorText(err)
 		}
 		out = append(out, r)
 	}
@@ -128,7 +130,7 @@ func (s *Service) manageReplica(ctx context.Context, p auth.Principal, id, actio
 		note := ""
 		if operationErr != nil {
 			state = model.JobFailed
-			note = storageErrorText(operationErr)
+			note = jobexec.StorageErrorText(operationErr)
 		}
 		if err := s.finishJobTx(tx, deletionJob.ID, deletionJob.LeaseOwner, state, note); err != nil {
 			return err

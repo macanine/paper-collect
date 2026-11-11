@@ -1,4 +1,4 @@
-package service
+package searchtext
 
 import (
 	"strings"
@@ -6,20 +6,20 @@ import (
 	"unicode/utf8"
 )
 
-// mathFragment keeps the source span as well as its canonical form. Spans are
+// MathFragment keeps the source span as well as its canonical form. Spans are
 // rune offsets so they can also be used for API highlight ranges.
-type mathFragment struct {
+type MathFragment struct {
 	canonical string
 	start     int
 	end       int
 }
 
-// mathFragments recognises expressions embedded in Chinese or English text.
+// MathFragments recognises expressions embedded in Chinese or English text.
 // It intentionally does not try to prove algebraic equivalence: operators,
 // operands and their order remain significant.
-func mathFragments(text string) []mathFragment {
+func MathFragments(text string) []MathFragment {
 	runes := []rune(text)
-	var out []mathFragment
+	var out []MathFragment
 	start := -1
 	flush := func(end int) {
 		if start < 0 {
@@ -34,7 +34,7 @@ func mathFragments(text string) []mathFragment {
 		if start < end {
 			canonical := canonicalMath(string(runes[start:end]))
 			if len([]rune(canonical)) >= 2 && likelyMath(string(runes[start:end]), canonical) {
-				out = append(out, mathFragment{canonical: canonical, start: start, end: end})
+				out = append(out, MathFragment{canonical: canonical, start: start, end: end})
 			}
 		}
 		start = -1
@@ -333,9 +333,9 @@ func (p *mathParser) command(depth int) string {
 	return `\` + name
 }
 
-// mathTerms adds operator-bearing bigrams and trigrams to the existing word index. A
-// literal prefix cannot collide with terms produced by searchTerms.
-func mathTerms(fragments []mathFragment) map[string]int {
+// MathTerms adds operator-bearing bigrams and trigrams to the existing word index. A
+// literal prefix cannot collide with terms produced by Terms.
+func MathTerms(fragments []MathFragment) map[string]int {
 	terms := map[string]int{}
 	for _, fragment := range fragments {
 		runes := []rune(fragment.canonical)
@@ -351,9 +351,9 @@ func mathTerms(fragments []mathFragment) map[string]int {
 	return terms
 }
 
-func matchingMathFragment(text string, wanted []mathFragment) (mathFragment, bool) {
-	var first mathFragment
-	candidates := mathFragments(text)
+func MatchingMathFragment(text string, wanted []MathFragment) (MathFragment, bool) {
+	var first MathFragment
+	candidates := MathFragments(text)
 	for index, want := range wanted {
 		found := false
 		for _, candidate := range candidates {
@@ -366,13 +366,13 @@ func matchingMathFragment(text string, wanted []mathFragment) (mathFragment, boo
 			}
 		}
 		if !found {
-			return mathFragment{}, false
+			return MathFragment{}, false
 		}
 	}
 	return first, len(wanted) > 0
 }
 
-func textOutsideMath(text string, fragments []mathFragment) string {
+func TextOutsideMath(text string, fragments []MathFragment) string {
 	runes := []rune(text)
 	var result strings.Builder
 	position := 0
@@ -389,13 +389,13 @@ func textOutsideMath(text string, fragments []mathFragment) string {
 	return result.String()
 }
 
-func questionDedupeText(text string) string {
-	fragments := mathFragments(text)
+func QuestionDedupeText(text string) string {
+	fragments := MathFragments(text)
 	if len(fragments) == 0 {
-		return normalizeSearchText(text)
+		return Normalize(text)
 	}
 	var key strings.Builder
-	key.WriteString(normalizeSearchText(textOutsideMath(text, fragments)))
+	key.WriteString(Normalize(TextOutsideMath(text, fragments)))
 	for _, fragment := range fragments {
 		key.WriteRune('\x1f')
 		key.WriteString(fragment.canonical)
@@ -430,9 +430,9 @@ func mathContains(haystack, needle string) bool {
 	return false
 }
 
-func highlightMathSnippet(text string, match mathFragment, limit int) (string, [][2]int) {
+func HighlightMathSnippet(text string, match MathFragment, limit int) (string, [][2]int) {
 	if limit <= 0 {
 		limit = 180
 	}
-	return snippetForMatch(text, match.start, match.end, limit)
+	return SnippetForMatch(text, match.start, match.end, limit)
 }

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/jobexec"
+
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/model"
@@ -150,7 +152,7 @@ func (s *Service) CreateDrive(ctx context.Context, p auth.Principal, in DriveInp
 	}
 	id := newID()
 	if _, err := s.buildDriveAdapter(in.Kind, id, in.Config, in.Secret); err != nil {
-		return model.Drive{}, apperr.Validation("网盘配置无效: " + storageErrorText(err))
+		return model.Drive{}, apperr.Validation("网盘配置无效: " + jobexec.StorageErrorText(err))
 	}
 	cipher, err := s.sealSecret(id, in.Secret)
 	if err != nil {
@@ -269,7 +271,7 @@ func (s *Service) UpdateDrive(ctx context.Context, p auth.Principal, id string, 
 		return model.Drive{}, err
 	}
 	if _, err := s.buildDriveAdapter(drive.Kind, drive.ID, cfg, secret); err != nil {
-		return model.Drive{}, apperr.Validation("网盘配置无效: " + storageErrorText(err))
+		return model.Drive{}, apperr.Validation("网盘配置无效: " + jobexec.StorageErrorText(err))
 	}
 
 	updates := map[string]any{
@@ -317,13 +319,13 @@ func (s *Service) TestDrive(ctx context.Context, id string) (DriveTest, error) {
 	}
 	adapter, err := s.adapterFor(drive)
 	if err != nil {
-		return DriveTest{Healthy: false, Message: storageErrorText(err), Capabilities: storage.Capabilities{}}, nil
+		return DriveTest{Healthy: false, Message: jobexec.StorageErrorText(err), Capabilities: storage.Capabilities{}}, nil
 	}
 	caps := adapter.Capabilities()
 	healthCtx, cancel := context.WithTimeout(ctx, driveHealthTimeout)
 	defer cancel()
 	if err := adapter.Health(healthCtx); err != nil {
-		return DriveTest{Healthy: false, Message: storageErrorText(err), Capabilities: caps}, nil
+		return DriveTest{Healthy: false, Message: jobexec.StorageErrorText(err), Capabilities: caps}, nil
 	}
 	return DriveTest{Healthy: true, Message: "连接成功", Capabilities: caps}, nil
 }

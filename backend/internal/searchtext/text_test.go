@@ -1,4 +1,4 @@
-package service
+package searchtext
 
 import (
 	"math/rand"
@@ -8,24 +8,24 @@ import (
 )
 
 func TestNormalizeAndTerms(t *testing.T) {
-	normalized := normalizeSearchText("已知函数 f(x)＝x²＋2x，求最小值！")
+	normalized := Normalize("已知函数 f(x)＝x²＋2x，求最小值！")
 	if strings.ContainsAny(normalized, "，！（）") || strings.Contains(normalized, " ") {
 		t.Fatalf("punctuation/space not removed: %q", normalized)
 	}
-	terms := searchTerms("已知函数")
+	terms := Terms("已知函数")
 	for _, want := range []string{"已", "知", "函", "数", "已知", "知函", "函数"} {
 		if terms[want] == 0 {
 			t.Fatalf("missing term %q in %v", want, terms)
 		}
 	}
-	if len(searchTerms("abc123")) != 1 {
-		t.Fatalf("latin/digit run should be one term: %v", searchTerms("abc123"))
+	if len(Terms("abc123")) != 1 {
+		t.Fatalf("latin/digit run should be one term: %v", Terms("abc123"))
 	}
 }
 
 func TestSearchTermsBoundsLongLatinRuns(t *testing.T) {
 	long := strings.Repeat("A1", 80)
-	got := searchTerms(normalizeSearchText(long))
+	got := Terms(Normalize(long))
 	if len(got) != 1 {
 		t.Fatalf("long Latin run should produce one bounded term: %v", got)
 	}
@@ -36,11 +36,11 @@ func TestSearchTermsBoundsLongLatinRuns(t *testing.T) {
 		if utf8.RuneCountInString(term) > maxSearchTermRunes {
 			t.Fatalf("term has %d runes, want at most %d", utf8.RuneCountInString(term), maxSearchTermRunes)
 		}
-		if term != boundedSearchTerm(normalizeSearchText(long)) {
+		if term != boundedSearchTerm(Normalize(long)) {
 			t.Fatalf("term %q is not deterministic", term)
 		}
 	}
-	other := searchTerms(normalizeSearchText(long + "B"))
+	other := Terms(Normalize(long + "B"))
 	if len(other) != 1 {
 		t.Fatalf("different long run should also produce one term: %v", other)
 	}
@@ -53,7 +53,7 @@ func TestSearchTermsBoundsLongLatinRuns(t *testing.T) {
 
 func TestHighlightSnippet(t *testing.T) {
 	text := "1. 已知函数 f(x)=x^2+2x，求函数的最小值。"
-	snippet, highlights := highlightSnippet(text, normalizeSearchText("已知函数"), 40)
+	snippet, highlights := highlightSnippet(text, Normalize("已知函数"), 40)
 	if !strings.Contains(snippet, "已知函数") || len(highlights) == 0 {
 		t.Fatalf("snippet=%q highlights=%v", snippet, highlights)
 	}
@@ -66,7 +66,7 @@ func TestHighlightSnippet(t *testing.T) {
 
 func TestHighlightSnippetFindsTheBestPassage(t *testing.T) {
 	text := "这是一道题。" + strings.Repeat("甲", 220) + "目标函数的最大值为多少？" + strings.Repeat("乙", 220)
-	snippet, highlights := highlightSnippet(text, normalizeSearchText("目标函数的最大值"), 50)
+	snippet, highlights := highlightSnippet(text, Normalize("目标函数的最大值"), 50)
 	if !strings.HasPrefix(snippet, "…") || !strings.HasSuffix(snippet, "…") {
 		t.Fatalf("truncated excerpt should have ellipses: %q", snippet)
 	}
@@ -80,7 +80,7 @@ func TestHighlightSnippetFindsTheBestPassage(t *testing.T) {
 
 func TestHighlightSnippetMatchesWidthCaseAndPunctuation(t *testing.T) {
 	text := "说明🚀：ＡＢ， 中间结果"
-	snippet, highlights := highlightSnippet(text, normalizeSearchText("ab中间"), 80)
+	snippet, highlights := highlightSnippet(text, Normalize("ab中间"), 80)
 	if len(highlights) != 1 || string([]rune(snippet)[highlights[0][0]:highlights[0][1]]) != "ＡＢ， 中间" {
 		t.Fatalf("normalized match lost source offsets: %q %v", snippet, highlights)
 	}
@@ -88,7 +88,7 @@ func TestHighlightSnippetMatchesWidthCaseAndPunctuation(t *testing.T) {
 
 func TestHighlightSnippetPrefersLongestPartialMatch(t *testing.T) {
 	text := "最先是一段无关说明。" + strings.Repeat("甲", 80) + "求函数的最小值"
-	snippet, highlights := highlightSnippet(text, normalizeSearchText("求函数的最大值"), 40)
+	snippet, highlights := highlightSnippet(text, Normalize("求函数的最大值"), 40)
 	if len(highlights) != 1 || string([]rune(snippet)[highlights[0][0]:highlights[0][1]]) != "求函数的最" {
 		t.Fatalf("partial excerpt should prefer the longest shared passage: %q %v", snippet, highlights)
 	}
@@ -100,7 +100,7 @@ func TestHighlightSnippetFindsOverlappingMatches(t *testing.T) {
 		{"abcbc", "zzbcb", "bcb"},
 		{"abcabc", "cabca", "cabc"},
 	} {
-		snippet, highlights := highlightSnippet(tt.text, normalizeSearchText(tt.query), 40)
+		snippet, highlights := highlightSnippet(tt.text, Normalize(tt.query), 40)
 		if len(highlights) != 1 || string([]rune(snippet)[highlights[0][0]:highlights[0][1]]) != tt.want {
 			t.Errorf("query %q in %q: %q %v; want %q", tt.query, tt.text, snippet, highlights, tt.want)
 		}
@@ -143,12 +143,12 @@ func TestHighlightSnippetAgainstLongestSubstring(t *testing.T) {
 }
 
 func TestHighlightSnippetWithoutMatchDoesNotInventHighlights(t *testing.T) {
-	snippet, highlights := highlightSnippet("这是不相干的长文本", normalizeSearchText("abc"), 5)
+	snippet, highlights := highlightSnippet("这是不相干的长文本", Normalize("abc"), 5)
 	if snippet != "这是不相干…" || len(highlights) != 0 {
 		t.Fatalf("unmatched excerpt = %q %v", snippet, highlights)
 	}
 }
 
 func highlightSnippet(text, normalizedQuery string, limit int) (string, [][2]int) {
-	return newSnippetMatcher(normalizedQuery).highlight(text, limit)
+	return NewSnippetMatcher(normalizedQuery).Highlight(text, limit)
 }

@@ -73,7 +73,7 @@ func (s *Service) openBlob(ctx context.Context, sha string) (io.ReadCloser, erro
 		return jobexec.VerifyReader(body, sha, b.SizeBytes), nil
 	}
 	if lastErr != nil {
-		s.logf("open blob exhausted replicas: %s", storageErrorText(lastErr))
+		s.logf("open blob exhausted replicas: %s", jobexec.StorageErrorText(lastErr))
 	}
 	return nil, apperr.Unavailable("本机原件缺失，且没有可用的云端副本")
 }

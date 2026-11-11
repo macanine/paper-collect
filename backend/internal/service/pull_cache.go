@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/jobexec"
+
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/model"
 )
@@ -102,13 +104,13 @@ func (s *Service) PullMaterialCache(ctx context.Context, id string) (PullCache, 
 			return PullCache{}, apperr.Internal(err)
 		}
 		lastErr = err
-		s.logf("pull cache replica unavailable: %s", storageErrorText(err))
+		s.logf("pull cache replica unavailable: %s", jobexec.StorageErrorText(err))
 		if ctx.Err() != nil {
 			return PullCache{}, apperr.Unavailable("拉取已取消")
 		}
 	}
 	if lastErr != nil {
-		s.logf("pull cache exhausted replicas: %s", storageErrorText(lastErr))
+		s.logf("pull cache exhausted replicas: %s", jobexec.StorageErrorText(lastErr))
 	}
 	return PullCache{}, apperr.Unavailable("云端副本校验失败，未保留临时文件")
 }

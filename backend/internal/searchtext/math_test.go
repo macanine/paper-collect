@@ -1,4 +1,4 @@
-package service
+package searchtext
 
 import (
 	"strings"
@@ -35,7 +35,7 @@ func TestMathCanonicalRepresentations(t *testing.T) {
 
 func TestMathFragmentsAndTerms(t *testing.T) {
 	text := `已知函数 $f(x)=x^{2}+2x$，求 f(x) 的最小值。`
-	fragments := mathFragments(text)
+	fragments := MathFragments(text)
 	if len(fragments) != 1 || fragments[0].canonical != "f(x)=x^2+2x" {
 		t.Fatalf("fragments = %#v", fragments)
 	}
@@ -44,34 +44,34 @@ func TestMathFragmentsAndTerms(t *testing.T) {
 		t.Fatalf("source span = %q", got)
 	}
 	for _, term := range []string{"m:x^2", "m:2+2", "m:+2x"} {
-		if mathTerms(fragments)[term] == 0 {
-			t.Fatalf("missing %q in %v", term, mathTerms(fragments))
+		if MathTerms(fragments)[term] == 0 {
+			t.Fatalf("missing %q in %v", term, MathTerms(fragments))
 		}
 	}
-	if _, ok := matchingMathFragment(text, mathFragments("x²+2x")); !ok {
+	if _, ok := MatchingMathFragment(text, MathFragments("x²+2x")); !ok {
 		t.Fatal("equivalent superscript notation did not match")
 	}
-	if _, ok := matchingMathFragment(text, mathFragments("x²-2x")); ok {
+	if _, ok := MatchingMathFragment(text, MathFragments("x²-2x")); ok {
 		t.Fatal("different operator matched")
 	}
-	if _, ok := matchingMathFragment("已知 x+10=3", mathFragments("x+1")); ok {
+	if _, ok := MatchingMathFragment("已知 x+10=3", MathFragments("x+1")); ok {
 		t.Fatal("partial numeric operand matched")
 	}
-	if _, ok := matchingMathFragment("已知 -x+y=3", mathFragments("x+y")); ok {
+	if _, ok := MatchingMathFragment("已知 -x+y=3", MathFragments("x+y")); ok {
 		t.Fatal("a leading negative sign was ignored")
 	}
-	if got := mathTerms(mathFragments("-x")); got["m:-x"] == 0 {
+	if got := MathTerms(MathFragments("-x")); got["m:-x"] == 0 {
 		t.Fatalf("unary operator was not indexed: %v", got)
 	}
 }
 
 func TestMathSnippetHighlightsTheMatchedFormula(t *testing.T) {
 	text := strings.Repeat("背景", 80) + `🚀已知 \(x^{2}+1\)，求值。` + strings.Repeat("说明", 80)
-	match, ok := matchingMathFragment(text, mathFragments("x²+1"))
+	match, ok := MatchingMathFragment(text, MathFragments("x²+1"))
 	if !ok {
 		t.Fatal("formula was not found")
 	}
-	snippet, highlights := highlightMathSnippet(text, match, 50)
+	snippet, highlights := HighlightMathSnippet(text, match, 50)
 	if !strings.HasPrefix(snippet, "…") || !strings.HasSuffix(snippet, "…") || len(highlights) != 1 {
 		t.Fatalf("unexpected formula excerpt: %q %v", snippet, highlights)
 	}
@@ -100,22 +100,22 @@ func TestMathContainsChecksBoundariesAndLaterOccurrences(t *testing.T) {
 }
 
 func TestMathFragmentsSplitNaturalLanguage(t *testing.T) {
-	fragments := mathFragments("求 x + y 的值，Solve a - b now.")
+	fragments := MathFragments("求 x + y 的值，Solve a - b now.")
 	if len(fragments) != 2 || fragments[0].canonical != "x+y" || fragments[1].canonical != "a-b" {
 		t.Fatalf("fragments = %#v", fragments)
 	}
-	if got := mathFragments("查找 new-api 和 cloud-storage"); len(got) != 0 {
+	if got := MathFragments("查找 new-api 和 cloud-storage"); len(got) != 0 {
 		t.Fatalf("ordinary hyphenated words were treated as formulas: %#v", got)
 	}
 }
 
 func TestQuestionDedupeKeepsDifferentFormulaOperators(t *testing.T) {
-	plus := questionDedupeText("求 x+y 的值")
-	minus := questionDedupeText("求 x-y 的值")
+	plus := QuestionDedupeText("求 x+y 的值")
+	minus := QuestionDedupeText("求 x-y 的值")
 	if plus == minus {
 		t.Fatal("deduplication collapsed different formulas")
 	}
-	if questionDedupeText("求 x²+1 的值") != questionDedupeText(`求 x^{2}+1 的值`) {
+	if QuestionDedupeText("求 x²+1 的值") != QuestionDedupeText(`求 x^{2}+1 的值`) {
 		t.Fatal("equivalent superscript notation should deduplicate")
 	}
 }

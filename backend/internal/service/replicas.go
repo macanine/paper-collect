@@ -145,7 +145,7 @@ func (s *Service) commitReplicate(job model.Job, out *jobexec.ReplicateResult) e
 		updates["share_password"] = out.SharePassword
 		updates["share_expires_at"] = out.ShareExpiresAt
 		updates["share_status"] = out.ShareStatus
-		updates["error"] = redact(out.Note)
+		updates["error"] = jobexec.Redact(out.Note)
 	} else {
 		updates["share_status"] = ""
 		updates["share_url"] = ""
@@ -208,7 +208,7 @@ func (s *Service) RefreshReplicaShare(ctx context.Context, p auth.Principal, id 
 	}
 	adapter, err := s.adapterFor(provider)
 	if err != nil {
-		return model.Replica{}, apperr.Validation("存储端点配置无效: " + storageErrorText(err))
+		return model.Replica{}, apperr.Validation("存储端点配置无效: " + jobexec.StorageErrorText(err))
 	}
 	remote := replica.RemoteID
 	if remote == "" {
@@ -335,19 +335,19 @@ func (s *Service) OpenMaterialDownload(ctx context.Context, id string) (Download
 		body, err := s.openReplicaSource(ctx, source)
 		if err != nil {
 			lastErr = err
-			s.logf("download replica unavailable: %s", storageErrorText(err))
+			s.logf("download replica unavailable: %s", jobexec.StorageErrorText(err))
 			continue
 		}
 		return Download{Reader: body, MediaType: m.MediaType, FileName: m.FileName, Size: m.SizeBytes}, nil
 	}
 	if lastErr != nil {
-		s.logf("download exhausted replicas: %s", storageErrorText(lastErr))
+		s.logf("download exhausted replicas: %s", jobexec.StorageErrorText(lastErr))
 	}
 	return Download{}, apperr.Unavailable("没有可用的副本可供下载")
 }
 
 func (s *Service) failReplicaJob(jobID, owner, replicaID, message string) {
-	message = redact(message)
+	message = jobexec.Redact(message)
 	s.failJob(jobID, owner, message, func(tx *gorm.DB) error {
 		if replicaID == "" {
 			return nil

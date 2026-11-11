@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/nic/paper-collect/backend/internal/searchtext"
+
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -15,8 +17,8 @@ const (
 )
 
 func questionIndexTerms(text, normalized string) map[string]int {
-	terms := searchTerms(normalized)
-	for term, count := range mathTerms(mathFragments(text)) {
+	terms := searchtext.Terms(normalized)
+	for term, count := range searchtext.MathTerms(searchtext.MathFragments(text)) {
 		terms[term] = count
 	}
 	return terms
@@ -77,7 +79,7 @@ func (s *Service) BackfillMathIndex(ctx context.Context) (int, error) {
 			}
 			for _, block := range blocks {
 				ids = append(ids, block.ID)
-				for term, tf := range mathTerms(mathFragments(block.Text)) {
+				for term, tf := range searchtext.MathTerms(searchtext.MathFragments(block.Text)) {
 					terms = append(terms, model.QuestionTerm{Term: term, QuestionID: block.ID, TF: tf})
 					if len(terms) >= 1000 {
 						if err := flush(); err != nil {

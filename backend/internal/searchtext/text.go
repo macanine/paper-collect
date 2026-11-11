@@ -1,4 +1,7 @@
-package service
+// Package searchtext turns question text into the portable search index
+// representation: normalised text, n-gram terms, canonical math fragments,
+// and highlighted snippets. It is pure text processing with no storage.
+package searchtext
 
 import (
 	"crypto/sha256"
@@ -10,9 +13,9 @@ import (
 
 const maxSearchTermRunes = 64
 
-// normalizeSearchText folds width/case and strips punctuation so queries and
+// Normalize folds width/case and strips punctuation so queries and
 // indexed text share one representation.
-func normalizeSearchText(text string) string {
+func Normalize(text string) string {
 	var b strings.Builder
 	for _, r := range text {
 		if normalized, ok := normalizeSearchRune(r); ok {
@@ -35,8 +38,8 @@ func normalizeSearchRune(r rune) (rune, bool) {
 	return unicode.ToLower(r), true
 }
 
-// searchTerms emits CJK unigrams+bigrams and contiguous latin/digit runs.
-func searchTerms(normalized string) map[string]int {
+// Terms emits CJK unigrams+bigrams and contiguous latin/digit runs.
+func Terms(normalized string) map[string]int {
 	terms := map[string]int{}
 	var cjk []rune
 	flushCJK := func() {
@@ -93,10 +96,10 @@ type snippetState struct {
 	length int
 }
 
-type snippetMatcher struct{ states []snippetState }
+type SnippetMatcher struct{ states []snippetState }
 
-func newSnippetMatcher(normalizedQuery string) *snippetMatcher {
-	m := &snippetMatcher{states: []snippetState{{next: map[rune]int{}, link: -1}}}
+func NewSnippetMatcher(normalizedQuery string) *SnippetMatcher {
+	m := &SnippetMatcher{states: []snippetState{{next: map[rune]int{}, link: -1}}}
 	last := 0
 	for _, r := range normalizedQuery {
 		current := len(m.states)
@@ -135,7 +138,7 @@ func newSnippetMatcher(normalizedQuery string) *snippetMatcher {
 	return m
 }
 
-func (m *snippetMatcher) highlight(text string, limit int) (string, [][2]int) {
+func (m *SnippetMatcher) Highlight(text string, limit int) (string, [][2]int) {
 	positions := make([]int, 0, len(text))
 	state, length, bestLength, bestEnd := 0, 0, 0, 0
 	for original, r := range []rune(text) {
@@ -163,14 +166,14 @@ func (m *snippetMatcher) highlight(text string, limit int) (string, [][2]int) {
 		}
 	}
 	if bestLength == 0 {
-		return snippetForMatch(text, -1, -1, limit)
+		return SnippetForMatch(text, -1, -1, limit)
 	}
-	return snippetForMatch(text, positions[bestEnd-bestLength], positions[bestEnd-1]+1, limit)
+	return SnippetForMatch(text, positions[bestEnd-bestLength], positions[bestEnd-1]+1, limit)
 }
 
-// snippetForMatch returns an excerpt and its rune-based highlight. Ellipses
+// SnippetForMatch returns an excerpt and its rune-based highlight. Ellipses
 // make the missing surrounding text explicit without affecting API offsets.
-func snippetForMatch(text string, matchStart, matchEnd, limit int) (string, [][2]int) {
+func SnippetForMatch(text string, matchStart, matchEnd, limit int) (string, [][2]int) {
 	runes := []rune(text)
 	if limit <= 0 {
 		limit = 160

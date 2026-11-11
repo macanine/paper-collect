@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/searchtext"
+
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
 	"github.com/nic/paper-collect/backend/internal/jobexec"
@@ -263,7 +265,7 @@ func (s *Service) commitIndex(ctx context.Context, job model.Job, out *jobexec.I
 		for i, q := range questions {
 			block := model.QuestionBlock{
 				ID: newID(), MaterialID: material.ID, PageNo: q.PageNo, Seq: i,
-				QuestionNo: q.QuestionNo, Text: q.Text, Normalized: normalizeSearchText(q.Text),
+				QuestionNo: q.QuestionNo, Text: q.Text, Normalized: searchtext.Normalize(q.Text),
 				MathIndexVersion: mathIndexVersion, Confidence: q.Confidence, Model: modelName, PromptVersion: searchPromptVersion, CreatedAt: now,
 			}
 			blocks = append(blocks, block)
@@ -339,8 +341,8 @@ func collectQuestions(batches [][]jobexec.Page, results [][]jobexec.Question) []
 			if !allowed[q.PageNo] || len([]rune(q.Text)) < minQuestionRunes || len([]rune(q.Text)) > maxQuestionRunes {
 				continue
 			}
-			normalized := normalizeSearchText(q.Text)
-			dedupeKey := fmt.Sprintf("%d|%s", q.PageNo, questionDedupeText(q.Text))
+			normalized := searchtext.Normalize(q.Text)
+			dedupeKey := fmt.Sprintf("%d|%s", q.PageNo, searchtext.QuestionDedupeText(q.Text))
 			if normalized == "" || seen[dedupeKey] {
 				continue
 			}
@@ -368,7 +370,7 @@ func collectQuestions(batches [][]jobexec.Page, results [][]jobexec.Question) []
 }
 
 func (s *Service) failIndex(jobID, owner, materialID, message string, extra ...map[string]any) {
-	message = redact(message)
+	message = jobexec.Redact(message)
 	updates := map[string]any{"status": "failed", "error": message, "updated_at": s.now()}
 	for _, values := range extra {
 		for key, value := range values {
@@ -437,9 +439,9 @@ type SearchResult struct {
 // SearchQuestions performs pure-text question search.
 func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade string, year, limit, offset int) (SearchResult, error) {
 	started := time.Now()
-	normalized := normalizeSearchText(query)
-	wantedMath := mathFragments(query)
-	mathQueryTerms := mathTerms(wantedMath)
+	normalized := searchtext.Normalize(query)
+	wantedMath := searchtext.MathFragments(query)
+	mathQueryTerms := searchtext.MathTerms(wantedMath)
 	if len(mathQueryTerms) > 0 {
 		// Also catch questions written by an older instance during a rolling
 		// upgrade. Backfill is idempotent and never calls OCR or a model.
@@ -452,9 +454,9 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 	}
 	textQuery := normalized
 	if len(wantedMath) > 0 {
-		textQuery = normalizeSearchText(textOutsideMath(query, wantedMath))
+		textQuery = searchtext.Normalize(searchtext.TextOutsideMath(query, wantedMath))
 	}
-	terms := searchTerms(textQuery)
+	terms := searchtext.Terms(textQuery)
 	if len(terms) == 0 && len(mathQueryTerms) == 0 {
 		return SearchResult{Items: []QuestionHit{}}, nil
 	}
@@ -572,12 +574,12 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 		}
 		c := byID[block.ID]
 		if len(wantedMath) > 0 {
-			_, ok := matchingMathFragment(block.Text, wantedMath)
+			_, ok := searchtext.MatchingMathFragment(block.Text, wantedMath)
 			if !ok {
 				continue
 			}
 			if len(selectedTextTerms) > 0 {
-				blockTerms := searchTerms(block.Normalized)
+				blockTerms := searchtext.Terms(block.Normalized)
 				matched := 0
 				for _, term := range selectedTextTerms {
 					if blockTerms[term] > 0 {
@@ -632,16 +634,16 @@ func (s *Service) SearchQuestions(ctx context.Context, query, subject, grade str
 		end = len(fullHits)
 	}
 	page := fullHits[offset:end]
-	var matcher *snippetMatcher
+	var matcher *searchtext.SnippetMatcher
 	if len(wantedMath) == 0 {
-		matcher = newSnippetMatcher(normalized)
+		matcher = searchtext.NewSnippetMatcher(normalized)
 	}
 	for i := range page {
 		if len(wantedMath) > 0 {
-			match, _ := matchingMathFragment(page[i].Question.Text, wantedMath)
-			page[i].Snippet, page[i].Highlights = highlightMathSnippet(page[i].Question.Text, match, 180)
+			match, _ := searchtext.MatchingMathFragment(page[i].Question.Text, wantedMath)
+			page[i].Snippet, page[i].Highlights = searchtext.HighlightMathSnippet(page[i].Question.Text, match, 180)
 		} else {
-			page[i].Snippet, page[i].Highlights = matcher.highlight(page[i].Question.Text, 180)
+			page[i].Snippet, page[i].Highlights = matcher.Highlight(page[i].Question.Text, 180)
 		}
 	}
 	return SearchResult{Items: page, Total: total, TookMS: time.Since(started).Milliseconds()}, nil
@@ -704,7 +706,7 @@ func (s *Service) GetQuestion(ctx context.Context, id string) (QuestionHit, erro
 	var pack model.Pack
 	_ = s.db.WithContext(ctx).Where("id = ?", material.PackID).First(&pack).Error
 	// A detail request has no search query, so it has no matching highlight.
-	snippet, highlights := snippetForMatch(block.Text, -1, -1, 400)
+	snippet, highlights := searchtext.SnippetForMatch(block.Text, -1, -1, 400)
 	return QuestionHit{
 		Question: block, Material: material, Pack: pack,
 		Subjects: sortSubjects(model.DecodeStrings(pack.SubjectsJSON)), Snippet: snippet, Highlights: highlights,

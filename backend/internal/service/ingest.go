@@ -2,14 +2,18 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 
 	"github.com/nic/paper-collect/backend/internal/archive"
 	"github.com/nic/paper-collect/backend/internal/blob"
@@ -56,7 +60,7 @@ func (s *Service) RunIngest(ctx context.Context, jobID string) {
 		return
 	}
 	s.logf("ingest job failed: %v", err)
-	s.failJob(job.ID, job.LeaseOwner, publicMessage(err), func(tx *gorm.DB) error {
+	s.failJob(job.ID, job.LeaseOwner, jobexec.PublicMessage(err), func(tx *gorm.DB) error {
 		if job.UploadID == "" {
 			return nil
 		}
@@ -414,4 +418,20 @@ func (s *Service) requeueJob(jobID, owner string, projections ...func(*gorm.DB) 
 		return true
 	}
 	return false
+}
+
+// Each received ZIP has an independent durable staging file: the upload entry
+// and content hash make concurrent submissions unable to replace one another.
+// It is separate from the content-addressed store used by archived materials.
+func (s *Service) archiveUploadPath(entryID, contentSHA string) string {
+	key := sha256.Sum256([]byte(entryID + "\x00" + contentSHA))
+	return filepath.Join(s.blobs.DataDir(), "tmp", "upload-archives", fmt.Sprintf("%x.zip", key))
+}
+
+func (s *Service) stageArchive(tmpPath, entryID, contentSHA string) error {
+	dest := s.archiveUploadPath(entryID, contentSHA)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, dest)
 }

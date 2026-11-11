@@ -740,7 +740,7 @@ func (s *Service) handlePrepareError(ctx context.Context, job model.Job, err err
 	message, extra := jobexec.Failure(job.Kind, err)
 	var ae *apperr.Error
 	if errors.As(err, &ae) {
-		message = redact(ae.Message)
+		message = jobexec.Redact(ae.Message)
 	}
 	s.logf("prepare %s job failed: %s", job.Kind, message)
 	s.recordFailure(job, jobexec.Classify(err), message, extra)
@@ -767,7 +767,7 @@ func (s *Service) NodeProgress(ctx context.Context, n model.Node, jobID, message
 	if len(metrics) > 20 {
 		metrics = nil
 	}
-	s.jobProgressWithMetrics(ctx, job, redact(truncateRunes(message, 200)), current, total, metrics)
+	s.jobProgressWithMetrics(ctx, job, jobexec.Redact(truncateRunes(message, 200)), current, total, metrics)
 	return nil
 }
 
@@ -807,7 +807,7 @@ func (s *Service) NodeFail(ctx context.Context, n model.Node, jobID, message, cl
 		s.interruptJob(job)
 		return nil
 	}
-	message = redact(truncateRunes(message, 300))
+	message = jobexec.Redact(truncateRunes(message, 300))
 	if message == "" {
 		message = "节点执行失败"
 	}

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/searchtext"
+
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -29,14 +31,14 @@ func TestBackfillMathIndexPreservesExistingQuestionsAndSearchesFormulas(t *testi
 	}
 	blocks := make([]model.QuestionBlock, 0, len(texts))
 	for i, text := range texts {
-		block := model.QuestionBlock{ID: newID(), MaterialID: material.ID, Seq: i, PageNo: i + 1, Text: text, Normalized: normalizeSearchText(text)}
+		block := model.QuestionBlock{ID: newID(), MaterialID: material.ID, Seq: i, PageNo: i + 1, Text: text, Normalized: searchtext.Normalize(text)}
 		blocks = append(blocks, block)
 	}
 	if err := db.Create(&blocks).Error; err != nil {
 		t.Fatal(err)
 	}
 	for _, block := range blocks {
-		for term, tf := range searchTerms(block.Normalized) {
+		for term, tf := range searchtext.Terms(block.Normalized) {
 			if err := db.Create(&model.QuestionTerm{Term: term, QuestionID: block.ID, TF: tf}).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -88,11 +90,11 @@ func TestBackfillMathIndexPreservesExistingQuestionsAndSearchesFormulas(t *testi
 	// An older instance may write a legacy question after startup during a
 	// rolling deployment. A formula search must backfill it before querying.
 	late := model.QuestionBlock{ID: newID(), MaterialID: material.ID, PageNo: 6, Seq: 6, Text: "已知数列 x+y=2，求值。"}
-	late.Normalized = normalizeSearchText(late.Text)
+	late.Normalized = searchtext.Normalize(late.Text)
 	if err := db.Create(&late).Error; err != nil {
 		t.Fatal(err)
 	}
-	for term, tf := range searchTerms(late.Normalized) {
+	for term, tf := range searchtext.Terms(late.Normalized) {
 		if err := db.Create(&model.QuestionTerm{Term: term, QuestionID: late.ID, TF: tf}).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +120,7 @@ func TestSearchQuestionsPaginatesStableMatchedPassages(t *testing.T) {
 	var blocks []model.QuestionBlock
 	var postings []model.QuestionTerm
 	for i := 24; i >= 0; i-- {
-		block := model.QuestionBlock{ID: fmt.Sprintf("q-%03d", i), MaterialID: material.ID, Seq: i, PageNo: 1, Text: text, Normalized: normalizeSearchText(text), MathIndexVersion: mathIndexVersion, CreatedAt: created}
+		block := model.QuestionBlock{ID: fmt.Sprintf("q-%03d", i), MaterialID: material.ID, Seq: i, PageNo: 1, Text: text, Normalized: searchtext.Normalize(text), MathIndexVersion: mathIndexVersion, CreatedAt: created}
 		blocks = append(blocks, block)
 		for term, tf := range questionIndexTerms(block.Text, block.Normalized) {
 			postings = append(postings, model.QuestionTerm{Term: term, QuestionID: block.ID, TF: tf})
@@ -157,11 +159,11 @@ func TestFormulaSearchKeepsMatchesAheadOfTextOnlyCandidates(t *testing.T) {
 	}
 	prose := "函数方程解析推理几何代数坐标求解结果"
 	selected := make([]string, 0)
-	for term := range searchTerms(normalizeSearchText(prose)) {
+	for term := range searchtext.Terms(searchtext.Normalize(prose)) {
 		selected = append(selected, term)
 	}
 	sort.Strings(selected)
-	mathCount := len(mathTerms(mathFragments("x+y")))
+	mathCount := len(searchtext.MathTerms(searchtext.MathFragments("x+y")))
 	selected = selected[:24-mathCount]
 	// Match enough prose to pass the mixed-query threshold, but fewer total
 	// terms than the text-only distractors (even after adding math terms).
@@ -170,7 +172,7 @@ func TestFormulaSearchKeepsMatchesAheadOfTextOnlyCandidates(t *testing.T) {
 	for _, term := range selected {
 		parts = append(parts, term)
 		candidate := strings.Join(parts, "，")
-		terms := searchTerms(normalizeSearchText(candidate))
+		terms := searchtext.Terms(searchtext.Normalize(candidate))
 		matches := 0
 		for _, selectedTerm := range selected {
 			if terms[selectedTerm] > 0 {
@@ -189,10 +191,10 @@ func TestFormulaSearchKeepsMatchesAheadOfTextOnlyCandidates(t *testing.T) {
 	}
 	blocks := make([]model.QuestionBlock, 0, maxSearchCandidates+2)
 	for i := 0; i <= maxSearchCandidates; i++ {
-		blocks = append(blocks, model.QuestionBlock{ID: newID(), MaterialID: material.ID, Seq: i, PageNo: 1, Text: prose, Normalized: normalizeSearchText(prose), MathIndexVersion: mathIndexVersion})
+		blocks = append(blocks, model.QuestionBlock{ID: newID(), MaterialID: material.ID, Seq: i, PageNo: 1, Text: prose, Normalized: searchtext.Normalize(prose), MathIndexVersion: mathIndexVersion})
 	}
 	answer := model.QuestionBlock{ID: newID(), MaterialID: material.ID, Seq: len(blocks), PageNo: 1, Text: partial + "，x+y=2", MathIndexVersion: mathIndexVersion}
-	answer.Normalized = normalizeSearchText(answer.Text)
+	answer.Normalized = searchtext.Normalize(answer.Text)
 	blocks = append(blocks, answer)
 	if err := db.CreateInBatches(&blocks, 100).Error; err != nil {
 		t.Fatal(err)

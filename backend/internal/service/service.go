@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nic/paper-collect/backend/internal/jobexec"
+
 	"github.com/google/uuid"
 	"github.com/nic/paper-collect/backend/internal/archive"
 	"github.com/nic/paper-collect/backend/internal/auth"
@@ -130,7 +132,7 @@ func New(opts Options) (*Service, error) {
 	if logSink == nil {
 		logSink = log.Printf
 	}
-	logf := func(format string, args ...any) { logSink("%s", redact(fmt.Sprintf(format, args...))) }
+	logf := func(format string, args ...any) { logSink("%s", jobexec.Redact(fmt.Sprintf(format, args...))) }
 	worker := opts.Worker
 	if strings.TrimSpace(worker.InstanceID) == "" {
 		worker.InstanceID = uuid.NewString()

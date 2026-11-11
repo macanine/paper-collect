@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/nic/paper-collect/backend/internal/jobexec"
+
 	"github.com/nic/paper-collect/backend/internal/catalogai"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
@@ -179,7 +181,7 @@ func (s *Service) renameMaterialFiles(ctx context.Context, ids []string) {
 	for _, id := range ids {
 		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { _, err := s.planMaterialTx(tx, id, false); return err })
 		if err != nil {
-			s.logf("replan renamed material: %s", redact(err.Error()))
+			s.logf("replan renamed material: %s", jobexec.Redact(err.Error()))
 		}
 	}
 	s.notify()

@@ -49,7 +49,7 @@ func (s *Service) retryLater(job model.Job, at time.Time, message string, counte
 		if err := s.finishJobTx(tx, job.ID, job.LeaseOwner, model.JobPending, ""); err != nil {
 			return err
 		}
-		updates := map[string]any{"next_attempt_at": at, "progress_message": redact(message), "error": redact(message)}
+		updates := map[string]any{"next_attempt_at": at, "progress_message": jobexec.Redact(message), "error": jobexec.Redact(message)}
 		if !counted {
 			updates["attempts"] = gorm.Expr("CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END")
 		}
