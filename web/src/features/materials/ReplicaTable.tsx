@@ -39,7 +39,7 @@ export function ReplicaTable({ replicas, drives, canRefreshShare, refreshingId, 
       render: (r) => (
         <Stack gap={4} align="flex-start">
           <ReplicaStatusTag status={r.status} />
-          {r.required ? <Tag color="blue">必需</Tag> : null}
+          {r.required ? <Tag>必需</Tag> : null}
           {r.skip_reason ? <Text size="xs" c="dimmed">{r.skip_reason}</Text> : null}
           {r.error ? <Tooltip label={r.error} multiline maw={360}><Text size="xs" c="red" maw={140} truncate>{r.error}</Text></Tooltip> : null}
         </Stack>

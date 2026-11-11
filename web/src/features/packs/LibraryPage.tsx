@@ -126,10 +126,12 @@ export function LibraryPage() {
         <Stack gap="md">
           <Group gap="sm" wrap="wrap">
             <TextInput flex={1} miw={220} placeholder="搜索名称、考试、机构、地区或标签" leftSection={<IconSearch size={16} />} value={qInput} onChange={(e) => setQInput(e.currentTarget.value)} />
-            <Button variant={advancedOpen || activeFilterCount > 0 ? 'light' : 'default'} leftSection={<IconFilter size={16} />} onClick={() => setAdvancedOpen((o) => !o)}>
-              筛选{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
-            </Button>
-            {canWrite ? <Button variant={selectMode ? 'light' : 'default'} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>{selectMode ? '完成' : '选择'}</Button> : null}
+            <Group gap="sm" wrap="nowrap">
+              <Button variant={advancedOpen || activeFilterCount > 0 ? 'light' : 'default'} leftSection={<IconFilter size={16} />} onClick={() => setAdvancedOpen((o) => !o)} aria-expanded={advancedOpen}>
+                筛选{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
+              </Button>
+              {canWrite ? <Button variant={selectMode ? 'light' : 'default'} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>{selectMode ? '完成' : '选择'}</Button> : null}
+            </Group>
           </Group>
           {advancedOpen ? (
             <Stack gap="md" aria-label="高级筛选">

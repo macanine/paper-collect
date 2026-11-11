@@ -89,7 +89,7 @@ export function NodeDetailPage() {
     if (name && name !== node.name) update.mutate({ id: node.id, body: { name } });
     else rename.setValues({ name: node.name });
   };
-  const configTag = node.applied_config_revision === node.config_revision ? <Tag color="green">已应用修订 {node.config_revision}</Tag>
+  const configTag = node.applied_config_revision === node.config_revision ? <Tag color="success">已应用修订 {node.config_revision}</Tag>
     : node.applied_config_revision === 0 ? <Tag color="warning">等待首次应用 · 最新 {node.config_revision}</Tag>
     : <Tag color="warning">已应用 {node.applied_config_revision} / 最新 {node.config_revision}</Tag>;
 
@@ -135,7 +135,7 @@ export function NodeDetailPage() {
           <MetricChart title="内存" points={points} series={MEMORY} format={formatBytes} max={memTotal || undefined} />
           <MetricChart title="网络" points={points} series={NETWORK} format={formatRate} />
         </SimpleGrid>
-        <Text size="xs" c="dimmed">在容器中运行时，CPU 和内存是宿主机的数值，网络是容器网络命名空间的流量。</Text>
+        <Text size="sm" c="dimmed">在容器中运行时，CPU 和内存是宿主机的数值，网络是容器网络命名空间的流量。</Text>
       </Section>
 
       <Section title="节点信息">
@@ -164,7 +164,7 @@ export function NodeDetailPage() {
       </Section>
 
       {node.is_master ? (
-        <Section title="运行配置" extra={<Tag color="blue">由集群调度统一控制</Tag>}>
+        <Section title="运行配置" extra={<Tag>由集群调度统一控制</Tag>}>
           <Descriptions
             cols={3}
             items={[

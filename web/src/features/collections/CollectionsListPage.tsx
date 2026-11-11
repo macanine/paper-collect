@@ -61,7 +61,7 @@ export function CollectionsListPage() {
               <ItemRow
                 key={collection.id}
                 main={
-                  <Stack gap={2}>
+                  <Stack gap={4}>
                     <Anchor component={Link} to={href.collection(collection.id)} fw={600} c="inherit" truncate>{collection.title}</Anchor>
                     <Text size="sm" c="dimmed" truncate>{collection.pack_count} 个套卷{collection.description ? ` · ${collection.description}` : ''}</Text>
                   </Stack>

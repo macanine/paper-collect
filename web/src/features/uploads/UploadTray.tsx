@@ -3,7 +3,7 @@ import { ActionIcon, Anchor, Box, Button, Group, Paper, Progress, Stack, Text } 
 import { IconChevronDown, IconChevronUp, IconX } from '@tabler/icons-react';
 import { Link } from 'react-router';
 import { formatBytes } from '../../shared/lib/format';
-import { Tag } from '../../shared/ui/StatusTags';
+import { Tag, type TagColor } from '../../shared/ui/StatusTags';
 import { useUploads, type UploadBatch } from './UploadManager';
 import { href } from '../../app/routes';
 
@@ -15,7 +15,7 @@ const PHASE_TEXT: Record<UploadBatch['phase'], string> = {
   failed: '失败',
 };
 
-const PHASE_COLOR: Record<UploadBatch['phase'], string> = {
+const PHASE_COLOR: Record<UploadBatch['phase'], TagColor> = {
   preparing: 'default',
   uploading: 'processing',
   processing: 'processing',
@@ -27,7 +27,7 @@ function BatchRow({ batch, onDismiss }: { batch: UploadBatch; onDismiss: () => v
   const percent = batch.totalBytes > 0 ? Math.round((batch.sentBytes / batch.totalBytes) * 100) : 0;
   const finished = batch.phase === 'done' || batch.phase === 'failed';
   return (
-    <Stack gap={6} p="sm" miw={0} style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}>
+    <Stack gap="xs" p="sm" miw={0} style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}>
       <Group justify="space-between" wrap="nowrap" gap="xs">
         <Text fw={600} size="sm" truncate flex={1} miw={0} title={batch.title}>
           {batch.uploadId ? <Anchor component={Link} to={href.upload(batch.uploadId)} c="inherit" size="sm" fw={600}>{batch.title}</Anchor> : batch.title}

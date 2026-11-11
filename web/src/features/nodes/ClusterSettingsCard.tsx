@@ -83,7 +83,7 @@ export function ClusterSettingsCard() {
   }, [query.data]);
 
   return (
-    <Section title="集群调度" extra={query.data ? <Tag color="blue">修订 {query.data.revision}</Tag> : null}>
+    <Section title="集群调度" extra={query.data ? <Tag>修订 {query.data.revision}</Tag> : null}>
       {query.isPending ? <Loader size="sm" /> : null}
       {query.isError ? (
         <Stack gap="xs" align="flex-start">

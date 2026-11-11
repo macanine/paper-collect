@@ -122,7 +122,7 @@ export function NodesPage() {
       key: 'name',
       title: '名称',
       render: (node) => (
-        <Group gap={6} wrap="nowrap">
+        <Group gap="xs" wrap="nowrap">
           <Anchor component={Link} to={href.node(node.id)} fw={600} size="sm">{node.name}</Anchor>
           {node.is_master ? <Tag>主端</Tag> : null}
           {node.protocol && masterProtocol && node.protocol !== masterProtocol ? <Tag color="error">协议不一致</Tag> : null}
@@ -156,8 +156,8 @@ export function NodesPage() {
     {
       key: 'revision',
       title: '配置修订',
-      render: (node) => node.is_master ? <Tag color="blue">全局调度</Tag>
-        : node.applied_config_revision === node.config_revision ? <Tag color="green">已应用 {node.config_revision}</Tag>
+      render: (node) => node.is_master ? <Tag>全局调度</Tag>
+        : node.applied_config_revision === node.config_revision ? <Tag color="success">已应用 {node.config_revision}</Tag>
         : <Tag color="warning">等待应用 {node.applied_config_revision} / {node.config_revision}</Tag>,
     },
     {
@@ -169,7 +169,7 @@ export function NodesPage() {
       key: 'actions',
       title: '操作',
       render: (node) => (
-        <Group gap={6} wrap="nowrap">
+        <Group gap="xs" wrap="nowrap">
           <Button size="compact-sm" variant="default" leftSection={<IconSettings size={14} />} onClick={() => openEdit(node)} disabled={node.is_master}>配置</Button>
           <Button size="compact-sm" variant="default" disabled={!node.enabled} onClick={() => update.mutate({ id: node.id, body: { draining: !node.draining } })}>{node.draining ? '恢复' : '排空'}</Button>
           {node.is_master ? null : node.enabled ? (
@@ -190,11 +190,10 @@ export function NodesPage() {
         extra={<Button leftSection={<IconPlus size={16} />} onClick={openCreate}>添加节点</Button>}
       />
 
-      <ClusterSettingsCard />
-
       {query.isPending ? <LoadingState /> : null}
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} title="节点加载失败" /> : null}
       {query.isSuccess ? <DataTable rows={query.data} columns={columns} rowKey={(n) => n.id} empty={<EmptyState />} minWidth={1200} /> : null}
+      <ClusterSettingsCard />
 
       <FormModal
         opened={creating || editing !== null}

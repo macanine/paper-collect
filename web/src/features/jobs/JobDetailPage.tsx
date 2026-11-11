@@ -12,20 +12,12 @@ import { BackLink } from '../../shared/ui/BackLink';
 import { ConfirmButton, message } from '../../shared/ui/feedback';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { JobStatusTag } from '../../shared/ui/StatusTags';
+import { Metric } from '../../shared/ui/Metric';
 import { useAuth } from '../auth/AuthContext';
 import { CancelJobButton } from './CancelJobButton';
 import { useJobDetail, useRetryJob } from './queries';
 import { JobProgress, progressText } from './JobProgress';
 import { href } from '../../app/routes';
-
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <Stack gap={2}>
-      <Text size="xs" c="dimmed">{label}</Text>
-      <Text fw={600} fz="lg">{value}</Text>
-    </Stack>
-  );
-}
 
 export function JobDetailPage() {
   const { jobId = '' } = useParams();
@@ -88,7 +80,7 @@ export function JobDetailPage() {
           <Metric label="结束时间" value={formatDateTime(job.finished_at)} />
         </SimpleGrid>
         {progressPercent !== undefined ? (
-          <Stack gap={6}>
+          <Stack gap="xs">
             <Group justify="space-between">
               <Text size="sm">{job.progress_message}</Text>
               <Text size="sm" c="dimmed">{job.progress_current.toLocaleString()} / {job.progress_total.toLocaleString()}</Text>

@@ -53,7 +53,7 @@ export function DataTable<T>({
 
   const body = (
     <Box pos="relative">
-      <Table.ScrollContainer minWidth={minWidth} type="native">
+      <Table.ScrollContainer minWidth={rows.length > 0 ? minWidth : 0} type="native">
         <Table stickyHeader verticalSpacing="sm" horizontalSpacing="md" highlightOnHover={!!onRowClick}>
           <Table.Thead bg="gray.0">
             <Table.Tr>
@@ -108,14 +108,13 @@ export function DataTable<T>({
       <Text size="sm" c="dimmed">共 {pagination.total} 条</Text>
       <Group gap="sm">
         <Select
-          w={110}
-          size="xs"
+          w={120}
           aria-label="每页条数"
           data={(pagination.pageSizes ?? [10, 20, 50, 100]).map((n) => ({ value: String(n), label: `${n} 条/页` }))}
           value={String(pagination.pageSize)}
           onChange={(v) => v && pagination.onChange(1, Number(v))}
         />
-        <Pagination size="sm" total={pages} value={pagination.page} onChange={(p) => pagination.onChange(p, pagination.pageSize)} />
+        <Pagination total={pages} value={pagination.page} onChange={(p) => pagination.onChange(p, pagination.pageSize)} />
       </Group>
     </Group>
   ) : null;

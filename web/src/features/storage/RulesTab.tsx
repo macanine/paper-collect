@@ -130,10 +130,10 @@ export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
         const conditions = describeConditions(record.conditions);
         return (
           <Stack gap={4}>
-            <Group gap={6} wrap="nowrap">
+            <Group gap="xs" wrap="nowrap">
               <Text fw={600} size="sm">{record.name}</Text>
               {!record.enabled ? <Tag>已停用</Tag> : null}
-              {record.is_default ? <Tag color="blue">兜底</Tag> : null}
+              {record.is_default ? <Tag>兜底</Tag> : null}
             </Group>
             <Text size="xs" c="dimmed">{record.is_default ? '匹配所有未被前面规则命中的文件' : conditions || '无条件（匹配所有文件）'}</Text>
           </Stack>
@@ -145,12 +145,12 @@ export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
       render: (record) => record.targets.length === 0 ? <Text size="sm" c="dimmed">不上传</Text> : (
         <Stack gap={4}>
           {record.targets.map((target) => (
-            <Group key={target.drive_id} gap={6} wrap="wrap">
+            <Group key={target.drive_id} gap="xs" wrap="wrap">
               <Text fw={600} size="sm">{driveName(drives, target.drive_id)}</Text>
               <Text c="dimmed" size="sm">→</Text>
               <Text ff="monospace" size="xs" style={{ wordBreak: 'break-all' }}>{target.path_template}</Text>
               {target.share ? <Tag>分享</Tag> : null}
-              {target.required ? <Tag color="blue">必需</Tag> : null}
+              {target.required ? <Tag>必需</Tag> : null}
             </Group>
           ))}
         </Stack>
@@ -161,7 +161,7 @@ export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
       render: (record) => {
         const index = draft.findIndex((r) => r.id === record.id);
         return (
-          <Group gap={6} wrap="nowrap">
+          <Group gap="xs" wrap="nowrap">
             <Button size="compact-sm" variant="default" leftSection={<IconEdit size={14} />} disabled={!canWrite} onClick={() => { setEditing(record); setEditingIndex(index); setCreating(false); }}>编辑</Button>
             {!record.is_default ? <ActionIcon variant="default" color="red" disabled={!canWrite} onClick={() => removeRule(index)} aria-label="删除规则"><IconTrash size={14} /></ActionIcon> : null}
           </Group>
@@ -200,7 +200,7 @@ export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
         }
       >
         <DataTable bare rows={draft} columns={ruleColumns} rowKey={(r) => r.id} empty={<EmptyState description="还没有同步规则" />} minWidth={880} />
-        <Text size="xs" c="dimmed" px="lg" py="sm" style={{ borderTop: '1px solid var(--mantine-color-gray-2)' }}>规则自上而下匹配，命中第一条为止；修改后需要「预览并保存」才会生效。</Text>
+        <Text size="sm" c="dimmed" px="md" py="sm" style={{ borderTop: '1px solid var(--mantine-color-gray-2)' }}>规则自上而下匹配，命中第一条为止；修改后需要「预览并保存」才会生效。</Text>
       </Section>
 
       {editing !== null || creating ? (
@@ -226,7 +226,7 @@ export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
               empty={<Text size="sm" c="dimmed">没有明细（所有文件保持现状或等待编目）</Text>}
               pagination={{ page: previewPage, pageSize: PREVIEW_PAGE_SIZE, total: preview.total, pageSizes: [PREVIEW_PAGE_SIZE], onChange: (page) => runPreview(page) }}
             />
-            <Text size="xs" c="dimmed">预览 15 分钟内有效；期间若网盘或规则被其他人修改，应用时会要求重新预览。</Text>
+            <Text size="sm" c="dimmed">预览 15 分钟内有效；期间若网盘或规则被其他人修改，应用时会要求重新预览。</Text>
             <Group justify="flex-end"><Button variant="default" onClick={() => setPreview(null)}>取消</Button><Button loading={putRules.isPending} onClick={applyRules}>应用规则</Button></Group>
           </Stack>
         ) : null}

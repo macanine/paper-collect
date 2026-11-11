@@ -117,7 +117,7 @@ export function EntitiesPage() {
       key: 'name', wrap: true,
       title: '规范名称',
       render: (e) => (
-        <Stack gap={2}>
+        <Stack gap={4}>
           <Text fw={600} size="sm">{e.name}</Text>
           {e.aliases.filter((a) => a !== e.name).length > 0 ? <Text size="xs" c="dimmed">别名：{e.aliases.filter((a) => a !== e.name).join('、')}</Text> : null}
         </Stack>
@@ -129,7 +129,7 @@ export function EntitiesPage() {
       key: 'source',
       title: '来源',
       width: 130,
-      render: (e) => <Group gap={4} wrap="nowrap"><Tag>{e.source === 'human' ? '人工' : 'AI'}</Tag>{e.locked ? <Tag color="blue">已锁定</Tag> : null}</Group>,
+      render: (e) => <Group gap={4} wrap="nowrap"><Tag>{e.source === 'human' ? '人工' : 'AI'}</Tag>{e.locked ? <Tag>已锁定</Tag> : null}</Group>,
     },
     ...(canWrite ? [{
       key: 'actions',

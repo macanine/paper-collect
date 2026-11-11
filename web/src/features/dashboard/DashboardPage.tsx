@@ -1,11 +1,11 @@
-import type { ReactNode } from 'react';
-import { Anchor, Group, Paper, Skeleton, SimpleGrid, Stack, Text, ThemeIcon, Title, UnstyledButton } from '@mantine/core';
-import { IconCircleCheck, IconFileSearch, IconFolders, IconHourglass, IconInbox, IconRefresh } from '@tabler/icons-react';
+import { Alert, Anchor, Group, Paper, Skeleton, SimpleGrid, Stack, Text } from '@mantine/core';
 import { Link } from 'react-router';
 import { formatDateTime } from '../../shared/lib/format';
 import { ItemList, ItemRow } from '../../shared/ui/ItemList';
 import { LinkButton } from '../../shared/ui/LinkButton';
+import { Metric } from '../../shared/ui/Metric';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { Section } from '../../shared/ui/Section';
 import { EmptyState, InlineError } from '../../shared/ui/States';
 import { Tag, UploadStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
@@ -13,39 +13,19 @@ import { Completeness, PackMeta } from '../packs/PackBadges';
 import { useLibraryStats, useRecentPacks, useRecentUploads } from './queries';
 import { href } from '../../app/routes';
 
-function StatCard({ to, title, value, icon, color = 'blue' }: { to: string; title: string; value: number | undefined; icon: ReactNode; color?: string }) {
-  return (
-    <UnstyledButton component={Link} to={to}>
-      <Paper p="md" h="100%">
-        <Group gap="md" wrap="nowrap">
-          <ThemeIcon variant="light" color={color} size={40} radius="md">{icon}</ThemeIcon>
-          <Stack gap={0}>
-            <Text size="sm" c="dimmed">{title}</Text>
-            <Text fz={26} fw={600} lh={1.2}>{value ?? '—'}</Text>
-          </Stack>
-        </Group>
-      </Paper>
-    </UnstyledButton>
-  );
+/** 指标的说明文字本身是链接：悬停有下划线，键盘可达，数值保持醒目。 */
+function StatLink({ to, label }: { to: string; label: string }) {
+  return <Anchor component={Link} to={to} c="dimmed" size="sm">{label}</Anchor>;
 }
 
-function Section({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
-  return (
-    <Stack gap="sm" miw={0}>
-      <Group justify="space-between">
-        <Title order={4}>{title}</Title>
-        {extra}
-      </Group>
-      {children}
-    </Stack>
-  );
-}
-
+/** 与真实行同高的占位：标题一行、元信息一行。 */
 function ListSkeleton() {
   return (
-    <Paper p="md" aria-label="正在加载">
-      <Stack gap="sm"><Skeleton h={14} w="68%" /><Skeleton h={12} /><Skeleton h={12} w="80%" /></Stack>
-    </Paper>
+    <ItemList bare>
+      {[0, 1, 2].map((i) => (
+        <ItemRow key={i} main={<Stack gap="xs" aria-hidden><Skeleton h={16} w="60%" /><Skeleton h={14} w="40%" /></Stack>} />
+      ))}
+    </ItemList>
   );
 }
 
@@ -58,68 +38,79 @@ export function DashboardPage() {
   const uploads = useRecentUploads(canUpload);
   const s = stats.data;
 
+  const summary = !s ? '查看资料整理进度、最近更新和需要你处理的事项。'
+    : s.needs_attention > 0 ? `有 ${s.needs_attention} 个文件等你确认，其余资料由 AI 自动整理。`
+    : '没有需要你处理的资料，AI 会继续整理新导入的文件。';
+
   return (
     <Stack gap="lg">
       <PageHeader
         title="工作台"
-        description="查看资料整理进度、最近更新和需要你处理的事项。"
-        extra={canRead ? <LinkButton variant="default" to="/library">浏览资料库</LinkButton> : null}
+        description={summary}
+        extra={canRead ? (
+          s && s.needs_attention > 0
+            ? <LinkButton variant="default" to="/inbox">去处理</LinkButton>
+            : <LinkButton variant="default" to="/library">浏览资料库</LinkButton>
+        ) : null}
       />
       {stats.error ? <InlineError error={stats.error} /> : null}
 
       {canRead ? (
-        <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }} spacing="md">
-          <StatCard to="/inbox" title="需关注" value={s?.needs_attention} icon={<IconInbox size={22} />} color={s && s.needs_attention > 0 ? 'yellow' : 'blue'} />
-          <StatCard to="/inbox?stage=processing" title="AI 整理中" value={s?.processing} icon={<IconRefresh size={22} />} />
-          <StatCard to="/inbox?stage=waiting_ai" title="等待 AI" value={s?.waiting_ai} icon={<IconHourglass size={22} />} color={s && s.waiting_ai > 0 ? 'red' : 'blue'} />
-          <StatCard to="/library?missing=answers" title="缺答案的试卷" value={s?.missing_answers} icon={<IconFileSearch size={22} />} />
-          <StatCard to="/library" title="套卷" value={s?.packs} icon={<IconFolders size={22} />} />
-          <StatCard to="/library" title="已入库文件" value={s?.ready} icon={<IconCircleCheck size={22} />} color="green" />
-        </SimpleGrid>
+        <Paper p="lg" aria-label="资料概况">
+          <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }} spacing="lg" verticalSpacing="lg">
+            <Metric size="xl" label={<StatLink to="/inbox" label="需关注" />} value={s?.needs_attention} />
+            <Metric size="xl" label={<StatLink to="/inbox?stage=processing" label="AI 整理中" />} value={s?.processing} />
+            <Metric size="xl" label={<StatLink to="/inbox?stage=waiting_ai" label="等待 AI" />} value={s?.waiting_ai} />
+            <Metric size="xl" label={<StatLink to="/library?missing=answers" label="缺答案的试卷" />} value={s?.missing_answers} />
+            <Metric size="xl" label={<StatLink to="/library" label="套卷" />} value={s?.packs} />
+            <Metric size="xl" label={<StatLink to="/library" label="已入库文件" />} value={s?.ready} />
+          </SimpleGrid>
+        </Paper>
       ) : null}
 
       {s && s.attention > 0 && can('storage:read') ? (
-        <Paper p="sm" px="md">
-          <Text size="sm">存储：{s.attention} 个文件同步需要注意。<Anchor component={Link} to="/storage" ml="xs" size="sm">查看存储</Anchor></Text>
-        </Paper>
+        <Alert color="orange">
+          {s.attention} 个文件的网盘同步需要注意。<Anchor component={Link} to="/storage" ml="xs" size="sm">查看存储</Anchor>
+        </Alert>
       ) : null}
 
       <SimpleGrid cols={{ base: 1, md: canRead && canUpload ? 2 : 1 }} spacing="lg">
         {canRead ? (
-          <Section title="最近更新的套卷" extra={<Anchor component={Link} to="/library" size="sm">全部</Anchor>}>
+          <Section flush title="最近更新的套卷" extra={<Anchor component={Link} to="/library" size="sm">全部</Anchor>}>
             {packs.isPending ? <ListSkeleton /> : packs.data?.items.length ? (
-              <ItemList>
+              <ItemList bare>
                 {packs.data.items.map((pack) => (
                   <ItemRow
                     key={pack.id}
                     main={
                       <Stack gap={4}>
-                        <Anchor component={Link} to={href.pack(pack.id)} fw={600} c="inherit" truncate>{pack.title}</Anchor>
-                        <Group gap="sm" wrap="wrap"><PackMeta pack={pack} /><Completeness pack={pack} /></Group>
+                        <Anchor component={Link} to={href.pack(pack.id)} fw={600} size="sm" c="inherit" truncate>{pack.title}</Anchor>
+                        <PackMeta pack={pack} />
                       </Stack>
                     }
+                    aside={<Completeness pack={pack} />}
                   />
                 ))}
               </ItemList>
-            ) : <Paper><EmptyState description="还没有资料，把文件拖到页面任意位置即可导入" /></Paper>}
+            ) : <EmptyState description="还没有资料，把文件拖到页面任意位置即可导入" />}
           </Section>
         ) : null}
         {canUpload ? (
-          <Section title="最近导入" extra={<Anchor component={Link} to="/imports" size="sm">导入中心</Anchor>}>
+          <Section flush title="最近导入" extra={<Anchor component={Link} to="/imports" size="sm">导入中心</Anchor>}>
             {uploads.isPending ? <ListSkeleton /> : uploads.data?.items.length ? (
-              <ItemList>
+              <ItemList bare>
                 {uploads.data.items.map((upload) => (
                   <ItemRow
                     key={upload.id}
                     main={
                       <Stack gap={4}>
-                        <Anchor component={Link} to={href.upload(upload.id)} fw={600} c="inherit" truncate>{upload.title}</Anchor>
-                        <Group gap={6}>
+                        <Anchor component={Link} to={href.upload(upload.id)} fw={600} size="sm" c="inherit" truncate>{upload.title}</Anchor>
+                        <Group gap="xs">
                           <Text size="sm" c="dimmed">
                             {formatDateTime(upload.created_at)}
                             {upload.status === 'completed' ? ` · 新增 ${upload.new_count} · 已存在 ${upload.duplicate_count}` : ''}
                           </Text>
-                          {upload.status === 'completed' && upload.skipped.length > 0 ? <Tag>跳过 {upload.skipped.length}</Tag> : null}
+                          {upload.status === 'completed' && upload.skipped.length > 0 ? <Tag color="warning">跳过 {upload.skipped.length}</Tag> : null}
                         </Group>
                       </Stack>
                     }
@@ -127,7 +118,7 @@ export function DashboardPage() {
                   />
                 ))}
               </ItemList>
-            ) : <Paper><EmptyState description="暂无导入" /></Paper>}
+            ) : <EmptyState description="暂无导入" />}
           </Section>
         ) : null}
       </SimpleGrid>

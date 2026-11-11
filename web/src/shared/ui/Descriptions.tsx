@@ -13,10 +13,10 @@ export interface DescriptionItem {
 export function Descriptions({ items, cols = 2 }: { items: (DescriptionItem | false | null | undefined)[]; cols?: number }) {
   const list = items.filter(Boolean) as DescriptionItem[];
   return (
-    <SimpleGrid cols={{ base: 1, sm: cols }} spacing="md" verticalSpacing="md">
+    <SimpleGrid cols={{ base: 1, sm: cols }} spacing="lg" verticalSpacing="md">
       {list.map((item) => (
         <Box key={item.key} miw={0} style={item.full ? { gridColumn: '1 / -1' } : undefined}>
-          <Text size="xs" c="dimmed" mb={2}>{item.label}</Text>
+          <Text size="sm" c="dimmed" mb={4}>{item.label}</Text>
           <Box fz="sm" style={{ wordBreak: 'break-word' }}>{item.children}</Box>
         </Box>
       ))}

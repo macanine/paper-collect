@@ -143,7 +143,7 @@ export function MaterialDetailPage() {
 
   const sourceColumns: Column<(typeof material.sources)[number]>[] = [
     { key: 'path', wrap: true, title: '来源路径', render: (src) => <Text size="sm" style={{ wordBreak: 'break-all' }}>{src.path}</Text> },
-    { key: 'dup', width: 110, render: (src) => (src.duplicate ? <Tag>重复上传</Tag> : <Tag color="blue">首次上传</Tag>) },
+    { key: 'dup', width: 110, render: (src) => (src.duplicate ? <Tag>重复上传</Tag> : <Tag>首次上传</Tag>) },
     { key: 'created', title: '时间', width: 170, render: (src) => formatDateTime(src.created_at) },
     { key: 'upload', width: 90, render: (src) => (src.upload_id && can('uploads:write') ? <Anchor component={Link} to={href.upload(src.upload_id)} size="sm">导入</Anchor> : null) },
   ];
@@ -189,7 +189,7 @@ export function MaterialDetailPage() {
       <Section title="文件信息">
         <Descriptions
           items={[
-            { key: 'part', label: '部件', children: canWrite ? <Select w={150} size="xs" allowDeselect={false} value={material.part} data={PART_OPTIONS} onChange={(part) => part && void changePart(part as Part)} /> : <PartTag part={material.part} /> },
+            { key: 'part', label: '部件', children: canWrite ? <Select w={150} allowDeselect={false} value={material.part} data={PART_OPTIONS} onChange={(part) => part && void changePart(part as Part)} /> : <PartTag part={material.part} /> },
             material.part === 'full' && { key: 'answer', label: '答案起始页', children: material.answer_start_page > 0 ? `第 ${material.answer_start_page} 页` : '未识别' },
             { key: 'original', label: '原始文件名', children: material.original_name },
             { key: 'type', label: '文件类型', children: FILE_TYPES[material.media_type] ?? material.media_type },

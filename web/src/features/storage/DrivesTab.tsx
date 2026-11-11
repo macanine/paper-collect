@@ -78,13 +78,13 @@ export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; c
     {
       key: 'name', wrap: true, title: '网盘', width: 220,
       render: (d) => (
-        <Stack gap={2}>
+        <Stack gap={4}>
           <Text fw={600} size="sm">{d.name}</Text>
           <Text size="xs" c="dimmed">{PROVIDER_FIELD_SPECS[d.kind as ProviderKind].label}{d.root_path ? ` · 根目录 ${d.root_path}` : ''}</Text>
         </Stack>
       ),
     },
-    { key: 'enabled', title: '启用', width: 80, render: (d) => (d.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>) },
+    { key: 'enabled', title: '启用', width: 80, render: (d) => (d.enabled ? <Tag color="success">启用</Tag> : <Tag>停用</Tag>) },
     { key: 'route', wrap: true, title: '操作节点', width: 220, render: (d) => <Text size="sm" title={routeSummary(d)}>{d.kind === 'local' ? '主端本地目录' : routeSummary(d)}</Text> },
     { key: 'capabilities', wrap: true, title: '能力', width: 220, render: (d) => <CapabilityTags drive={d} /> },
     {
@@ -106,12 +106,12 @@ export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; c
       },
     },
     { key: 'on_path_change', title: '路径变化', width: 100, render: (d) => (d.on_path_change === 'move' ? '随之移动' : '保持原位') },
-    { key: 'secret', title: '凭据', width: 90, render: (d) => (d.kind === 'local' ? '—' : d.secret_configured ? <Tag color="green">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
+    { key: 'secret', title: '凭据', width: 90, render: (d) => (d.kind === 'local' ? '—' : d.secret_configured ? <Tag color="success">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
     { key: 'updated_at', title: '更新时间', width: 160, render: (d) => formatDateTime(d.updated_at) },
     {
       key: 'actions', title: '操作', width: 190,
       render: (d) => (
-        <Group gap={6} wrap="nowrap">
+        <Group gap="xs" wrap="nowrap">
           <Tooltip label="123 云盘尚不支持同步" disabled={d.kind !== '123pan'}>
             <Button size="compact-sm" variant="default" loading={testDrive.isPending && testDrive.variables === d.id} onClick={() => handleTest(d)} disabled={!canWrite}>测试连接</Button>
           </Tooltip>

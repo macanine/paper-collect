@@ -42,11 +42,15 @@ export function JobsListPage() {
     {
       key: 'id',
       title: '任务',
-      width: 150,
+      width: 200,
       render: (job) => (
-        <Stack gap={2}>
-          <Anchor component={Link} to={href.job(job.id)} size="xs" ff="monospace">{job.id.slice(0, 8)}</Anchor>
+        <Stack gap={4}>
+          <Anchor component={Link} to={href.job(job.id)} size="sm" ff="monospace">{job.id.slice(0, 8)}</Anchor>
           <Text size="xs" c="dimmed">更新 {formatDateTime(job.updated_at)}</Text>
+          <Text size="xs" c="dimmed">
+            {job.node_id ? <Anchor component={Link} to={href.jobs({ node_id: job.node_id })} size="xs">{job.node_name || '节点'}</Anchor> : '未分配节点'}
+            {` · 耗时 ${formatDuration(job.duration_ms)}`}
+          </Text>
         </Stack>
       ),
     },
@@ -56,7 +60,7 @@ export function JobsListPage() {
       key: 'progress', wrap: true,
       title: '处理进度',
       render: (job) => (
-        <Stack gap={4} maw={360}>
+        <Stack gap={4} maw={320}>
           <Tooltip label={progressText(job)} multiline maw={360}>
             <Text size="sm" c={job.status === 'failed' ? 'red' : undefined} truncate>{progressText(job)}</Text>
           </Tooltip>
@@ -66,23 +70,15 @@ export function JobsListPage() {
       ),
     },
     {
-      key: 'node',
-      title: '节点',
-      width: 110,
-      hideOnCompact: true,
-      render: (job) => job.node_id ? <Anchor component={Link} to={href.jobs({ node_id: job.node_id })} size="sm">{job.node_name || '节点'}</Anchor> : '—',
-    },
-    { key: 'duration', title: '耗时', width: 90, align: 'right', render: (job) => formatDuration(job.duration_ms) },
-    {
       key: 'links', wrap: true,
       title: '关联',
       width: 120,
       hideOnCompact: true,
       render: (job) => (
         <Stack gap={0}>
-          {job.upload_id && can('uploads:write') ? <Anchor component={Link} to={href.upload(job.upload_id)} size="xs">查看导入</Anchor> : null}
-          {job.material_id && can('materials:read') ? <Anchor component={Link} to={href.material(job.material_id)} size="xs">查看资料</Anchor> : null}
-          {job.replica_id ? <Anchor component={Link} to={href.jobs({ replica_id: job.replica_id })} size="xs">同副本任务</Anchor> : null}
+          {job.upload_id && can('uploads:write') ? <Anchor component={Link} to={href.upload(job.upload_id)} size="sm">查看导入</Anchor> : null}
+          {job.material_id && can('materials:read') ? <Anchor component={Link} to={href.material(job.material_id)} size="sm">查看资料</Anchor> : null}
+          {job.replica_id ? <Anchor component={Link} to={href.jobs({ replica_id: job.replica_id })} size="sm">同副本任务</Anchor> : null}
         </Stack>
       ),
     },
@@ -117,7 +113,7 @@ export function JobsListPage() {
   if (query.isError && !query.data) {
     return (
       <Stack gap="lg">
-        <PageHeader title="任务" />
+        <PageHeader title="处理日志" />
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="任务列表加载失败" />
       </Stack>
     );
@@ -125,7 +121,7 @@ export function JobsListPage() {
 
   return (
     <Stack gap="lg">
-      <PageHeader title="任务" />
+      <PageHeader title="处理日志" description="导入、AI 阅读、索引和网盘复制的每一步都记录在这里。" />
       <Group gap="sm">
         <Select clearable allowDeselect placeholder="状态" w={160} data={JOB_STATUS_OPTIONS} value={list.filters.status || null} onChange={(v) => setFilters({ status: v ?? '' })} />
         <Select clearable allowDeselect placeholder="类型" w={160} data={JOB_KIND_OPTIONS} value={list.filters.kind || null} onChange={(v) => setFilters({ kind: v ?? '' })} />
@@ -148,7 +144,7 @@ export function JobsListPage() {
         rowKey={(j) => j.id}
         loading={query.isFetching}
         empty={<EmptyState />}
-        minWidth={820}
+        minWidth={760}
         onRowClick={(job) => navigate(href.job(job.id))}
         pagination={{ page: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: list.setPage }}
       />

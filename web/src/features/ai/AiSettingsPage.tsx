@@ -172,10 +172,10 @@ export function AiSettingsPage() {
   const providerColumns: Column<OCRProvider>[] = [
     {
       key: 'name', title: '服务商',
-      render: (row) => <Stack gap={2}><Text fw={600} size="sm">{row.name}</Text><Text ff="monospace" size="xs" c="dimmed">{KIND_LABELS[row.kind]}</Text></Stack>,
+      render: (row) => <Stack gap={4}><Text fw={600} size="sm">{row.name}</Text><Text ff="monospace" size="xs" c="dimmed">{KIND_LABELS[row.kind]}</Text></Stack>,
     },
     { key: 'model', title: '模型', render: (row) => row.model || '—' },
-    { key: 'token', title: '令牌', width: 90, render: (row) => (row.token_configured ? <Tag color="green">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
+    { key: 'token', title: '令牌', width: 90, render: (row) => (row.token_configured ? <Tag color="success">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
     { key: 'priority', title: '优先级', width: 85, render: (row) => row.priority },
     {
       key: 'enabled', title: '启用', width: 80,
@@ -191,7 +191,7 @@ export function AiSettingsPage() {
     {
       key: 'actions', title: '操作', width: 140,
       render: (row) => (
-        <Group gap={6} wrap="nowrap">
+        <Group gap="xs" wrap="nowrap">
           <Button size="compact-sm" variant="default" onClick={() => handleTest(row)} disabled={!canWrite}>测试</Button>
           <Button size="compact-sm" variant="default" onClick={() => openProvider(row)} disabled={!canWrite}>编辑</Button>
         </Group>

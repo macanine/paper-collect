@@ -30,16 +30,18 @@ import {
   VERIFICATION_LABELS,
 } from '../lib/labels';
 
-type TagColor = string;
+/**
+ * 标签只有五种语义色：中性、成功、错误、警告、进行中/提示。
+ * 类别信息（部件、类型、学科）一律中性，颜色只用来提示需要注意的状态。
+ */
+export type TagColor = 'default' | 'success' | 'error' | 'warning' | 'processing';
 
-/** 语义色到 Mantine 颜色的映射。 */
-const PALETTE: Record<string, string> = {
-  default: 'gray', success: 'green', error: 'red', warning: 'yellow', processing: 'blue',
-  blue: 'blue', green: 'teal', cyan: 'cyan', purple: 'grape', geekblue: 'indigo', magenta: 'pink', gold: 'orange',
+const PALETTE: Record<TagColor, string> = {
+  default: 'gray', success: 'green', error: 'red', warning: 'orange', processing: 'blue',
 };
 
 function Tag({ color = 'default', children }: { color?: TagColor; children?: React.ReactNode }) {
-  return <Badge color={PALETTE[color] ?? 'gray'} variant="light" radius="sm" style={{ textTransform: 'none', fontWeight: 500, flexShrink: 0 }} styles={{ label: { overflow: 'visible', textOverflow: 'clip' } }} maw="none">{children}</Badge>;
+  return <Badge color={PALETTE[color]} style={{ flexShrink: 0 }} styles={{ label: { overflow: 'visible', textOverflow: 'clip' } }} maw="none">{children}</Badge>;
 }
 
 const MATERIAL_STATUS_COLORS: Record<MaterialStatus, TagColor> = {
@@ -84,17 +86,6 @@ const SHARE_STATUS_COLORS: Record<ShareStatus, TagColor> = {
   ready: 'success',
   unsupported: 'default',
   failed: 'error',
-};
-
-const PART_COLORS: Record<Part, TagColor> = {
-  questions: 'blue',
-  answers: 'green',
-  full: 'cyan',
-  teacher: 'purple',
-  answer_sheet: 'geekblue',
-  listening: 'magenta',
-  main: 'gold',
-  other: 'default',
 };
 
 const STAGE_COLORS: Record<Stage, TagColor> = {
@@ -152,7 +143,7 @@ export function VerificationTag({ verification }: { verification: Verification |
 }
 
 export function PartTag({ part }: { part: Part }) {
-  return <Tag color={PART_COLORS[part]}>{PART_LABELS[part]}</Tag>;
+  return <Tag>{PART_LABELS[part]}</Tag>;
 }
 
 export function StageTag({ stage }: { stage: Stage }) {

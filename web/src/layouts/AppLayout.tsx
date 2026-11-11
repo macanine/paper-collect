@@ -65,21 +65,21 @@ const Sidebar = memo(function Sidebar({ groups, activeKey, attention, collapsed 
   return (
     <Stack gap="md" h="100%" p={collapsed ? 'xs' : 'sm'}>
       <Link to="/" onClick={onNavigate} aria-label="返回工作台" style={{ textDecoration: 'none', color: 'inherit' }}>
-        <Group gap="sm" wrap="nowrap" px={collapsed ? 0 : 'xs'} py={6} justify={collapsed ? 'center' : 'flex-start'}>
-          <Avatar color="blue" variant="filled" radius="md" size={34}><IconBook2 size={20} /></Avatar>
+        <Group gap="sm" wrap="nowrap" px={collapsed ? 0 : 'xs'} py="xs" justify={collapsed ? 'center' : 'flex-start'}>
+          <Avatar color="blue" variant="filled" radius="md" size={36}><IconBook2 size={20} /></Avatar>
           {collapsed ? null : (
             <Stack gap={0}>
-              <Text fw={600} size="sm" lh={1.3}>中学资料库</Text>
+              <Text fw={600} size="md" lh={1.3}>中学资料库</Text>
               <Text size="xs" c="dimmed" lh={1.3}>Paper Collect</Text>
             </Stack>
           )}
         </Group>
       </Link>
       <ScrollArea flex={1} type="auto" offsetScrollbars>
-        <Stack gap="md" component="nav" aria-label="主导航">
+        <Stack gap="lg" component="nav" aria-label="主导航">
           {groups.map((group) => (
-            <Stack key={group.key} gap={2}>
-              {collapsed ? null : <Text size="xs" c="dimmed" fw={600} px="xs" pb={2}>{group.label}</Text>}
+            <Stack key={group.key} gap={4}>
+              {collapsed ? null : <Text size="xs" c="dimmed" fw={600} px="sm" pb={4}>{group.label}</Text>}
               {group.items.map((item) => {
                 const active = item.path === activeKey;
                 const showBadge = item.badge === 'attention' && attention > 0;
@@ -96,7 +96,7 @@ const Sidebar = memo(function Sidebar({ groups, activeKey, attention, collapsed 
                     onFocus={() => void item.preload?.()}
                     label={collapsed ? undefined : item.label}
                     leftSection={item.icon}
-                    rightSection={!collapsed && showBadge ? <Badge size="sm" color="red" variant="filled" aria-label={`${attention} 个需关注文件`}>{attention > 999 ? '999+' : attention}</Badge> : undefined}
+                    rightSection={!collapsed && showBadge ? <Badge color="red" variant="filled" aria-label={`${attention} 个需关注文件`}>{attention > 999 ? '999+' : attention}</Badge> : undefined}
                     styles={{ root: { borderRadius: 'var(--mantine-radius-md)', justifyContent: collapsed ? 'center' : undefined }, section: collapsed ? { margin: 0 } : undefined }}
                     variant="light"
                   />
@@ -116,7 +116,7 @@ const HeaderUploadButton = memo(function HeaderUploadButton() {
   return (
     <>
       <Button visibleFrom="sm" leftSection={<IconCloudUpload size={16} />} onClick={openDialog}>导入资料</Button>
-      <ActionIcon hiddenFrom="sm" size={32} variant="filled" aria-label="导入资料" onClick={openDialog}><IconCloudUpload size={18} /></ActionIcon>
+      <ActionIcon hiddenFrom="sm" size={40} variant="filled" aria-label="导入资料" onClick={openDialog}><IconCloudUpload size={20} /></ActionIcon>
     </>
   );
 });
@@ -187,16 +187,16 @@ function AppFrame() {
 
   return (
     <AppShell
-      header={{ height: 56 }}
-      navbar={{ width: collapsed ? 68 : 232, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
-      padding={{ base: 'sm', sm: 'lg' }}
+      header={{ height: 64 }}
+      navbar={{ width: collapsed ? 72 : 240, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
+      padding={{ base: 'md', sm: 'xl' }}
       bg="gray.0"
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
           <Group gap="sm" wrap="nowrap" miw={0}>
             <Burger opened={mobileOpened} onClick={mobile.toggle} hiddenFrom="sm" size="sm" aria-label="打开导航" />
-            <ActionIcon visibleFrom="sm" variant="subtle" color="gray" onClick={() => setCollapsed((v) => !v)} aria-label={collapsed ? '展开侧栏' : '收起侧栏'}>
+            <ActionIcon visibleFrom="sm" size={40} variant="subtle" color="gray" onClick={() => setCollapsed((v) => !v)} aria-label={collapsed ? '展开侧栏' : '收起侧栏'}>
               {collapsed ? <IconLayoutSidebarLeftExpand size={20} /> : <IconLayoutSidebarLeftCollapse size={20} />}
             </ActionIcon>
             <Breadcrumbs separator="/" aria-label="当前位置" style={{ flexWrap: 'nowrap', minWidth: 0 }}>
@@ -208,18 +208,18 @@ function AppFrame() {
           </Group>
           <Group gap="sm" wrap="nowrap">
             {can('audit:read') ? <NetworkActivity /> : null}
-            <UnstyledButton visibleFrom="md" onClick={openPalette} aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K" style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 'var(--mantine-radius-md)', padding: '0 10px', height: 32, minWidth: 220 }}>
+            <UnstyledButton visibleFrom="md" onClick={openPalette} aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K" style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 'var(--mantine-radius-md)', padding: '0 12px', height: 40, minWidth: 240 }}>
               <Group gap="xs" justify="space-between" h="100%">
-                <Group gap={6}><IconSearch size={15} color="var(--mantine-color-dimmed)" /><Text size="sm" c="dimmed">搜索或跳转</Text></Group>
-                <Kbd size="xs">⌘K</Kbd>
+                <Group gap="xs"><IconSearch size={16} color="var(--mantine-color-dimmed)" /><Text size="sm" c="dimmed">搜索或跳转</Text></Group>
+                <Kbd size="sm">⌘K</Kbd>
               </Group>
             </UnstyledButton>
-            <ActionIcon hiddenFrom="md" variant="default" size={32} onClick={openPalette} aria-label="打开命令面板"><IconSearch size={16} /></ActionIcon>
+            <ActionIcon hiddenFrom="md" variant="default" size={40} onClick={openPalette} aria-label="打开命令面板"><IconSearch size={16} /></ActionIcon>
             {can('uploads:write') ? <HeaderUploadButton /> : null}
             {user ? (
               <Menu position="bottom-end" width={200}>
                 <Menu.Target>
-                  <UnstyledButton aria-label="打开账户菜单"><Avatar color="blue" size={32}>{user.username.slice(0, 1).toUpperCase()}</Avatar></UnstyledButton>
+                  <UnstyledButton aria-label="打开账户菜单"><Avatar color="blue" size={40}>{user.username.slice(0, 1).toUpperCase()}</Avatar></UnstyledButton>
                 </Menu.Target>
                 <Menu.Dropdown>
                   <Menu.Label>{user.username} · {USER_ROLE_LABELS[user.role]}</Menu.Label>
@@ -237,7 +237,7 @@ function AppFrame() {
       </AppShell.Navbar>
 
       <AppShell.Main id="main-content">
-        <Stack maw={1440} mx="auto" gap="lg" miw={0}>
+        <Stack maw={1360} mx="auto" gap="lg" miw={0}>
           <Suspense fallback={<LoadingState />}>
             <Outlet />
           </Suspense>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ActionIcon, Alert, Anchor, Button, Group, Menu, Select, Stack, Text, TextInput, Textarea } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconChevronDown, IconDots, IconDownload, IconEye } from '@tabler/icons-react';
@@ -34,26 +34,36 @@ import { href } from '../../app/routes';
 
 const EDITABLE_FIELDS: (CatalogField | 'title')[] = ['title', 'doc_type', 'subject_codes', 'grade', 'cohort', 'term', 'region', 'organization', 'exam_date', 'exam_name', 'chapter', 'tags'];
 
+/** 只展示已填写的编目字段；空字段收在“显示全部”里，避免满屏破折号。 */
 function CatalogView({ pack }: { pack: Pack }) {
-  const dash = (value: string | number | undefined) => (value ? value : '—');
+  const [showEmpty, setShowEmpty] = useState(false);
+  const fields: { key: string; label: string; value: ReactNode }[] = [
+    { key: 'type', label: '资料类型', value: pack.doc_type ? DOC_TYPE_LABELS[pack.doc_type] : '' },
+    { key: 'subject', label: '学科', value: pack.subject_codes.map((c) => SUBJECT_LABELS[c]).join('、') },
+    { key: 'grade', label: '年级', value: pack.grade ? GRADE_LABELS[pack.grade] : '' },
+    { key: 'cohort', label: '届别', value: pack.cohort ? `${pack.cohort} 届` : '' },
+    { key: 'term', label: '学期', value: pack.term ? TERM_LABELS[pack.term] : '' },
+    { key: 'date', label: '考试时间', value: pack.exam_date },
+    { key: 'region', label: '地区', value: pack.region },
+    { key: 'org', label: '来源机构', value: pack.organization },
+    { key: 'exam', label: '考试名称', value: pack.exam_name },
+    { key: 'chapter', label: '章节 / 知识点', value: pack.chapter },
+    { key: 'tags', label: '标签', value: pack.tags.length > 0 ? <Group gap="xs">{pack.tags.map((t) => <Tag key={t}>{t}</Tag>)}</Group> : '' },
+    { key: 'desc', label: '备注', value: pack.description },
+  ];
+  const emptyCount = fields.filter((f) => !f.value).length;
+  const visible = showEmpty ? fields : fields.filter((f) => f.value);
   return (
-    <Descriptions
-      cols={3}
-      items={[
-        { key: 'type', label: '资料类型', children: pack.doc_type ? DOC_TYPE_LABELS[pack.doc_type] : '—' },
-        { key: 'subject', label: '学科', children: pack.subject_codes.map((c) => SUBJECT_LABELS[c]).join('、') || '—' },
-        { key: 'grade', label: '年级', children: pack.grade ? GRADE_LABELS[pack.grade] : '—' },
-        { key: 'cohort', label: '届别', children: pack.cohort ? `${pack.cohort} 届` : '—' },
-        { key: 'term', label: '学期', children: pack.term ? TERM_LABELS[pack.term] : '—' },
-        { key: 'date', label: '考试时间', children: dash(pack.exam_date) },
-        { key: 'region', label: '地区', children: dash(pack.region) },
-        { key: 'org', label: '来源机构', children: dash(pack.organization) },
-        { key: 'exam', label: '考试名称', children: dash(pack.exam_name) },
-        { key: 'chapter', label: '章节 / 知识点', children: dash(pack.chapter) },
-        { key: 'tags', label: '标签', children: pack.tags.length > 0 ? <Group gap={4}>{pack.tags.map((t) => <Tag key={t}>{t}</Tag>)}</Group> : '—' },
-        { key: 'desc', label: '备注', children: dash(pack.description) },
-      ]}
-    />
+    <Stack gap="md">
+      {visible.length > 0 ? (
+        <Descriptions cols={3} items={visible.map((f) => ({ key: f.key, label: f.label, children: f.value || '—' }))} />
+      ) : <Text size="sm" c="dimmed">还没有编目信息</Text>}
+      {emptyCount > 0 ? (
+        <Anchor component="button" type="button" size="sm" ta="left" onClick={() => setShowEmpty((v) => !v)} aria-expanded={showEmpty}>
+          {showEmpty ? '只看已填写的字段' : `显示未填写的 ${emptyCount} 个字段`}
+        </Anchor>
+      ) : null}
+    </Stack>
   );
 }
 
@@ -157,7 +167,7 @@ export function PackDetailPage() {
       width: 160,
       render: (member) =>
         canWrite && !trashed && editing ? (
-          <Select size="xs" w={128} allowDeselect={false} value={member.part} data={PART_OPTIONS} onChange={(part) => part && void changePart(member, part as Part)} />
+          <Select w={136} allowDeselect={false} value={member.part} data={PART_OPTIONS} onChange={(part) => part && void changePart(member, part as Part)} />
         ) : (
           PART_OPTIONS.find((o) => o.value === member.part)?.label
         ),
@@ -166,7 +176,7 @@ export function PackDetailPage() {
       key: 'file', wrap: true,
       title: '文件',
       render: (member) => (
-        <Stack gap={2}>
+        <Stack gap={4}>
           <Anchor component={Link} to={href.material(member.id)} size="sm">{member.file_name}</Anchor>
           <Text size="xs" c="dimmed">
             {formatBytes(member.size_bytes)}
@@ -206,7 +216,7 @@ export function PackDetailPage() {
       <BackLink to={trashed ? '/trash' : '/library'}>{trashed ? '返回回收站' : '返回资料库'}</BackLink>
       <PageHeader
         title={pack.title}
-        description={<Group gap="sm"><PackMeta pack={pack} /><Completeness pack={pack} /></Group>}
+        description={<Group gap="md" wrap="wrap"><PackMeta pack={pack} /><Completeness pack={pack} /></Group>}
         extra={
           trashed ? (
             canWrite ? (
@@ -267,10 +277,9 @@ export function PackDetailPage() {
         )}
       </Section>
 
-      <Stack gap="sm">
-        <Text fw={600}>文件（{pack.members.length}）</Text>
-        <DataTable rows={pack.members} columns={columns} rowKey={(m) => m.id} minWidth={640} />
-      </Stack>
+      <Section flush title={`文件（${pack.members.length}）`}>
+        <DataTable bare rows={pack.members} columns={columns} rowKey={(m) => m.id} minWidth={640} />
+      </Section>
 
       {!trashed ? <PackAIPanel packId={pack.id} canWrite={canWrite} /> : null}
 

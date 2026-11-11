@@ -6,13 +6,14 @@ import { describeError, errorMessage } from '../../shared/api/errors';
 import type { JobStatus, Upload } from '../../shared/api/types';
 import { formatBytes, formatDuration, formatRate } from '../../shared/lib/format';
 import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { Metric } from '../../shared/ui/Metric';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { Section } from '../../shared/ui/Section';
 import { message } from '../../shared/ui/feedback';
 import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { LinkButton } from '../../shared/ui/LinkButton';
-import { StageTag, Tag, UploadStatusTag } from '../../shared/ui/StatusTags';
+import { StageTag, Tag, UploadStatusTag, type TagColor } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { retryJob } from '../jobs/api';
 import { FileSelector } from './FileSelector';
@@ -38,7 +39,7 @@ export function UploadSessionPage() {
   return <UploadSessionPanel upload={query.data} />;
 }
 
-const ROW_STATUS: Record<RowStatus, { color: string; text: string }> = {
+const ROW_STATUS: Record<RowStatus, { color: TagColor; text: string }> = {
   received: { color: 'success', text: '已接收' },
   queued: { color: 'default', text: '待传输' },
   uploading: { color: 'processing', text: '传输中' },
@@ -137,7 +138,7 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
     {
       key: 'path', wrap: true, title: '相对路径',
       render: (row) => (
-        <Stack gap={2}>
+        <Stack gap={4}>
           <Text size="sm" style={{ wordBreak: 'break-all' }}>{row.entry.relative_path}</Text>
           {row.error ? <Text size="xs" c="red">{row.error}</Text> : null}
         </Stack>
@@ -177,12 +178,12 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
       {upload.status === 'completed' ? null : (
         <Section>
           <SimpleGrid cols={{ base: 2, sm: 3, xl: 6 }} spacing="md">
-            <Metric title="已接收" value={`${stats.receivedCount} / ${stats.total}`} />
-            <Metric title="已传输" value={formatBytes(stats.doneBytes)} />
-            <Metric title="实时速度" value={formatRate(transferSpeed)} />
-            <Metric title="预计剩余" value={etaMs === undefined ? '—' : formatDuration(etaMs)} />
-            <Metric title="失败" value={stats.failedCount} />
-            <Metric title="待重新选择" value={stats.missingCount} />
+            <Metric label="已接收" value={`${stats.receivedCount} / ${stats.total}`} />
+            <Metric label="已传输" value={formatBytes(stats.doneBytes)} />
+            <Metric label="实时速度" value={formatRate(transferSpeed)} />
+            <Metric label="预计剩余" value={etaMs === undefined ? '—' : formatDuration(etaMs)} />
+            <Metric label="失败" value={stats.failedCount} />
+            <Metric label="待重新选择" value={stats.missingCount} />
           </SimpleGrid>
           <Progress value={percent} color={stats.failedCount > 0 ? 'red' : 'blue'} />
         </Section>
@@ -224,15 +225,6 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
   );
 }
 
-function Metric({ title, value }: { title: string; value: string | number }) {
-  return (
-    <Stack gap={2}>
-      <Text size="xs" c="dimmed">{title}</Text>
-      <Text fw={600} fz={20}>{value}</Text>
-    </Stack>
-  );
-}
-
 interface SubmittedCardProps {
   upload: Upload;
   jobPending: boolean;
@@ -250,7 +242,7 @@ function SubmittedCard({ upload, jobPending, jobQueryError, jobStatus, jobFailur
   if (upload.status === 'completed') {
     const columns: Column<Upload['results'][number]>[] = [
       { key: 'path', wrap: true, title: '来源路径', render: (row) => <Text size="sm" style={{ wordBreak: 'break-all' }}>{row.path}</Text> },
-      { key: 'result', title: '结果', width: 120, render: (row) => (row.duplicate ? <Tag>已存在</Tag> : <Tag color="blue">新文件</Tag>) },
+      { key: 'result', title: '结果', width: 120, render: (row) => (row.duplicate ? <Tag>已存在</Tag> : <Tag color="success">新文件</Tag>) },
       { key: 'stage', title: '整理状态', width: 110, render: (row) => <StageTag stage={row.stage} /> },
       { key: 'pack', title: '归入', render: (row) => (row.pack_id ? <Anchor component={Link} to={href.pack(row.pack_id)} size="sm">{row.title || '查看套卷'}</Anchor> : '—') },
     ];

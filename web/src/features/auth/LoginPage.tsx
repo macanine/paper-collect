@@ -59,7 +59,7 @@ export function LoginPage() {
                 <Text size="xs" c="dimmed">Paper Collect · 管理台</Text>
               </Stack>
             </Group>
-            <Stack gap={2}>
+            <Stack gap={4}>
               <Title order={2}>登录</Title>
               <Text size="sm" c="dimmed">使用管理员分配的账户继续</Text>
             </Stack>
@@ -67,7 +67,7 @@ export function LoginPage() {
             <TextInput label="用户名" leftSection={<IconUser size={16} />} autoComplete="username" autoFocus disabled={submitting} {...form.getInputProps('username')} />
             <PasswordInput label="口令" leftSection={<IconLock size={16} />} autoComplete="current-password" disabled={submitting} {...form.getInputProps('password')} />
             <Button type="submit" fullWidth loading={submitting}>登录</Button>
-            <Text size="xs" c="dimmed" ta="center">仅限授权人员访问 · 登录状态将在 15 分钟后自动续期</Text>
+            <Text size="sm" c="dimmed" ta="center">仅限授权人员访问 · 登录状态将在 15 分钟后自动续期</Text>
           </Stack>
         </form>
       </Paper>

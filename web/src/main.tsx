@@ -10,7 +10,7 @@ import '@mantine/notifications/styles.css';
 import { App } from './App';
 import { AuthProvider } from './features/auth/AuthContext';
 import { queryClient } from './app/queryClient';
-import { mantineTheme } from './app/theme';
+import { cssVariablesResolver, mantineTheme } from './app/theme';
 import './styles/global.css';
 
 const container = document.getElementById('root');
@@ -18,7 +18,7 @@ if (!container) throw new Error('缺少 #root 挂载点');
 
 createRoot(container).render(
   <StrictMode>
-    <MantineProvider theme={mantineTheme} defaultColorScheme="light">
+    <MantineProvider theme={mantineTheme} cssVariablesResolver={cssVariablesResolver} defaultColorScheme="light">
       <ModalsProvider>
         <Notifications position="top-right" />
         <QueryClientProvider client={queryClient}>

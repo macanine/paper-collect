@@ -105,7 +105,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
           <Accordion variant="contained">
             <Accordion.Item value="markdown">
               <Accordion.Control>解析文本</Accordion.Control>
-              <Accordion.Panel><Text size="xs" mah={320} style={{ overflow: 'auto', whiteSpace: 'pre-wrap' }}>{view.markdown_excerpt || '无文本'}</Text></Accordion.Panel>
+              <Accordion.Panel><Text size="sm" mah={320} style={{ overflow: 'auto', whiteSpace: 'pre-wrap' }}>{view.markdown_excerpt || '无文本'}</Text></Accordion.Panel>
             </Accordion.Item>
           </Accordion>
         </Stack>
@@ -115,7 +115,8 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
 }
 
 /** 套卷详情：AI 最近一次为整套确定的编目与校验结果。 */
-export function PackAIPanel({ packId, canWrite }: { packId: string; canWrite: boolean }) {
+/** bare：嵌在需关注面板等已有卡片里时，不再画边框。 */
+export function PackAIPanel({ packId, canWrite, bare }: { packId: string; canWrite: boolean; bare?: boolean }) {
   const query = usePackAI(packId);
   const redecide = useRedecidePack(packId);
   const busy = query.data?.status === 'pending' || query.data?.status === 'running';
@@ -133,14 +134,14 @@ export function PackAIPanel({ packId, canWrite }: { packId: string; canWrite: bo
 
   if (query.isPending) {
     return (
-      <Section title="AI 编目">
+      <Section bare={bare} title="AI 编目">
         <LoadingState />
       </Section>
     );
   }
   if (query.isError) {
     return (
-      <Section title="AI 编目">
+      <Section bare={bare} title="AI 编目">
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       </Section>
     );
@@ -148,13 +149,13 @@ export function PackAIPanel({ packId, canWrite }: { packId: string; canWrite: bo
   const view = query.data;
   if (view.status === 'none') {
     return (
-      <Section title="AI 编目" extra={extra}>
+      <Section bare={bare} title="AI 编目" extra={extra}>
         <Text c="dimmed" size="sm">AI 还没有为这套资料确定编目</Text>
       </Section>
     );
   }
   return (
-    <Section title="AI 编目" extra={extra}>
+    <Section bare={bare} title="AI 编目" extra={extra}>
       <Descriptions
         items={[
           {
@@ -231,7 +232,7 @@ function EvidenceList({ evidence }: { evidence?: Record<string, string> }) {
 function ProblemList({ problems }: { problems: AIProblem[] }) {
   if (problems.length === 0) return <Text c="dimmed" size="sm">全部通过校验</Text>;
   return (
-    <Stack gap={6}>
+    <Stack gap="xs">
       {problems.map((problem, index) => (
         <Alert key={`${problem.code}-${index}`} color={problem.critical ? 'yellow' : 'blue'}>
           {problem.critical ? `需关注：${problem.message}` : `已剔除：${problem.message}`}

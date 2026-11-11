@@ -20,7 +20,7 @@ export function JobProgress({ job }: { job: Job }) {
       {logs.map((entry, index) => (
         <Timeline.Item key={index} color={entry.level === 'error' ? 'red' : 'blue'}>
           <Stack gap={4}>
-            <Group gap={6} wrap="nowrap" align="flex-start">
+            <Group gap="xs" wrap="nowrap" align="flex-start">
               {entry.level === 'error' ? <Tag color="error">错误</Tag> : null}
               <Text size="sm">{entry.message}</Text>
             </Group>

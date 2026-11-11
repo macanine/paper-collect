@@ -1,6 +1,7 @@
 import type { Drive, RuleConditions, SyncRule } from '../../shared/api/types';
 import { DOC_TYPE_LABELS, GRADE_LABELS, PART_LABELS, SUBJECT_LABELS } from '../../shared/lib/labels';
 import { formatBytes } from '../../shared/lib/format';
+import type { TagColor } from '../../shared/ui/StatusTags';
 
 /** 路径模板可用变量（与后端 templateKeys 一致）。 */
 export const TEMPLATE_VARIABLES = ['学科', '年级', '学期', '届别', '地区', '机构', '类型', '考试年月', '套卷', '部件', '文件名', 'sha8'] as const;
@@ -59,10 +60,10 @@ export const SYNC_ACTION_LABELS: Record<string, string> = {
   waiting_catalog: '等待编目',
 };
 
-export const SYNC_ACTION_COLORS: Record<string, string> = {
+export const SYNC_ACTION_COLORS: Record<string, TagColor> = {
   upload: 'processing',
-  move: 'blue',
-  share: 'cyan',
+  move: 'processing',
+  share: 'processing',
   skip: 'warning',
   orphan: 'default',
   cancel: 'default',

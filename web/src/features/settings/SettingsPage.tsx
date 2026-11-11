@@ -23,7 +23,7 @@ export function SettingsPage() {
       <Box w={{ base: '100%', md: 240 }} style={{ flexShrink: 0 }}>
         <Select hiddenFrom="md" value={current.key} data={sections.map((s) => ({ value: s.key, label: s.title }))} onChange={(key) => key && navigate(href.settings(key))} aria-label="选择设置分区" />
         <Paper visibleFrom="md" p="xs" component="nav" aria-label="设置分区">
-          <Stack gap={2}>
+          <Stack gap={4}>
             {sections.map((s) => (
               <NavLink
                 key={s.key}

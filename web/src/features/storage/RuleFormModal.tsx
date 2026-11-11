@@ -179,7 +179,7 @@ export function RuleFormModal({ open, rule, drives, onClose, onSave }: RuleFormM
             </Paper>
           );
         })}
-        <Text size="xs" c="dimmed">可用变量：{TEMPLATE_VARIABLES.map((v) => `{${v}}`).join(' ')}</Text>
+        <Text size="sm" c="dimmed">可用变量：{TEMPLATE_VARIABLES.map((v) => `{${v}}`).join(' ')}</Text>
       </Stack>
     </FormModal>
   );

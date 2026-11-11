@@ -141,7 +141,7 @@ export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], c
         <Paper p="md" bg="gray.0">
           <Stack gap="sm">
             <Text fw={600} size="sm">操作节点路由</Text>
-            <Text size="xs" c="dimmed">决定哪些从端上传到该网盘、直接从该网盘读取原件，并持有它的凭据。优先级数字越小越先使用；首选节点不可用时，优先策略自动切换到下一个节点，全部不可用时由任意节点处理；独占策略会保持等待。</Text>
+            <Text size="sm" c="dimmed">决定哪些从端上传到该网盘、直接从该网盘读取原件，并持有它的凭据。优先级数字越小越先使用；首选节点不可用时，优先策略自动切换到下一个节点，全部不可用时由任意节点处理；独占策略会保持等待。</Text>
             <Select
               label="分配策略"
               allowDeselect={false}
@@ -203,7 +203,7 @@ export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], c
               <PasswordInput key={field.key} label={field.label} withAsterisk={field.required} autoComplete="new-password" disabled={clearSecret} placeholder={editing && drive.secret_configured ? '留空保留' : field.required ? `请输入${field.label}` : '可选'} {...form.getInputProps(`secret.${field.key}`)} />
             ))}
           </SimpleGrid>
-          {kind === 'onedrive' && editing && drive.secret_configured ? <Text size="xs" c="dimmed">更换凭据时，请同时重新填写仍需使用的应用密钥和共享文件夹链接；留空的旧凭据不会保留。</Text> : null}
+          {kind === 'onedrive' && editing && drive.secret_configured ? <Text size="sm" c="dimmed">更换凭据时，请同时重新填写仍需使用的应用密钥和共享文件夹链接；留空的旧凭据不会保留。</Text> : null}
           {editing && drive.secret_configured ? <Checkbox label="清空已保存凭据" {...form.getInputProps('clearSecret', { type: 'checkbox' })} /> : null}
         </Stack>
       ) : null}

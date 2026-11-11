@@ -103,7 +103,7 @@ export function MetricChart({ title, points, series, format, max }: MetricChartP
           <Paper p="xs" shadow="sm" pos="absolute" top={8} style={xOf(current) > 0.6 ? { right: `${(1 - xOf(current)) * 100}%` } : { left: `${xOf(current) * 100}%` }}>
             <Text size="xs" c="dimmed">{formatDateTime(current.time)}</Text>
             {series.map((item) => (
-              <Group key={item.label} gap={6} wrap="nowrap">
+              <Group key={item.label} gap="xs" wrap="nowrap">
                 {series.length > 1 ? <Key color={item.color} /> : null}
                 <Text size="xs" fw={600}>{format(item.value(current))}</Text>
                 <Text size="xs" c="dimmed">{item.label}</Text>

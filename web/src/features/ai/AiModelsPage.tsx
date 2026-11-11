@@ -163,7 +163,7 @@ export function AiModelsPage() {
     { key: 'default_model', title: '默认模型', render: (p) => p.default_model || '—' },
     { key: 'vision_model', title: '视觉模型', render: (p) => p.vision_model || '—' },
     { key: 'priority', title: '优先级', width: 90, render: (p) => <Text ff="monospace" size="sm">{p.priority}</Text> },
-    { key: 'key', title: '密钥', width: 90, render: (p) => (p.api_key_configured ? <Tag color="green">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
+    { key: 'key', title: '密钥', width: 90, render: (p) => (p.api_key_configured ? <Tag color="success">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
     {
       key: 'enabled', title: '启用', width: 90,
       render: (p) => (
@@ -179,7 +179,7 @@ export function AiModelsPage() {
     {
       key: 'actions', title: '操作', width: 150,
       render: (p) => (
-        <Group gap={6} wrap="nowrap">
+        <Group gap="xs" wrap="nowrap">
           <Button size="compact-sm" variant="default" onClick={() => handleTest(p)} disabled={!canWrite || !p.default_model}>测试</Button>
           <Button size="compact-sm" variant="default" onClick={() => openEdit(p)} disabled={!canWrite}>编辑</Button>
         </Group>

@@ -30,7 +30,7 @@ export function NodeRuntimeFields({ form, providers, providersLoading, providers
       <Stack gap="xs">
         <div>
           <Text fw={600} size="sm">任务并发槽位</Text>
-          <Text size="xs" c="dimmed">0 表示不在该节点运行此类任务；修改会在从端下一次心跳时生效。</Text>
+          <Text size="sm" c="dimmed">0 表示不在该节点运行此类任务；修改会在从端下一次心跳时生效。</Text>
         </div>
         <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
           {(['replicate', 'analyze', 'index'] as const).map((kind) => (
@@ -53,7 +53,7 @@ export function NodeRuntimeFields({ form, providers, providersLoading, providers
       <Stack gap="xs">
         <div>
           <Text fw={600} size="sm">可访问的 OCR 服务</Text>
-          <Text size="xs" c="dimmed">RapidOCR、PaddleOCR、MinerU 使用同一套任务协议。节点只领取其可访问服务的分析和索引任务，多个服务按 AI 解析页中的全局优先级选择。</Text>
+          <Text size="sm" c="dimmed">RapidOCR、PaddleOCR、MinerU 使用同一套任务协议。节点只领取其可访问服务的分析和索引任务，多个服务按 AI 解析页中的全局优先级选择。</Text>
         </div>
         {providersError ? (
           <Alert color="yellow" title="OCR 服务列表加载失败">先修复 AI 解析配置页，再保存节点，避免覆盖现有 OCR 选择。</Alert>

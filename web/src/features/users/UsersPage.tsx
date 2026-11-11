@@ -13,13 +13,13 @@ import { FormModal } from '../../shared/ui/FormModal';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { message } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
-import { Tag } from '../../shared/ui/StatusTags';
+import { Tag, type TagColor } from '../../shared/ui/StatusTags';
 import { createUser, listUsers } from './api';
 import { qk } from '../../app/queryKeys';
 
 const PAGE_SIZE = 20;
 
-const ROLE_COLOR: Record<UserRole, string> = { admin: 'error', editor: 'blue', viewer: 'default' };
+const ROLE_COLOR: Record<UserRole, TagColor> = { admin: 'warning', editor: 'processing', viewer: 'default' };
 
 export function UsersPage() {
   const queryClient = useQueryClient();
@@ -52,7 +52,7 @@ export function UsersPage() {
   const columns: Column<User>[] = [
     { key: 'username', title: '用户名', render: (u) => <Text fw={600} size="sm">{u.username}</Text> },
     { key: 'role', title: '角色', width: 120, render: (u) => <Tag color={ROLE_COLOR[u.role]}>{USER_ROLE_LABELS[u.role]}</Tag> },
-    { key: 'enabled', title: '状态', width: 100, render: (u) => (u.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>) },
+    { key: 'enabled', title: '状态', width: 100, render: (u) => (u.enabled ? <Tag color="success">启用</Tag> : <Tag>停用</Tag>) },
     { key: 'created_at', title: '创建时间', width: 180, render: (u) => formatDateTime(u.created_at) },
   ];
 

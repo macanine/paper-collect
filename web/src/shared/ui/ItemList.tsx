@@ -16,6 +16,7 @@ export function ItemRow({ main, aside }: { main: ReactNode; aside?: ReactNode })
       gap="md"
       px="md"
       py="sm"
+      mih={56}
       style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}
       className="item-row"
     >

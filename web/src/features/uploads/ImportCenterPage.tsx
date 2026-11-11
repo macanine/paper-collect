@@ -21,7 +21,7 @@ const COLUMNS: Column<Upload>[] = [
     key: 'result', title: '结果',
     render: (u) => u.status === 'completed' ? (
       <Group gap={4}>
-        <Tag color="blue">新增 {u.new_count}</Tag>
+        <Tag>新增 {u.new_count}</Tag>
         <Tag>已存在 {u.duplicate_count}</Tag>
         {u.skipped.length > 0 ? <Tag color="warning">跳过 {u.skipped.length}</Tag> : null}
       </Group>
@@ -45,7 +45,7 @@ export function ImportCenterPage() {
       <PageHeader
         title="导入中心"
         description="查看资料导入进度；失败的导入可以从这里继续。"
-        extra={<Button leftSection={<IconCloudUpload size={16} />} onClick={openDialog}>导入资料</Button>}
+        extra={<Button variant="default" leftSection={<IconCloudUpload size={16} />} onClick={openDialog}>导入资料</Button>}
       />
       {query.isError ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />

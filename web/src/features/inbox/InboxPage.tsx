@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Accordion, ActionIcon, Alert, Anchor, Box, Button, Checkbox, Flex, Group, NumberInput, Paper, ScrollArea, SegmentedControl, Select, Stack, Text, UnstyledButton } from '@mantine/core';
+import { Accordion, ActionIcon, Alert, Anchor, Box, Button, Checkbox, Divider, Flex, Group, NumberInput, Paper, ScrollArea, SegmentedControl, Select, Stack, Text, Title, UnstyledButton } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { IconEye } from '@tabler/icons-react';
 import { Link, useSearchParams } from 'react-router';
@@ -12,7 +12,7 @@ import { PART_OPTIONS } from '../../shared/lib/options';
 import { ItemList, ItemRow } from '../../shared/ui/ItemList';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { message } from '../../shared/ui/feedback';
-import { ErrorState, LoadingState } from '../../shared/ui/States';
+import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { PartTag, StageTag, Tag } from '../../shared/ui/StatusTags';
 import { PackAIPanel } from '../ai/AIPanels';
 import { FilePreviewModal, canPreview } from '../materials/FilePreview';
@@ -103,19 +103,16 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
     <Paper p="lg" flex={1} miw={0}>
       <Stack gap="lg">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
-          <Stack gap={2} miw={0}>
-            <Text fw={600} truncate>{group.pack.title || '未命名资料'}</Text>
-            <Text size="xs" c="dimmed">{group.pack.members.length} 个文件 · {group.pack.is_exam ? '试卷资料' : '普通资料'}</Text>
+          <Stack gap={4} miw={0}>
+            <Title order={3} lineClamp={2}>{group.pack.title || '未命名资料'}</Title>
+            <Text size="sm" c="dimmed">{group.pack.members.length} 个文件 · {group.pack.is_exam ? '试卷资料' : '普通资料'}</Text>
           </Stack>
-          <Group gap="sm" wrap="nowrap" style={{ flexShrink: 0 }}>
-            <Completeness pack={group.pack} />
-            <Anchor component={Link} to={href.pack(group.pack.id)} size="sm">打开套卷</Anchor>
-          </Group>
+          <Anchor component={Link} to={href.pack(group.pack.id)} size="sm" style={{ flexShrink: 0 }}>打开套卷</Anchor>
         </Group>
 
         <Group gap="xs">
-          <StageTag stage={stage} />
           {packReasons(group).map((reason) => <Tag key={reason} color="warning">{attentionReasonLabel(reason)}</Tag>)}
+          <Completeness pack={group.pack} />
         </Group>
 
         {stage === 'waiting_ai' ? (
@@ -125,7 +122,9 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
         ) : null}
         {stage === 'processing' ? <Alert color="blue">AI 正在阅读、分组或编目，完成后会自动入库</Alert> : null}
 
-        <PackAIPanel packId={group.pack.id} canWrite={editable} />
+        <Divider />
+        <PackAIPanel bare packId={group.pack.id} canWrite={editable} />
+        <Divider />
 
         {showEdit ? (
           <Stack gap="md">
@@ -141,8 +140,8 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
         ) : null}
 
         <Stack gap="xs">
-          <Text fw={600} size="sm">文件（{group.pack.members.length}）</Text>
-          <ItemList>
+          <Title order={4}>文件（{group.pack.members.length}）</Title>
+          <ItemList bare>
             {group.pack.members.map((member) => {
               const edit = memberEdits[member.id] ?? { part: member.part, answer_start_page: member.answer_start_page };
               return (
@@ -150,22 +149,24 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
                   key={member.id}
                   main={
                     <Stack gap={4}>
-                      <Group gap={4} wrap="nowrap">
+                      <Group gap="xs" wrap="nowrap">
                         {canPreview(member.media_type) ? <ActionIcon variant="subtle" size="sm" onClick={() => setPreview(member)} aria-label={`预览 ${member.file_name}`}><IconEye size={16} /></ActionIcon> : null}
                         <Anchor component={Link} to={href.material(member.id)} size="sm" truncate>{member.file_name}</Anchor>
                       </Group>
-                      <Group gap="sm">
+                      <Group gap="xs">
                         <PartTag part={edit.part} />
-                        <Text size="xs" c="dimmed">{formatBytes(member.size_bytes)}</Text>
                         <StageTag stage={member.stage} />
-                        {edit.part === 'full' && edit.answer_start_page > 0 ? <Text size="xs" c="dimmed">答案从第 {edit.answer_start_page} 页开始</Text> : null}
+                        <Text size="sm" c="dimmed">
+                          {formatBytes(member.size_bytes)}
+                          {edit.part === 'full' && edit.answer_start_page > 0 ? ` · 答案从第 ${edit.answer_start_page} 页开始` : ''}
+                        </Text>
                       </Group>
                     </Stack>
                   }
                   aside={showEdit ? (
                     <>
-                      <Select size="xs" w={128} allowDeselect={false} aria-label={`${member.file_name} 的部件`} value={edit.part} data={PART_OPTIONS} onChange={(part) => part && updateMember(member, { part: part as Part })} />
-                      {edit.part === 'full' ? <NumberInput size="xs" w={110} min={1} max={10000} allowDecimal={false} value={edit.answer_start_page || ''} placeholder="答案起始页" onChange={(value) => updateMember(member, { answer_start_page: typeof value === 'number' ? value : 0 })} /> : null}
+                      <Select w={136} allowDeselect={false} aria-label={`${member.file_name} 的部件`} value={edit.part} data={PART_OPTIONS} onChange={(part) => part && updateMember(member, { part: part as Part })} />
+                      {edit.part === 'full' ? <NumberInput w={128} min={1} max={10000} allowDecimal={false} value={edit.answer_start_page || ''} placeholder="答案起始页" onChange={(value) => updateMember(member, { answer_start_page: typeof value === 'number' ? value : 0 })} /> : null}
                     </>
                   ) : null}
                 />
@@ -274,10 +275,10 @@ export function InboxPage() {
 
       {query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : null}
       {query.isPending ? <LoadingState /> : null}
-      {!query.isPending && groups.length === 0 ? <Paper p="xl"><Text c="dimmed" ta="center">{emptyCopy}</Text></Paper> : null}
+      {!query.isPending && groups.length === 0 ? <Paper><EmptyState description={emptyCopy} /></Paper> : null}
       {!query.isPending && groups.length > 0 ? (
         <Flex gap="lg" align={{ base: "stretch", md: "flex-start" }} direction={{ base: "column", md: "row" }}>
-          <Paper w={{ base: '100%', md: 340 }} style={{ flexShrink: 0, overflow: 'hidden' }}>
+          <Paper w={{ base: '100%', md: 352 }} style={{ flexShrink: 0, overflow: 'hidden' }}>
             {bulkMode ? (
               <Group justify="space-between" p="sm" style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}>
                 <Checkbox
@@ -298,6 +299,7 @@ export function InboxPage() {
                     w="100%"
                     px="md"
                     py="sm"
+                    mih={64}
                     bg={isActive ? 'blue.0' : undefined}
                     aria-current={isActive ? 'true' : undefined}
                     onClick={() => setActiveId(group.pack.id)}
@@ -305,17 +307,18 @@ export function InboxPage() {
                   >
                     <Group gap="sm" wrap="nowrap" align="flex-start">
                       {bulkMode ? (
-                        <Box onClick={(e) => e.stopPropagation()} pt={2}>
+                        <Box onClick={(e) => e.stopPropagation()} pt={4}>
                           <Checkbox aria-label="选择套卷" checked={checked.includes(group.pack.id)} onChange={(event) => setChecked((list) => (event.currentTarget.checked ? [...list, group.pack.id] : list.filter((id) => id !== group.pack.id)))} />
                         </Box>
                       ) : null}
                       <Stack gap={4} miw={0} flex={1}>
                         <Text size="sm" fw={600} lineClamp={2}>{group.pack.title || '未命名资料'}</Text>
-                        <Group gap={6}>
-                          <Text size="xs" c="dimmed">{group.pack.members.length} 个文件</Text>
-                          {packReasons(group).slice(0, 2).map((reasonValue) => <Tag key={reasonValue} color="warning">{attentionReasonLabel(reasonValue)}</Tag>)}
-                        </Group>
-                        <Text size="xs" c="dimmed">{formatDateTime(group.pack.created_at)}</Text>
+                        <Text size="xs" c="dimmed">{group.pack.members.length} 个文件 · {formatDateTime(group.pack.created_at)}</Text>
+                        {packReasons(group).length > 0 ? (
+                          <Group gap="xs">
+                            {packReasons(group).slice(0, 2).map((reasonValue) => <Tag key={reasonValue} color="warning">{attentionReasonLabel(reasonValue)}</Tag>)}
+                          </Group>
+                        ) : null}
                       </Stack>
                     </Group>
                   </UnstyledButton>
@@ -325,7 +328,7 @@ export function InboxPage() {
             {(query.data?.total ?? 0) > 100 ? (
               <Group justify="space-between" p="sm" style={{ borderTop: '1px solid var(--mantine-color-gray-2)' }}>
                 <Button size="compact-sm" variant="default" disabled={page === 1} onClick={() => setPage(page - 1)}>上一页</Button>
-                <Text size="xs" c="dimmed">第 {page} 页</Text>
+                <Text size="sm" c="dimmed">第 {page} 页</Text>
                 <Button size="compact-sm" variant="default" disabled={page * 100 >= (query.data?.total ?? 0)} onClick={() => setPage(page + 1)}>下一页</Button>
               </Group>
             ) : null}

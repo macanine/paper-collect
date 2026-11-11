@@ -7,12 +7,13 @@ interface PageHeaderProps {
   extra?: ReactNode;
 }
 
+/** 页面标题区：h2（28px）+ 一行说明，右侧放本页操作。每页只有一个。 */
 export function PageHeader({ title, description, extra }: PageHeaderProps) {
   return (
-    <Group justify="space-between" align="flex-start" wrap="wrap" gap="md">
-      <Stack gap={4} miw={0}>
-        <Title order={2} fz={24}>{title}</Title>
-        {description ? <Text c="dimmed" size="sm">{description}</Text> : null}
+    <Group justify="space-between" align="center" wrap="wrap" gap="md">
+      <Stack gap="xs" miw={0} maw={720}>
+        <Title order={2}>{title}</Title>
+        {description ? <Text component="div" c="dimmed" size="sm">{description}</Text> : null}
       </Stack>
       {extra ? <Group gap="sm" wrap="wrap">{extra}</Group> : null}
     </Group>

@@ -5,6 +5,7 @@ import { networkTelemetry, summarizeNetwork, type NetworkSample } from '../api/t
 import { formatBytes, shortId } from '../lib/format';
 import { CopyButton } from './CopyButton';
 import { DataTable, type Column } from './DataTable';
+import { Metric } from './Metric';
 import { EmptyState } from './States';
 import { Tag } from './StatusTags';
 
@@ -31,7 +32,7 @@ const COLUMNS: Column<NetworkSample>[] = [
     key: 'request',
     title: '请求',
     render: (s) => (
-      <Stack gap={2} miw={0}>
+      <Stack gap={4} miw={0}>
         <Group gap="xs" wrap="nowrap">
           <Tag>{s.method}</Tag>
           <Text size="xs" ff="monospace" truncate="end" maw={260} title={s.path}>{s.path}</Text>
@@ -49,23 +50,13 @@ const COLUMNS: Column<NetworkSample>[] = [
   {
     key: 'rid', title: '请求 ID', width: 170,
     render: (s) => s.requestId ? (
-      <Group gap={6} wrap="nowrap">
+      <Group gap="xs" wrap="nowrap">
         <Tooltip label={s.requestId}><Text size="xs" ff="monospace">{shortId(s.requestId)}</Text></Tooltip>
         <CopyButton value={s.requestId} label="复制" />
       </Group>
     ) : <Text size="xs" c="dimmed">—</Text>,
   },
 ];
-
-function Stat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
-  return (
-    <Paper p="sm">
-      <Text size="xs" c="dimmed">{label}</Text>
-      <Text fw={600} fz={22} lh={1.3}>{value}</Text>
-      <Text size="xs" c="dimmed">{hint}</Text>
-    </Paper>
-  );
-}
 
 export function NetworkActivity() {
   const [open, setOpen] = useState(false);
@@ -77,11 +68,11 @@ export function NetworkActivity() {
 
   return (
     <>
-      <UnstyledButton onClick={() => setOpen(true)} aria-label="打开网络与性能观测" visibleFrom="lg" style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 'var(--mantine-radius-md)', padding: '0 10px', height: 32 }}>
-        <Group gap={6} h="100%" wrap="nowrap">
+      <UnstyledButton onClick={() => setOpen(true)} aria-label="打开网络与性能观测" visibleFrom="lg" style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 'var(--mantine-radius-md)', padding: '0 12px', height: 40 }}>
+        <Group gap="xs" h="100%" wrap="nowrap">
           {live ? <IconBolt size={15} color="var(--mantine-color-blue-6)" /> : <IconApi size={15} color="var(--mantine-color-dimmed)" />}
-          <Text size="xs">网络</Text>
-          <Text size="xs" c="dimmed">{live ? `${telemetry.inflight} 项进行中` : latest ? latencyText(latest.durationMs) : '等待请求'}</Text>
+          <Text size="sm">网络</Text>
+          <Text size="sm" c="dimmed">{live ? `${telemetry.inflight} 项进行中` : latest ? latencyText(latest.durationMs) : '等待请求'}</Text>
         </Group>
       </UnstyledButton>
 
@@ -96,15 +87,17 @@ export function NetworkActivity() {
           <Group justify="flex-end">
             <Button size="compact-sm" variant="default" leftSection={<IconTrash size={14} />} disabled={telemetry.samples.length === 0} onClick={() => networkTelemetry.clear()}>清空</Button>
           </Group>
-          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
-            <Stat label="P95 延迟" value={latencyText(summary.p95Ms)} hint={`最近 ${summary.sampleCount} 次采样`} />
-            <Stat label="成功率" value={`${Math.round(summary.successRate * 100)}%`} hint={`${summary.errorCount} 次失败`} />
-            <Stat label="传输数据" value={formatBytes(telemetry.totalBytes)} hint="响应体与文件总量" />
-            <Stat label="进行中" value={telemetry.inflight} hint={`已完成 ${telemetry.completed} 次`} />
-          </SimpleGrid>
-          <Paper p="sm">
+          <Paper p="lg">
+            <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="lg">
+              <Metric label="P95 延迟" value={latencyText(summary.p95Ms)} hint={`最近 ${summary.sampleCount} 次采样`} />
+              <Metric label="成功率" value={`${Math.round(summary.successRate * 100)}%`} hint={`${summary.errorCount} 次失败`} />
+              <Metric label="传输数据" value={formatBytes(telemetry.totalBytes)} hint="响应体与文件总量" />
+              <Metric label="进行中" value={telemetry.inflight} hint={`已完成 ${telemetry.completed} 次`} />
+            </SimpleGrid>
+          </Paper>
+          <Paper p="lg">
             <Group justify="space-between" mb="xs">
-              <Text size="sm" fw={600}>延迟轨迹</Text>
+              <Text fw={600}>延迟轨迹</Text>
               <Text size="xs" c="dimmed">平均 {latencyText(summary.averageMs)} · 中位 {latencyText(summary.medianMs)}</Text>
             </Group>
             <LatencyBars samples={telemetry.samples.slice(-32)} />

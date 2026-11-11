@@ -85,7 +85,7 @@ export function ApiKeysPage() {
       width: 110,
       render: (k) => {
         if (k.revoked) return <Tag color="error">已撤销</Tag>;
-        if (k.expires_at && new Date(k.expires_at).getTime() < Date.now()) return <Tag color="gold">已过期</Tag>;
+        if (k.expires_at && new Date(k.expires_at).getTime() < Date.now()) return <Tag color="warning">已过期</Tag>;
         return <Tag color="success">有效</Tag>;
       },
     },
