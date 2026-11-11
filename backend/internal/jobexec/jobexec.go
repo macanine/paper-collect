@@ -94,6 +94,29 @@ type Blob struct {
 	Size      int64  `json:"size"`
 	FileName  string `json:"file_name"`
 	MediaType string `json:"media_type"`
+	// Sources are ready cloud replicas a worker node may read directly, in
+	// read order, before asking the master. They carry decrypted credentials
+	// and are only filled for nodes the drive's routing allows.
+	Sources []BlobSource `json:"sources,omitempty"`
+}
+
+// BlobSource is one cloud copy of an original.
+type BlobSource struct {
+	Drive  DriveConfig `json:"drive"`
+	Remote string      `json:"remote"`
+}
+
+// Blob returns the original a prepared input reads, or nil.
+func (in *Input) Blob() *Blob {
+	switch {
+	case in.Replicate != nil:
+		return &in.Replicate.Blob
+	case in.Analyze != nil:
+		return &in.Analyze.Blob
+	case in.Index != nil:
+		return &in.Index.Blob
+	}
+	return nil
 }
 
 // DriveConfig is a decrypted storage adapter configuration.

@@ -211,7 +211,6 @@ type fakeMaster struct {
 	completes  int
 	lost       []string
 	config     map[string]any
-	interrupts int
 	capacity   []map[string]int // capacity sent with each claim
 }
 
@@ -493,5 +492,75 @@ func TestStalePartialFilesAreRemovedOnStart(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale partial survived: %v", err)
+	}
+}
+
+// readAdapter serves fixed bytes for every key, counting reads.
+type readAdapter struct {
+	storage.Adapter
+	content  []byte
+	download bool
+	opens    *atomic.Int32
+}
+
+func (a readAdapter) Capabilities() storage.Capabilities { return storage.Capabilities{Download: a.download} }
+
+func (a readAdapter) Open(context.Context, string) (io.ReadCloser, error) {
+	a.opens.Add(1)
+	return io.NopCloser(strings.NewReader(string(a.content))), nil
+}
+
+// A worker reads an original straight from a cloud replica, so the master
+// serves no bytes; bad or unusable replicas fall through to the next source.
+func TestOriginalComesFromCloudReplicaBeforeMaster(t *testing.T) {
+	content := []byte("cloud original")
+	var masterHits, opens atomic.Int32
+	adapters := map[string]readAdapter{
+		"wrong":    {content: []byte("tampered bytes"), download: true, opens: &opens},
+		"no-read":  {content: content, download: false, opens: &opens},
+		"verified": {content: content, download: true, opens: &opens},
+	}
+	w := newWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		masterHits.Add(1)
+		_, _ = rw.Write(content)
+	}), func(c *Config) {
+		c.Factory = func(cfg storage.Config) (storage.Adapter, error) { return adapters[cfg.ID], nil }
+	})
+	b := blobOf(content)
+	for _, id := range []string{"wrong", "no-read", "verified"} {
+		b.Sources = append(b.Sources, jobexec.BlobSource{Drive: jobexec.DriveConfig{ID: id, Kind: "s3"}, Remote: "k"})
+	}
+	env := &remoteEnv{w: w, jobID: "job"}
+	defer env.release()
+	body, err := env.OpenBlob(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(body)
+	body.Close()
+	if string(got) != string(content) || masterHits.Load() != 0 || opens.Load() != 2 {
+		t.Fatalf("got %q, master hits %d, replica opens %d", got, masterHits.Load(), opens.Load())
+	}
+
+	// With only a bad replica the master remains the fallback.
+	other := []byte("second original")
+	b2 := blobOf(other)
+	b2.Sources = []jobexec.BlobSource{{Drive: jobexec.DriveConfig{ID: "wrong", Kind: "s3"}, Remote: "k"}}
+	w2 := newWorker(t, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		masterHits.Add(1)
+		_, _ = rw.Write(other)
+	}), func(c *Config) {
+		c.Factory = func(cfg storage.Config) (storage.Adapter, error) { return adapters[cfg.ID], nil }
+	})
+	env2 := &remoteEnv{w: w2, jobID: "job"}
+	defer env2.release()
+	body, err = env2.OpenBlob(context.Background(), b2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = io.ReadAll(body)
+	body.Close()
+	if string(got) != string(other) || masterHits.Load() != 1 {
+		t.Fatalf("fallback got %q with %d master hits", got, masterHits.Load())
 	}
 }

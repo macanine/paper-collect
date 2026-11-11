@@ -65,11 +65,60 @@ func (e *remoteEnv) OpenBlob(ctx context.Context, b jobexec.Blob) (io.ReadCloser
 	if f := e.w.openCached(path, b); f != nil {
 		return f, nil
 	}
-	if err := e.w.download(ctx, b, path); err != nil {
-		return nil, err
+	if !e.fetchFromReplicas(ctx, b, path) {
+		if err := e.w.download(ctx, b, path); err != nil {
+			return nil, err
+		}
 	}
 	e.w.evict()
 	return os.Open(path)
+}
+
+// fetchFromReplicas copies the original straight from a cloud replica, in read
+// order, so it does not flow out through the master. Any failure, including a
+// hash mismatch, falls through to the next source and finally to the master.
+func (e *remoteEnv) fetchFromReplicas(ctx context.Context, b jobexec.Blob, dest string) bool {
+	for _, source := range b.Sources {
+		if ctx.Err() != nil {
+			return false
+		}
+		err := e.copyFromReplica(ctx, b, source, dest)
+		if err == nil {
+			return true
+		}
+		e.Logf("read original from %s replica failed; trying next source: %v", source.Drive.Kind, err)
+	}
+	return false
+}
+
+func (e *remoteEnv) copyFromReplica(ctx context.Context, b jobexec.Blob, source jobexec.BlobSource, dest string) error {
+	adapter, err := jobexec.NewAdapter(e, source.Drive)
+	if err != nil {
+		return err
+	}
+	if !adapter.Capabilities().Download {
+		return errors.New("网盘不支持下载")
+	}
+	body, err := adapter.Open(ctx, source.Remote)
+	if err != nil {
+		return err
+	}
+	verified := jobexec.VerifyReader(body, b.SHA256, b.Size)
+	defer verified.Close()
+	tmp, err := os.CreateTemp(filepath.Join(e.w.cfg.CacheDir, "tmp"), "blob-*.part")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := io.Copy(tmp, verified); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, dest)
 }
 
 func (e *remoteEnv) pin(path string) {

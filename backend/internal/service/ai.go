@@ -435,17 +435,6 @@ func analyzable(mediaType string) bool {
 	return false
 }
 
-func (s *Service) loadAISettingsTx(tx *gorm.DB) (model.AISettings, error) {
-	var settings model.AISettings
-	if err := tx.Where("id = ?", 1).First(&settings).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return defaultAISettings(), nil
-		}
-		return settings, err
-	}
-	return settings, nil
-}
-
 // aiModels decrypts the enabled model endpoints in priority order. Every
 // AI step uses this same list, so one set is always decided the same way.
 func (s *Service) aiModels(ctx context.Context) ([]jobexec.ModelConfig, error) {

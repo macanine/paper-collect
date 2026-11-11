@@ -621,6 +621,11 @@ func (s *Service) prepareJob(ctx context.Context, job model.Job, ocrProviderID s
 	default:
 		err = fmt.Errorf("任务类型 %s 不能交给节点执行", job.Kind)
 	}
+	if err == nil && job.LeaseOwner != "" && job.LeaseOwner != s.workerSettings().InstanceID {
+		if b := in.Blob(); b != nil {
+			b.Sources, err = s.nodeBlobSources(ctx, b.SHA256, job.LeaseOwner)
+		}
+	}
 	return in, err
 }
 

@@ -451,7 +451,7 @@ curl -X POST http://127.0.0.1:8080/mcp -H "Authorization: Bearer $PAPER_COLLECT_
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/heartbeat` | 上报指标、`running_job_ids` 和 `config_revision`，续租，返回 `lost_job_ids`、`draining`，以及包含槽位、缓存上限、OCR 服务、心跳、领取等待和修订号的 `config` |
-| POST | `/jobs/claim` | 长轮询批量领取，body `{"capacity":{"replicate"\|"analyze"\|"index":空闲数},"wait_ms","protocol","ocr_provider_ids"}`，每类最多 64，最长 25 秒；返回 `{"jobs":[Input...]}`（每类不超过所给空闲数），无任务返回 204，协议版本不一致返回 409（当前协议 4） |
+| POST | `/jobs/claim` | 长轮询批量领取（任务输入的 `blob.sources` 列出该节点可直接读取的云端副本及凭据，节点先读副本、失败再回退 `/blobs/:sha`），body `{"capacity":{"replicate"\|"analyze"\|"index":空闲数},"wait_ms","protocol","ocr_provider_ids"}`，每类最多 64，最长 25 秒；返回 `{"jobs":[Input...]}`（每类不超过所给空闲数），无任务返回 204，协议版本不一致返回 409（当前协议 4） |
 | POST | `/jobs/:id/progress` | 进度 |
 | POST | `/jobs/:id/complete` | 提交结果，可 gzip，上限 32 MiB；幂等，非当前租约返回 409 |
 | POST | `/jobs/:id/fail` | `{"error","extra"}` 记录失败，`{"interrupted":true}` 重新排队 |

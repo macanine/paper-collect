@@ -506,7 +506,7 @@ func TestAIAnalysisEndToEnd(t *testing.T) {
 	}
 
 	// A manual edit locks the field. Re-deciding keeps the person's value.
-	status, body = env.do(t, http.MethodGet, "/api/v1/materials/"+materialID, nil, nil)
+	_, body = env.do(t, http.MethodGet, "/api/v1/materials/"+materialID, nil, nil)
 	packID := jsonField(t, body, "pack_id")
 	status, body = env.do(t, http.MethodPatch, "/api/v1/packs/"+packID, map[string]any{"cohort": 2025}, nil)
 	if status != http.StatusOK || !strings.Contains(string(body), `"cohort":2025`) {

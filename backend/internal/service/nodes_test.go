@@ -216,7 +216,6 @@ func TestDrainingNodeWaitsThenResumesOnWake(t *testing.T) {
 		svc.notify()
 	}()
 	req.Wait = 5 * time.Second
-	started = time.Now()
 	// The replica has no blob, so preparation fails after the claim. What matters
 	// is that the job left pending well before the wait ran out.
 	_, _ = svc.ClaimForNode(ctxWithTimeout(t, 500*time.Millisecond), node, req)

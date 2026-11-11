@@ -102,7 +102,7 @@ func (s *Service) ingest(ctx context.Context, job model.Job) error {
 			}
 			skipped = append(skipped, skippedMembers...)
 			for _, member := range members {
-				files = append(files, plannedFile{Path: member.Path, SHA: member.SHA, Size: member.Size, MediaType: member.MediaType})
+				files = append(files, plannedFile(member))
 			}
 			continue
 		}
