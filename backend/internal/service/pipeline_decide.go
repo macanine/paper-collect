@@ -441,9 +441,9 @@ func (s *Service) RedecidePack(ctx context.Context, p auth.Principal, id string)
 type PackAIView struct {
 	Decision     *model.PackDecision
 	ProviderName string
-	Parsed   catalogai.Decision
-	Problems []catalogai.Problem
-	Cards    map[string]catalogai.Card
+	Parsed       catalogai.Decision
+	Problems     []catalogai.Problem
+	Cards        map[string]catalogai.Card
 }
 
 // GetPackAI returns the AI record of a set.

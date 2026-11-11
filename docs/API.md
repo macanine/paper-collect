@@ -115,7 +115,7 @@ JSON `{"material_ids":["uuid"]}`；必须恰好包含该套卷全部文件，否
 
 ### POST /packs/trash · POST /packs/restore · POST /packs/purge（materials:write）
 
-JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。trash 把套卷及其文件软删除进回收站；restore 恢复回收站中的套卷；purge 只接受已在回收站中的套卷（否则 409），彻底删除文件、题目与解析缓存，并删除无引用的本地 CAS 文件。回收站保留 30 天，到期由后台任务清理。**purge 不会删除网盘上的文件**：已上传到云盘的副本转为 orphaned（规则外副本）并保留 Blob 记录，之后再次上传相同内容会重新接管；需要删除时在 `POST /storage/replicas/bulk` 中执行 `delete_remote`。`local` 网盘中的文件和从未上传的副本行会直接删除。审计记录 pack.trash / pack.restore / pack.purge。
+JSON `{"ids":["uuid"]}`；每次 1..500 个，返回 200 data=`{"count":n}`。trash 把套卷及其文件软删除进回收站；restore 恢复回收站中的套卷；purge 只接受已在回收站中的套卷（否则 409），彻底删除文件、题目与解析缓存，并删除无引用的本地 CAS 文件。回收站保留 30 天，到期由后台任务清理。**purge 不会删除网盘上的文件**：已上传到云盘的副本转为 orphaned（规则外副本）并保留 Blob 记录，之后再次上传相同内容会重新接管；需要删除时在 `POST /storage/replicas/bulk` 中执行 `delete_remote`。`local` 网盘中的文件和从未上传的副本行会直接删除。回收站检查与删除在同一事务内完成，并发恢复的套卷不会被删除；仍在运行的编目、解析和索引任务随之撤销。审计记录 pack.trash / pack.restore / pack.purge，到期自动清理记为系统操作 pack.purge_expired。
 
 ### GET /materials（materials:read）
 

@@ -202,16 +202,16 @@ func TestEvictionKeepsFilesPinnedByRunningJobs(t *testing.T) {
 
 // fakeMaster answers the node protocol for one job.
 type fakeMaster struct {
-	mu         sync.Mutex
-	claims     atomic.Int32
-	job        *jobexec.Input
-	heartbeat  int // status for heartbeats; 0 means 200
-	complete   int // status for complete; 0 means 204
-	fails      []map[string]any
-	completes  int
-	lost       []string
-	config     map[string]any
-	capacity   []map[string]int // capacity sent with each claim
+	mu        sync.Mutex
+	claims    atomic.Int32
+	job       *jobexec.Input
+	heartbeat int // status for heartbeats; 0 means 200
+	complete  int // status for complete; 0 means 204
+	fails     []map[string]any
+	completes int
+	lost      []string
+	config    map[string]any
+	capacity  []map[string]int // capacity sent with each claim
 }
 
 func (m *fakeMaster) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
@@ -503,7 +503,9 @@ type readAdapter struct {
 	opens    *atomic.Int32
 }
 
-func (a readAdapter) Capabilities() storage.Capabilities { return storage.Capabilities{Download: a.download} }
+func (a readAdapter) Capabilities() storage.Capabilities {
+	return storage.Capabilities{Download: a.download}
+}
 
 func (a readAdapter) Open(context.Context, string) (io.ReadCloser, error) {
 	a.opens.Add(1)

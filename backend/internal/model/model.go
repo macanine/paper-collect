@@ -280,17 +280,17 @@ type Blob struct {
 // a MaterialSource instead of a new row; parse, analysis and index results hang
 // off the material, so each content is processed and paid for once.
 type Material struct {
-	ID                string `gorm:"primaryKey;size:36"`
-	PackID            string `gorm:"size:36;not null;index"`
-	Position          int    `gorm:"not null"`
-	Part              string `gorm:"size:32;not null;index"`
-	AnswerStartPage   int    `gorm:"not null"`
-	Title         string `gorm:"size:255;not null"`
-	FileName      string `gorm:"type:text;not null"`
-	OriginalName  string `gorm:"type:text;not null"`
-	Stage         string `gorm:"size:16;not null;index"`
-	AIStep        string `gorm:"size:16;not null;default:'';index"`
-	AttentionJSON string `gorm:"type:text;not null;default:'[]'"`
+	ID              string `gorm:"primaryKey;size:36"`
+	PackID          string `gorm:"size:36;not null;index"`
+	Position        int    `gorm:"not null"`
+	Part            string `gorm:"size:32;not null;index"`
+	AnswerStartPage int    `gorm:"not null"`
+	Title           string `gorm:"size:255;not null"`
+	FileName        string `gorm:"type:text;not null"`
+	OriginalName    string `gorm:"type:text;not null"`
+	Stage           string `gorm:"size:16;not null;index"`
+	AIStep          string `gorm:"size:16;not null;default:'';index"`
+	AttentionJSON   string `gorm:"type:text;not null;default:'[]'"`
 	// BatchID groups files the model groups together: the upload they
 	// arrived with, or a library re-run.
 	BatchID string `gorm:"size:36;not null;default:'';index"`
@@ -424,15 +424,15 @@ type UploadEntry struct {
 
 // Job is a persisted unit of background work.
 type Job struct {
-	ID              string `gorm:"primaryKey;size:36"`
-	Kind            string `gorm:"size:16;not null;index"`
-	Status          string `gorm:"size:16;not null;index"`
-	UploadID        string `gorm:"size:36;index"`
-	ReplicaID       string `gorm:"size:36;index"`
-	MaterialID      string `gorm:"size:36;index"`
-	PackID          string `gorm:"size:36;not null;default:'';index"`
-	BatchID         string `gorm:"size:36;not null;default:'';index"`
-	EntityID        string `gorm:"size:36;not null;default:'';index"`
+	ID         string `gorm:"primaryKey;size:36"`
+	Kind       string `gorm:"size:16;not null;index"`
+	Status     string `gorm:"size:16;not null;index"`
+	UploadID   string `gorm:"size:36;index"`
+	ReplicaID  string `gorm:"size:36;index"`
+	MaterialID string `gorm:"size:36;index"`
+	PackID     string `gorm:"size:36;not null;default:'';index"`
+	BatchID    string `gorm:"size:36;not null;default:'';index"`
+	EntityID   string `gorm:"size:36;not null;default:'';index"`
 	// PayloadJSON holds what a job was prepared with (the files of a group
 	// chunk, the pack revision of a decision) so failures and commits refer
 	// to exactly that work.
@@ -440,14 +440,14 @@ type Job struct {
 	// NextAttemptAt delays a retried job; nil means it may run now.
 	NextAttemptAt   *time.Time `gorm:"index"`
 	Attempts        int        `gorm:"not null"`
-	Error           string `gorm:"type:text;not null"`
-	ProgressMessage string `gorm:"type:text;not null;default:''"`
-	ProgressCurrent int    `gorm:"not null;default:0"`
-	ProgressTotal   int    `gorm:"not null;default:0"`
-	LogJSON         string `gorm:"type:text;not null;default:''"`
-	LeaseOwner      string `gorm:"size:128;index"` // node ID while running
-	NodeID          string `gorm:"size:36;index"`  // node of the latest execution
-	NodeName        string `gorm:"size:64"`
+	Error           string     `gorm:"type:text;not null"`
+	ProgressMessage string     `gorm:"type:text;not null;default:''"`
+	ProgressCurrent int        `gorm:"not null;default:0"`
+	ProgressTotal   int        `gorm:"not null;default:0"`
+	LogJSON         string     `gorm:"type:text;not null;default:''"`
+	LeaseOwner      string     `gorm:"size:128;index"` // node ID while running
+	NodeID          string     `gorm:"size:36;index"`  // node of the latest execution
+	NodeName        string     `gorm:"size:64"`
 	LeaseUntil      *time.Time
 	HeartbeatAt     *time.Time
 	StartedAt       *time.Time

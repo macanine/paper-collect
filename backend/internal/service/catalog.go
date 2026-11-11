@@ -185,7 +185,6 @@ func (s *Service) renameMaterialFiles(ctx context.Context, ids []string) {
 	s.notify()
 }
 
-
 var unsafeFileChars = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]+`)
 
 func sanitizeFileName(name string) string {
