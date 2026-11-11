@@ -26,6 +26,7 @@ import {
   type NodeRuntimeFormValues,
 } from './nodeUtils';
 import { href } from '../../app/routes';
+import { qk } from '../../app/queryKeys';
 
 const PRIMARY = 'var(--ant-primary)';
 const SECOND = 'var(--chart-series-2)';
@@ -46,12 +47,12 @@ export function NodeDetailPage() {
   const update = useNodeUpdate();
   const [runtimeForm] = Form.useForm<NodeRuntimeFormValues>();
   const metrics = useQuery({
-    queryKey: ['nodes', nodeId, 'metrics'],
+    queryKey: qk.nodes.metrics(nodeId),
     queryFn: ({ signal }) => getNodeMetrics(nodeId, signal),
     refetchInterval: NODE_POLL_MS,
   });
   const running = useQuery({
-    queryKey: ['nodes', nodeId, 'running-jobs'],
+    queryKey: qk.nodes.runningJobs(nodeId),
     queryFn: ({ signal }) => listJobs({ node_id: nodeId, status: 'running', page: 1, page_size: 50 }, signal),
     refetchInterval: NODE_POLL_MS,
   });

@@ -14,7 +14,7 @@ import { PartTag, StageTag } from '../../shared/ui/StatusTags';
 import { PackAIPanel } from '../ai/AnalysisPanel';
 import { updateMaterial } from '../materials/api';
 import { FilePreviewModal, canPreview } from '../materials/FilePreview';
-import { invalidateLibrary, useAcceptMaterials, useReviewPacks } from '../materials/queries';
+import { invalidateLibrary, useAcceptMaterials, useInbox } from '../materials/queries';
 import { updatePack } from '../packs/api';
 import { Completeness } from '../packs/PackBadges';
 import { PackCatalogFields, formToUpdate, packToForm, type CatalogField, type CatalogFormValues } from '../packs/PackCatalogFields';
@@ -212,7 +212,7 @@ export function InboxPage() {
   const stage = (TABS.find((tab) => tab.value === params.get('stage'))?.value ?? 'attention') as Stage;
   const reason = params.get('reason') ?? '';
   const [page, setPage] = useState(1);
-  const query = useReviewPacks({ page, page_size: 100, stage, reason: reason || undefined }, { poll: stage === 'attention' ? false : 8000 });
+  const query = useInbox({ page, page_size: 100, stage, reason: reason || undefined }, { poll: stage === 'attention' ? false : 8000 });
   const accept = useAcceptMaterials();
   const groups = query.data?.items ?? EMPTY_REVIEW_PACKS;
   const [activeId, setActiveId] = useState<string>();

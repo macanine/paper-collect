@@ -1,14 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Job } from '../../shared/api/types';
 import { getJob, listJobs, retryJob, type JobListParams } from './api';
+import { qk } from '../../app/queryKeys';
 
 const JOB_POLL_MS = 3000;
 
-const jobKeys = {
-  all: ['jobs'] as const,
-  list: (params: JobListParams) => ['jobs', 'list', params] as const,
-  detail: (id: string) => ['jobs', 'detail', id] as const,
-};
+const jobKeys = qk.jobs;
 
 function isTerminal(job: Pick<Job, 'status'> | undefined): boolean {
   return job?.status === 'succeeded' || job?.status === 'failed';
@@ -44,8 +41,8 @@ export function useRetryJob() {
     onSuccess: (job) => {
       queryClient.setQueryData(jobKeys.detail(job.id), job);
       void queryClient.invalidateQueries({ queryKey: jobKeys.all });
-      void queryClient.invalidateQueries({ queryKey: ['uploads'] });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void queryClient.invalidateQueries({ queryKey: qk.uploads.all });
+      void queryClient.invalidateQueries({ queryKey: qk.dashboard.all });
     },
   });
 }

@@ -8,6 +8,7 @@ import { formatDateTime } from '../../shared/lib/format';
 import { INDEX_STATUS_LABELS } from '../../shared/lib/labels';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { enqueueMaterialIndex, getMaterialIndexState, listMaterialQuestions } from './api';
+import { qk } from '../../app/queryKeys';
 
 const PAGE_SIZE = 20;
 
@@ -16,7 +17,7 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const state = useQuery({
-    queryKey: ['material-index', materialId],
+    queryKey: qk.materials.index(materialId),
     queryFn: () => getMaterialIndexState(materialId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
@@ -24,7 +25,7 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
     },
   });
   const questions = useQuery({
-    queryKey: ['material-questions', materialId, page],
+    queryKey: qk.materials.questions(materialId, page),
     queryFn: () => listMaterialQuestions(materialId, page, PAGE_SIZE),
     enabled: state.data?.status === 'succeeded',
   });
@@ -32,8 +33,8 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
     mutationFn: () => enqueueMaterialIndex(materialId, true),
     onSuccess: () => {
       message.success('已加入索引队列');
-      void queryClient.invalidateQueries({ queryKey: ['material-index', materialId] });
-      void queryClient.invalidateQueries({ queryKey: ['material-questions', materialId] });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.index(materialId) });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.questions(materialId) });
     },
     onError: (error) => message.error(describeError(error).title),
   });

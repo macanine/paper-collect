@@ -11,6 +11,7 @@ import { ProviderFormModal } from './ProviderFormModal';
 import { PROVIDER_FIELD_SPECS } from './providerFields';
 import { useDrives, useTestDrive } from './queries';
 import { listNodes } from '../nodes/api';
+import { qk } from '../../app/queryKeys';
 
 function routeSummary(drive: Drive): string {
   const routes = drive.routes ?? [];
@@ -48,7 +49,7 @@ function CapabilityTags({ drive }: { drive: Drive }) {
 export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; canRoute?: boolean }) {
   const { message, modal } = App.useApp();
   const drives = useDrives();
-  const nodes = useQuery({ queryKey: ['nodes'], queryFn: ({ signal }) => listNodes(signal), enabled: canRoute });
+  const nodes = useQuery({ queryKey: qk.nodes.list, queryFn: ({ signal }) => listNodes(signal), enabled: canRoute });
   const testDrive = useTestDrive();
   const [editing, setEditing] = useState<Drive | null>(null);
   const [creating, setCreating] = useState(false);

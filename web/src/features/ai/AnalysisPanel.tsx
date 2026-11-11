@@ -9,6 +9,7 @@ import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { materialKeys } from '../materials/queries';
 import { analysisStatusCopy, cardFieldCount } from './format';
 import { useMaterialCard, usePackAI, useRedecidePack, useRereadMaterial } from './queries';
+import { qk } from '../../app/queryKeys';
 
 interface AnalysisPanelProps {
   materialId: string;
@@ -38,7 +39,7 @@ export function AnalysisPanel({ materialId, canWrite }: AnalysisPanelProps) {
   useEffect(() => {
     if (query.data?.status !== 'succeeded') return;
     void queryClient.invalidateQueries({ queryKey: materialKeys.detail(materialId) });
-    void queryClient.invalidateQueries({ queryKey: ['packs'] });
+    void queryClient.invalidateQueries({ queryKey: qk.packs.all });
   }, [materialId, query.data?.status, queryClient]);
 
   const handleReread = () => {

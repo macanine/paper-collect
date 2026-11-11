@@ -7,6 +7,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { href, ROUTES, SETTINGS, type LazyPage } from '../app/routes';
 import { useAuth } from '../features/auth/AuthContext';
 import { listPacks } from '../features/packs/api';
+import { qk } from '../app/queryKeys';
 
 interface Command {
   id: string;
@@ -35,7 +36,7 @@ export function CommandPalette({ open, onClose, onImport }: { open: boolean; onC
   const searchPacks = can('materials:read') && deferred.length >= 2;
 
   const packs = useQuery({
-    queryKey: ['command-palette', 'packs', deferred],
+    queryKey: qk.packs.lookup(deferred),
     queryFn: ({ signal }) => listPacks({ q: deferred, page: 1, page_size: 6 }, signal),
     enabled: open && searchPacks,
     placeholderData: keepPreviousData,

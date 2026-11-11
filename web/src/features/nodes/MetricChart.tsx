@@ -4,6 +4,7 @@ import type { NodePoint } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
 import { getNodeMetrics } from './api';
 import { NODE_POLL_MS, linePath } from './nodeUtils';
+import { qk } from '../../app/queryKeys';
 
 const WIDTH = 600;
 const HEIGHT = 140;
@@ -117,7 +118,7 @@ export function MetricChart({ title, points, series, format, max }: MetricChartP
 /** 列表行内的 CPU 迷你趋势，只用于看走势，具体数值在旁边的文字里。 */
 export function CpuSparkline({ nodeId }: { nodeId: string }) {
   const query = useQuery({
-    queryKey: ['nodes', nodeId, 'metrics'],
+    queryKey: qk.nodes.metrics(nodeId),
     queryFn: ({ signal }) => getNodeMetrics(nodeId, signal),
     refetchInterval: NODE_POLL_MS,
   });

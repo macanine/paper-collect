@@ -10,6 +10,7 @@ import { useAuth } from '../auth/AuthContext';
 import { invalidateLibrary } from '../materials/queries';
 import { REGIONS } from '../packs/PackCatalogFields';
 import { listEntities, mergeEntity, updateEntity } from './api';
+import { qk } from '../../app/queryKeys';
 
 const KIND_OPTIONS: { value: EntityKind; label: string }[] = [
   { value: 'organization', label: '学校与联盟' },
@@ -36,18 +37,18 @@ export function EntitiesPage() {
   const [saving, setSaving] = useState(false);
 
   const query = useQuery({
-    queryKey: ['entities', kind, q, page],
+    queryKey: qk.entities.list(kind, q, page),
     queryFn: ({ signal }) => listEntities({ kind, q: q || undefined, page, page_size: 50 }, signal),
     placeholderData: keepPreviousData,
   });
   const candidates = useQuery({
-    queryKey: ['entities', kind, 'merge', mergeSearch],
+    queryKey: qk.entities.mergeCandidates(kind, mergeSearch),
     queryFn: ({ signal }) => listEntities({ kind, q: mergeSearch || undefined, page: 1, page_size: 50 }, signal),
     enabled: merging !== null,
   });
 
   const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ['entities'] });
+    void queryClient.invalidateQueries({ queryKey: qk.entities.all });
     invalidateLibrary(queryClient);
   };
 

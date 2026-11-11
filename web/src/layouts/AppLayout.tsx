@@ -23,6 +23,7 @@ import { USER_ROLE_LABELS } from '../shared/lib/labels';
 import { NetworkActivity } from '../shared/ui/NetworkActivity';
 import { FullPageLoading, LoadingState } from '../shared/ui/States';
 import { CommandPalette, useCommandShortcut } from './CommandPalette';
+import { qk } from '../app/queryKeys';
 
 interface NavItem {
   path: string;
@@ -139,7 +140,7 @@ const HeaderUploadButton = memo(function HeaderUploadButton() {
   const { openDialog } = useUploads();
   return (
     <span className="app-header__upload">
-      <Button type="primary" aria-label="导入资料" icon={<CloudUploadOutlined />} onClick={openDialog}>
+      <Button aria-label="导入资料" icon={<CloudUploadOutlined />} onClick={openDialog}>
         <span className="app-header__upload-label">导入资料</span>
       </Button>
     </span>
@@ -175,7 +176,7 @@ function PaletteWithImport({ open, onClose }: { open: boolean; onClose: () => vo
 function AppFrame() {
   const { user, can, signOut } = useAuth();
   const stats = useQuery({
-    queryKey: ['dashboard', 'library-stats'],
+    queryKey: qk.dashboard.libraryStats,
     queryFn: ({ signal }) => getLibraryStats(signal),
     enabled: can('materials:read'),
     refetchInterval: 30_000,

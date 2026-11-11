@@ -14,13 +14,9 @@ import {
   updatePack,
   type PackListParams,
 } from './api';
+import { qk } from '../../app/queryKeys';
 
-export const packKeys = {
-  all: ['packs'] as const,
-  list: (params: PackListParams) => ['packs', 'list', params] as const,
-  detail: (id: string) => ['packs', 'detail', id] as const,
-  facets: ['packs', 'facets'] as const,
-};
+export const packKeys = qk.packs;
 
 export function usePacksList(params: PackListParams, enabled = true) {
   return useQuery({

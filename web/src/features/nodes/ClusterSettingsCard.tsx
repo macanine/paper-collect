@@ -6,6 +6,7 @@ import type { ClusterSettings, NodeKind } from '../../shared/api/types';
 import { JOB_KIND_LABELS } from '../../shared/lib/labels';
 import { getClusterSettings, patchClusterSettings, type ClusterSettingsPatch } from './api';
 import { NODE_POLL_MS } from './nodeUtils';
+import { qk } from '../../app/queryKeys';
 
 interface ClusterSettingsFormValues {
   master_kinds: NodeKind[];
@@ -33,7 +34,7 @@ const settingValues = (settings: ClusterSettings): ClusterSettingsFormValues => 
 
 export function useClusterSettings() {
   return useQuery({
-    queryKey: ['cluster-settings'],
+    queryKey: qk.nodes.clusterSettings,
     queryFn: ({ signal }) => getClusterSettings(signal),
     refetchInterval: NODE_POLL_MS,
   });
@@ -48,7 +49,7 @@ export function ClusterSettingsCard() {
     mutationFn: (body: ClusterSettingsPatch) => patchClusterSettings(body),
     onSuccess: (settings) => {
       queryClient.setQueryData(['cluster-settings'], settings);
-      void queryClient.invalidateQueries({ queryKey: ['nodes'] });
+      void queryClient.invalidateQueries({ queryKey: qk.nodes.all });
       message.success('集群调度设置已保存');
     },
     onError: (error) => {

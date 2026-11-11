@@ -12,6 +12,7 @@ import { CopyButton } from '../../shared/ui/CopyButton';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { createKey, listKeys, revokeKey } from './api';
 import { buildCreateKeyBody, type KeyFormValues } from './keyForm';
+import { qk } from '../../app/queryKeys';
 
 const KEY_SCOPE_OPTIONS = SCOPES.map((scope) => ({
   value: scope,
@@ -29,7 +30,7 @@ export function ApiKeysPage() {
   const [form] = Form.useForm<KeyFormValues>();
 
   const query = useQuery({
-    queryKey: ['api-keys', page],
+    queryKey: qk.apiKeys.list(page),
     queryFn: ({ signal }) => listKeys({ page, page_size: PAGE_SIZE }, signal),
   });
 
@@ -39,7 +40,7 @@ export function ApiKeysPage() {
       setCreated(result);
       setCreating(false);
       form.resetFields();
-      void queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+      void queryClient.invalidateQueries({ queryKey: qk.apiKeys.all });
     },
     onError: (error) => message.error(describeError(error).title),
   });
@@ -48,7 +49,7 @@ export function ApiKeysPage() {
     mutationFn: revokeKey,
     onSuccess: () => {
       message.success('密钥已撤销，使用它的请求会立即失效');
-      void queryClient.invalidateQueries({ queryKey: ['api-keys'] });
+      void queryClient.invalidateQueries({ queryKey: qk.apiKeys.all });
     },
     onError: (error) => message.error(describeError(error).title),
   });

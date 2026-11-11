@@ -11,6 +11,7 @@ import { USER_ROLE_OPTIONS } from '../../shared/lib/options';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { createUser, listUsers } from './api';
+import { qk } from '../../app/queryKeys';
 
 const PAGE_SIZE = 20;
 
@@ -28,7 +29,7 @@ export function UsersPage() {
   const [form] = Form.useForm<UserFormValues>();
 
   const query = useQuery({
-    queryKey: ['users', page],
+    queryKey: qk.users.list(page),
     queryFn: ({ signal }) => listUsers({ page, page_size: PAGE_SIZE }, signal),
   });
 
@@ -38,7 +39,7 @@ export function UsersPage() {
       message.success('用户已创建');
       setCreating(false);
       form.resetFields();
-      void queryClient.invalidateQueries({ queryKey: ['users'] });
+      void queryClient.invalidateQueries({ queryKey: qk.users.all });
     },
     onError: (error) => message.error(describeError(error).title),
   });

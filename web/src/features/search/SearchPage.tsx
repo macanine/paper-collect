@@ -11,6 +11,7 @@ import { SubjectTags } from '../../shared/ui/StatusTags';
 import { searchQuestions } from './api';
 import { splitHighlights } from './highlight';
 import { href } from '../../app/routes';
+import { qk } from '../../app/queryKeys';
 
 interface SearchFormValues {
   query: string;
@@ -43,7 +44,7 @@ export function SearchPage() {
     };
   }, [searchParams]);
   const query = useQuery({
-    queryKey: ['search', params],
+    queryKey: qk.search.questions(params),
     queryFn: ({ signal }) =>
       searchQuestions({
         query: params?.query ?? '', subject: params?.subject, grade: params?.grade,

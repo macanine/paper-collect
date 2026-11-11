@@ -30,6 +30,7 @@ import {
   type NodeRuntimeFormValues,
 } from './nodeUtils';
 import { href } from '../../app/routes';
+import { qk } from '../../app/queryKeys';
 
 interface NodeFormValues extends NodeRuntimeFormValues {
   name: string;
@@ -37,7 +38,7 @@ interface NodeFormValues extends NodeRuntimeFormValues {
 
 export function useNodes() {
   return useQuery({
-    queryKey: ['nodes'],
+    queryKey: qk.nodes.list,
     queryFn: ({ signal }) => listNodes(signal),
     refetchInterval: NODE_POLL_MS,
   });
@@ -48,7 +49,7 @@ export function useNodeUpdate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }: { id: string; body: NodePatchBody }) => patchNode(id, body),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['nodes'] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: qk.nodes.all }),
     onError: (error) => {
       const { title, detail } = describeError(error);
       message.error(detail ? `${title}：${detail}` : title);
@@ -86,7 +87,7 @@ export function NodesPage() {
       setCreating(false);
       setEditing(null);
       form.resetFields();
-      void queryClient.invalidateQueries({ queryKey: ['nodes'] });
+      void queryClient.invalidateQueries({ queryKey: qk.nodes.all });
       message.success(editing ? '节点配置已保存，将在下一次心跳应用' : '节点已创建');
     },
     onError: (error) => {

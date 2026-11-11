@@ -3,13 +3,11 @@ import { apiRequest } from '../../shared/api/client';
 import { segment } from '../../shared/api/paths';
 import type { Job, Upload } from '../../shared/api/types';
 import { finalizeUpload, getUpload } from './api';
+import { qk } from '../../app/queryKeys';
 
 const POLL_INTERVAL_MS = 2000;
 
-export const uploadKeys = {
-  detail: (id: string) => ['uploads', 'detail', id] as const,
-  job: (id: string) => ['jobs', 'detail', id] as const,
-};
+export const uploadKeys = { detail: qk.uploads.detail, job: qk.jobs.detail };
 
 function isTerminalJob(job: Job | undefined): boolean {
   return job?.status === 'succeeded' || job?.status === 'failed';

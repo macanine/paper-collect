@@ -16,13 +16,9 @@ import {
 } from './api';
 import type { ProviderDraft, ProviderPatch } from './providerFields';
 import type { SyncRule } from '../../shared/api/types';
+import { qk } from '../../app/queryKeys';
 
-export const storageKeys = {
-  drives: ['storage', 'drives'] as const,
-  rules: ['storage', 'rules'] as const,
-  replicas: (status: string, driveId: string, page: number) => ['storage', 'replicas', status, driveId, page] as const,
-  explain: (materialId: string) => ['storage', 'explain', materialId] as const,
-};
+export const storageKeys = qk.storage;
 
 export function useDrives(enabled = true) {
   return useQuery({
@@ -86,10 +82,10 @@ export function usePutRules() {
     mutationFn: ({ rules, previewToken }: { rules: SyncRule[]; previewToken: string }) => putRules(rules, previewToken),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: storageKeys.rules });
-      void queryClient.invalidateQueries({ queryKey: ['storage', 'replicas'] });
-      void queryClient.invalidateQueries({ queryKey: ['materials'] });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      void queryClient.invalidateQueries({ queryKey: qk.storage.allReplicas });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.all });
+      void queryClient.invalidateQueries({ queryKey: qk.dashboard.all });
+      void queryClient.invalidateQueries({ queryKey: qk.jobs.all });
     },
   });
 }
@@ -99,8 +95,8 @@ export function useReconcile() {
   return useMutation({
     mutationFn: reconcileStorage,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void queryClient.invalidateQueries({ queryKey: qk.jobs.all });
+      void queryClient.invalidateQueries({ queryKey: qk.dashboard.all });
     },
   });
 }
@@ -110,11 +106,11 @@ export function useBulkReplicas() {
   return useMutation({
     mutationFn: ({ ids, action }: { ids: string[]; action: ReplicaBulkAction }) => bulkReplicas(ids, action),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['storage', 'replicas'] });
+      void queryClient.invalidateQueries({ queryKey: qk.storage.allReplicas });
       void queryClient.invalidateQueries({ queryKey: storageKeys.drives });
-      void queryClient.invalidateQueries({ queryKey: ['materials'] });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.all });
+      void queryClient.invalidateQueries({ queryKey: qk.dashboard.all });
+      void queryClient.invalidateQueries({ queryKey: qk.jobs.all });
     },
   });
 }
@@ -125,9 +121,9 @@ export function useSyncMaterial() {
     mutationFn: (materialId: string) => syncMaterial(materialId),
     onSuccess: (_result, materialId) => {
       void queryClient.invalidateQueries({ queryKey: storageKeys.explain(materialId) });
-      void queryClient.invalidateQueries({ queryKey: ['materials'] });
-      void queryClient.invalidateQueries({ queryKey: ['jobs'] });
-      void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.all });
+      void queryClient.invalidateQueries({ queryKey: qk.jobs.all });
+      void queryClient.invalidateQueries({ queryKey: qk.dashboard.all });
     },
   });
 }
@@ -137,7 +133,7 @@ export function useRefreshShare() {
   return useMutation({
     mutationFn: (replicaId: string) => refreshReplicaShare(replicaId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['materials'] });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.all });
     },
   });
 }

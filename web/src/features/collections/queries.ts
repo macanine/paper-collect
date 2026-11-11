@@ -12,12 +12,9 @@ import {
   type CollectionListParams,
   type CollectionPatchBody,
 } from './api';
+import { qk } from '../../app/queryKeys';
 
-const collectionKeys = {
-  all: ['collections'] as const,
-  list: (params: CollectionListParams) => ['collections', 'list', params] as const,
-  detail: (id: string) => ['collections', 'detail', id] as const,
-};
+const collectionKeys = qk.collections;
 
 export function useCollectionsList(params: CollectionListParams, enabled = true) {
   return useQuery({

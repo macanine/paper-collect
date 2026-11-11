@@ -12,13 +12,14 @@ import { UploadStatusTag } from '../../shared/ui/StatusTags';
 import { listUploads } from './api';
 import { useUploads } from './UploadManager';
 import { href } from '../../app/routes';
+import { qk } from '../../app/queryKeys';
 
 export function ImportCenterPage() {
   const navigate = useNavigate();
   const { openDialog } = useUploads();
   const list = useListSearch([] as const);
   const query = useQuery({
-    queryKey: ['uploads', 'list', list.page, list.pageSize],
+    queryKey: qk.uploads.list(list.page, list.pageSize),
     queryFn: ({ signal }) => listUploads({ page: list.page, page_size: list.pageSize }, signal),
     placeholderData: keepPreviousData,
     refetchInterval: (q) => (q.state.data?.items.some((u) => u.status === 'pending' || u.status === 'processing') ? 3000 : false),

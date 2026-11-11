@@ -19,14 +19,9 @@ import {
 } from './api';
 import type { AIProviderDraft, AIProviderPatch, OCRProviderDraft, OCRProviderPatch } from './api';
 import { ApiError } from '../../shared/api/errors';
+import { qk } from '../../app/queryKeys';
 
-const aiKeys = {
-  providers: ['ai', 'providers'] as const,
-  ocrProviders: ['ai', 'ocr-providers'] as const,
-  settings: ['ai', 'settings'] as const,
-  analysis: (materialId: string) => ['materials', materialId, 'analysis'] as const,
-  packAI: (packId: string) => ['packs', packId, 'ai'] as const,
-};
+const aiKeys = { ...qk.ai, analysis: qk.materials.analysis, packAI: qk.packs.ai };
 
 export function useAIProviders(enabled = true) {
   return useQuery({ queryKey: aiKeys.providers, queryFn: listAIProviders, enabled });
@@ -130,7 +125,7 @@ export function useRereadMaterial(materialId: string) {
   return useMutation({
     mutationFn: () => rereadMaterial(materialId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['materials'] });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.all });
       void queryClient.invalidateQueries({ queryKey: aiKeys.analysis(materialId) });
     },
   });
@@ -141,8 +136,8 @@ export function useRedecidePack(packId: string) {
   return useMutation({
     mutationFn: () => redecidePack(packId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['packs'] });
-      void queryClient.invalidateQueries({ queryKey: ['materials'] });
+      void queryClient.invalidateQueries({ queryKey: qk.packs.all });
+      void queryClient.invalidateQueries({ queryKey: qk.materials.all });
       void queryClient.invalidateQueries({ queryKey: aiKeys.packAI(packId) });
     },
   });

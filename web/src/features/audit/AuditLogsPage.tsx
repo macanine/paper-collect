@@ -9,13 +9,14 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { listAuditLogs } from './api';
 import { href } from '../../app/routes';
+import { qk } from '../../app/queryKeys';
 
 const PAGE_SIZE = 20;
 
 export function AuditLogsPage() {
   const [page, setPage] = useState(1);
   const query = useQuery({
-    queryKey: ['audit', page],
+    queryKey: qk.audit.list(page),
     queryFn: ({ signal }) => listAuditLogs({ page, page_size: PAGE_SIZE }, signal),
   });
 
