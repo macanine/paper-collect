@@ -14,13 +14,13 @@ export function totalSlots(slots: ClusterNode['slots']): number {
 const KIND_ORDER: NodeKind[] = ['replicate', 'analyze', 'index'];
 const GIB = 1024 ** 3;
 
-export const DEFAULT_NODE_SLOTS: Record<NodeKind, number> = {
+const DEFAULT_NODE_SLOTS: Record<NodeKind, number> = {
   replicate: 2,
   analyze: 1,
   index: 1,
 };
 
-export const DEFAULT_NODE_CACHE_GIB = 20;
+const DEFAULT_NODE_CACHE_GIB = 20;
 
 export interface NodeRuntimeFormValues {
   slots: Partial<Record<NodeKind, number>>;

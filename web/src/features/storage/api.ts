@@ -7,7 +7,6 @@ import type {
   ReconcileResult,
   Replica,
   ReplicaBulkResult,
-  SyncAction,
   SyncPreview,
   SyncRule,
 } from '../../shared/api/types';
@@ -43,10 +42,6 @@ export function previewRules(rules: SyncRule[], page: number, pageSize: number):
 
 export function putRules(rules: SyncRule[], previewToken: string): Promise<ReconcileResult> {
   return apiRequest<ReconcileResult>('/storage/rules', { method: 'PUT', body: { rules, preview_token: previewToken } });
-}
-
-export function explainSync(materialId: string): Promise<SyncAction[]> {
-  return apiRequest<SyncAction[]>('/storage/rules/explain', { query: { material_id: materialId } });
 }
 
 export function listReplicas(filter: { status?: string; drive_id?: string; page?: number; page_size?: number }): Promise<Page<Replica>> {

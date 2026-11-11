@@ -3,6 +3,7 @@ package docx
 import (
 	"archive/zip"
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -36,10 +37,11 @@ func parsePackage(t *testing.T, data []byte) *Document {
 }
 
 func TestSampleParagraphsTableImageAndPages(t *testing.T) {
-	doc, err := ParseFile("../testdata/docx/sample.docx")
+	data, err := os.ReadFile("../testdata/docx/sample.docx")
 	if err != nil {
 		t.Fatal(err)
 	}
+	doc := parsePackage(t, data)
 	if len(doc.Pages) != 2 {
 		t.Fatalf("pages = %d, want 2", len(doc.Pages))
 	}

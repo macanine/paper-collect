@@ -244,21 +244,6 @@ func (s *Service) purgePacksTx(tx *gorm.DB, packIDs []string) (purgeCleanup, err
 	return c, tx.Unscoped().Where("id IN ?", packIDs).Delete(&model.Pack{}).Error
 }
 
-// purgeMaterials permanently removes files outside any pack purge.
-func (s *Service) purgeMaterials(ctx context.Context, ids []string) error {
-	var c purgeCleanup
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var err error
-		c, err = s.purgeMaterialsTx(tx, ids)
-		return err
-	})
-	if err != nil {
-		return apperr.Internal(err)
-	}
-	s.finishPurge(c)
-	return nil
-}
-
 // purgeMaterialsTx deletes file rows. Their local CAS originals and local
 // replicas are removed by finishPurge; remote cloud objects are NOT deleted
 // (removing cloud files automatically is a non-goal), so those replicas stay

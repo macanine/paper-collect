@@ -264,7 +264,7 @@ func TestWebDAVPutAuthFailureIsNotRetryable(t *testing.T) {
 
 	_, err = bad.Put(context.Background(), Object{Key: "a/auth.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
 	requireClass(t, err, ClassAuth)
-	if IsRetryable(err) {
+	if isRetryable(err) {
 		t.Fatal("auth failure must not be retryable")
 	}
 	if strings.Contains(err.Error(), "wrong") || strings.Contains(err.Error(), davUser) {
@@ -272,7 +272,7 @@ func TestWebDAVPutAuthFailureIsNotRetryable(t *testing.T) {
 	}
 }
 
-func TestWebDAVPutServerErrorIsRetryable(t *testing.T) {
+func TestWebDAVPutServerErrorisRetryable(t *testing.T) {
 	store := newDavStore()
 	store.putStatus = http.StatusServiceUnavailable
 	srv := httptest.NewServer(store)
@@ -283,7 +283,7 @@ func TestWebDAVPutServerErrorIsRetryable(t *testing.T) {
 
 	_, err := adapter.Put(context.Background(), Object{Key: "b/busy.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
 	requireClass(t, err, ClassUnavailable)
-	if !IsRetryable(err) {
+	if !isRetryable(err) {
 		t.Fatal("503 must be retryable")
 	}
 }
@@ -307,7 +307,7 @@ func TestWebDAVPutTimeoutIsClassified(t *testing.T) {
 
 	_, err := adapter.Put(context.Background(), Object{Key: "t/slow.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
 	requireClass(t, err, ClassTimeout)
-	if !IsRetryable(err) {
+	if !isRetryable(err) {
 		t.Fatal("timeout must be retryable")
 	}
 }
@@ -322,7 +322,7 @@ func TestWebDAVConnectionFailureIsNetworkClass(t *testing.T) {
 
 	_, err := adapter.Put(context.Background(), Object{Key: "n/off.pdf", Path: src, SHA256: digest, Size: int64(len(data))})
 	requireClass(t, err, ClassNetwork)
-	if !IsRetryable(err) {
+	if !isRetryable(err) {
 		t.Fatal("network failure must be retryable")
 	}
 	if strings.Contains(err.Error(), "127.0.0.1") {

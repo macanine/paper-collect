@@ -205,7 +205,3 @@ func snippetForMatch(text string, matchStart, matchEnd, limit int) (string, [][2
 	}
 	return snippet.String(), [][2]int{{hiStart, hiEnd}}
 }
-
-func highlightSnippet(text, normalizedQuery string, limit int) (string, [][2]int) {
-	return newSnippetMatcher(normalizedQuery).highlight(text, limit)
-}

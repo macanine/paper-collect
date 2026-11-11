@@ -54,26 +54,14 @@ type Member struct {
 	Size  int64  // declared uncompressed size
 }
 
-// Inspect validates the full central directory and returns the supported members.
+// InspectWithSkipped validates the full central directory and returns the
+// supported members, plus the non-ignored files whose formats are unsupported.
 // It rejects traversal, absolute or backslash paths, symlinks, special files,
 // encrypted entries, duplicate paths, bombs, and oversize or over-count packages.
-func Inspect(zipPath string, lim Limits) ([]Member, error) {
-	var skipped int
-	return inspect(zipPath, lim, &skipped)
-}
-
-// InspectWithSkipped also lists non-ignored files whose formats are unsupported.
 func InspectWithSkipped(zipPath string, lim Limits) ([]Member, []string, error) {
 	var skipped []string
 	members, err := inspectNames(zipPath, lim, &skipped)
 	return members, skipped, err
-}
-
-func inspect(zipPath string, lim Limits, skipped *int) ([]Member, error) {
-	var names []string
-	members, err := inspectNames(zipPath, lim, &names)
-	*skipped = len(names)
-	return members, err
 }
 
 func inspectNames(zipPath string, lim Limits, skipped *[]string) ([]Member, error) {

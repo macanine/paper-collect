@@ -61,14 +61,6 @@ func AsCloudError(err error) *CloudError {
 	return newCloudError(ClassUnknown, "unclassified", false)
 }
 
-// IsRetryable 报告错误是否值得由后端稍后重试。
-func IsRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	return AsCloudError(err).Retryable
-}
-
 // transportError 把 http.Client.Do 或读取响应体时的传输层错误归类。
 // 不使用 err.Error()：net/url 的错误文本会携带完整 URL。
 func transportError(ctx context.Context, err error, op string) *CloudError {

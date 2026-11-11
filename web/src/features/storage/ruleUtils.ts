@@ -7,7 +7,7 @@ export const TEMPLATE_VARIABLES = ['学科', '年级', '学期', '届别', '地�
 
 export const DEFAULT_PATH_TEMPLATE = '{学科}/{届别}/{类型}/{套卷}/{文件名}';
 
-export function newRuleId(): string {
+function newRuleId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID().replace(/-/g, '').slice(0, 16);
   }
@@ -23,10 +23,6 @@ export function makeRule(partial: Partial<SyncRule> = {}): SyncRule {
     conditions: partial.conditions ?? {},
     targets: partial.targets ?? [],
   };
-}
-
-export function makeDefaultRule(): SyncRule {
-  return makeRule({ name: '其他所有文件', is_default: true });
 }
 
 /** 条件摘要：例如「学科=数学 · 类型=试卷 · 大小 < 100 MB」。 */

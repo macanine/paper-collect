@@ -30,7 +30,7 @@ func archive(t *testing.T, files map[string]string) []byte {
 
 func openBytes(t *testing.T, data []byte) (*Package, error) {
 	t.Helper()
-	return New(bytes.NewReader(data), int64(len(data)))
+	return newPackage(bytes.NewReader(data), int64(len(data)), true)
 }
 
 func openBytesAllowingExternal(t *testing.T, data []byte) (*Package, error) {

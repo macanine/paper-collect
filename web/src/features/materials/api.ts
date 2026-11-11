@@ -3,7 +3,6 @@ import { segment } from '../../shared/api/paths';
 import type {
   LibraryStats,
   MaterialDetail,
-  MaterialPullCache,
   MaterialUpdate,
   Page,
   InboxPack,
@@ -33,14 +32,6 @@ export function acceptMaterials(ids: string[]): Promise<{ count: number }> {
 
 export function downloadMaterial(id: string) {
   return apiDownload(`/materials/${segment(id)}/download`);
-}
-
-export function pullMaterialCache(id: string): Promise<MaterialPullCache> {
-  return apiRequest<MaterialPullCache>(`/materials/${segment(id)}/pull-cache`, { method: 'POST' });
-}
-
-export function downloadMaterialPullCache(id: string) {
-  return apiDownload(`/materials/${segment(id)}/pull-cache`);
 }
 
 export function previewMaterial(id: string, signal?: AbortSignal) {

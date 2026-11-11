@@ -16,7 +16,7 @@ import {
 } from './api';
 import { qk } from '../../app/queryKeys';
 
-export const packKeys = qk.packs;
+const packKeys = qk.packs;
 
 export function usePacksList(params: PackListParams, enabled = true) {
   return useQuery({

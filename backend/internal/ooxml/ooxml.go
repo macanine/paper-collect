@@ -58,12 +58,6 @@ func open(name string, validateExternal bool) (*Package, error) {
 	return pkg, nil
 }
 
-// New validates a package read from readerAt. The caller retains ownership of
-// the reader and must keep it open until it is done with the package.
-func New(readerAt io.ReaderAt, size int64) (*Package, error) {
-	return newPackage(readerAt, size, true)
-}
-
 // NewAllowingExternal validates the ZIP structure but permits relationships
 // to external resources. It is only for parsers that never resolve or fetch
 // those relationships.

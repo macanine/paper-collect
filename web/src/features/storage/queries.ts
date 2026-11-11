@@ -18,7 +18,7 @@ import type { ProviderDraft, ProviderPatch } from './providerFields';
 import type { SyncRule } from '../../shared/api/types';
 import { qk } from '../../app/queryKeys';
 
-export const storageKeys = qk.storage;
+const storageKeys = qk.storage;
 
 export function useDrives(enabled = true) {
   return useQuery({

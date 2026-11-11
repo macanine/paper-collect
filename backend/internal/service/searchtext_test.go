@@ -148,3 +148,7 @@ func TestHighlightSnippetWithoutMatchDoesNotInventHighlights(t *testing.T) {
 		t.Fatalf("unmatched excerpt = %q %v", snippet, highlights)
 	}
 }
+
+func highlightSnippet(text, normalizedQuery string, limit int) (string, [][2]int) {
+	return newSnippetMatcher(normalizedQuery).highlight(text, limit)
+}

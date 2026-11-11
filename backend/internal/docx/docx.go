@@ -65,16 +65,6 @@ func Parse(readerAt io.ReaderAt, size int64) (*Document, error) {
 	return parse(pkg)
 }
 
-// ParseFile reads a DOCX package from disk.
-func ParseFile(name string) (*Document, error) {
-	pkg, err := ooxml.OpenAllowingExternal(name)
-	if err != nil {
-		return nil, err
-	}
-	defer pkg.Close()
-	return parse(pkg)
-}
-
 func parse(pkg *ooxml.Package) (*Document, error) {
 	body, err := pkg.Read("word/document.xml", maxDocumentXML)
 	if err != nil {

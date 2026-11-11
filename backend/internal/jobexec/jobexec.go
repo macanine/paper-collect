@@ -6,7 +6,6 @@ package jobexec
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -187,13 +186,6 @@ func Run(ctx context.Context, env Env, in Input) (Result, error) {
 		return Result{Entity: out}, err
 	}
 	return Result{}, fmt.Errorf("未知任务类型 %q", in.Kind)
-}
-
-// DecodeResult reads a Result sent by a node.
-func DecodeResult(raw []byte) (Result, error) {
-	var out Result
-	err := json.Unmarshal(raw, &out)
-	return out, err
 }
 
 // NewAdapter builds a storage adapter whose token rotation reports to env.

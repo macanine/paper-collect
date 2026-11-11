@@ -294,7 +294,7 @@ func TestLanzouHealthSessionRejectedWhenRedirectedToLogin(t *testing.T) {
 	a := newLanzouTest(t, fake, map[string]string{}, "")
 	err := a.Health(context.Background())
 	requireClass(t, err, ClassAuth)
-	if IsRetryable(err) {
+	if isRetryable(err) {
 		t.Fatal("expired session must not be retryable")
 	}
 	if strings.Contains(err.Error(), lzCookieVal) {

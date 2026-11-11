@@ -404,7 +404,7 @@ func TestOneDriveOpenListExpiredTokenIsNotRetriedOrExposed(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = a.Health(context.Background())
-	if err == nil || AsCloudError(err).Class != ClassAuth || IsRetryable(err) || strings.Contains(err.Error(), "private-test-token") {
+	if err == nil || AsCloudError(err).Class != ClassAuth || isRetryable(err) || strings.Contains(err.Error(), "private-test-token") {
 		t.Fatalf("expired token should be a redacted authentication error: %v", err)
 	}
 }

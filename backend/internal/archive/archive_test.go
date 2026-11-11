@@ -61,7 +61,7 @@ func TestInspectDecodesLegacyZipNames(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := encodedName(t, tc.enc(), tc.src)
 			path := writeZip(t, []string{raw})
-			members, err := Inspect(path, DefaultLimits)
+			members, err := inspectMembers(path, DefaultLimits)
 			if err != nil {
 				t.Fatalf("inspect: %v", err)
 			}
@@ -74,7 +74,7 @@ func TestInspectDecodesLegacyZipNames(t *testing.T) {
 
 func TestInspectKeepsUTF8Names(t *testing.T) {
 	path := writeZip(t, []string{"数学/学生版.pdf"})
-	members, err := Inspect(path, DefaultLimits)
+	members, err := inspectMembers(path, DefaultLimits)
 	if err != nil {
 		t.Fatalf("inspect: %v", err)
 	}

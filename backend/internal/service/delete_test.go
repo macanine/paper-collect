@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -8,7 +9,22 @@ import (
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/model"
+	"gorm.io/gorm"
 )
+
+// purgeMaterials permanently removes files outside any pack purge.
+func (s *Service) purgeMaterials(ctx context.Context, ids []string) error {
+	var c purgeCleanup
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		c, err = s.purgeMaterialsTx(tx, ids)
+		return err
+	}); err != nil {
+		return err
+	}
+	s.finishPurge(c)
+	return nil
+}
 
 func (e *syncEnv) exists(row any, id string) bool {
 	e.t.Helper()
