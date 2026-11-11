@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { App, Button, Card, Space, Table, Tag, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined } from '@ant-design/icons';
+import { Button, Group, Stack, Text, Tooltip } from '@mantine/core';
+import { modals } from '@mantine/modals';
+import { IconPlus } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { describeError } from '../../shared/api/errors';
 import type { Drive, ProviderKind } from '../../shared/api/types';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { Section } from '../../shared/ui/Section';
+import { message } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
+import { Tag } from '../../shared/ui/StatusTags';
 import { ProviderFormModal } from './ProviderFormModal';
 import { PROVIDER_FIELD_SPECS } from './providerFields';
 import { useDrives, useTestDrive } from './queries';
@@ -35,19 +39,18 @@ function connectionMessage(drive: Drive, healthy: boolean, detail: string): stri
 function CapabilityTags({ drive }: { drive: Drive }) {
   const caps = drive.capabilities;
   return (
-    <span className="inline-flex flex-wrap gap-1">
+    <Group gap={4}>
       {caps.folders ? <Tag>子目录</Tag> : null}
       {caps.move ? <Tag>移动</Tag> : null}
       {caps.share ? <Tag>分享</Tag> : null}
       {caps.delete ? <Tag>删除</Tag> : null}
       {drive.max_file_bytes > 0 ? <Tag color="warning">上限 {formatBytes(drive.max_file_bytes)}</Tag> : null}
       {drive.allowed_exts.length > 0 ? <Tag color="warning">仅限 {drive.allowed_exts.join(' ')}</Tag> : null}
-    </span>
+    </Group>
   );
 }
 
 export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; canRoute?: boolean }) {
-  const { message, modal } = App.useApp();
   const drives = useDrives();
   const nodes = useQuery({ queryKey: qk.nodes.list, queryFn: ({ signal }) => listNodes(signal), enabled: canRoute });
   const testDrive = useTestDrive();
@@ -57,146 +60,74 @@ export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; c
   const handleTest = (drive: Drive) => {
     testDrive.mutate(drive.id, {
       onSuccess: (result) => {
-        modal.info({
+        modals.open({
           title: result.healthy ? `${drive.name}：连接正常` : `${drive.name}：连接失败`,
-          content: connectionMessage(drive, result.healthy, result.message),
+          children: (
+            <Stack gap="md">
+              <Text size="sm">{connectionMessage(drive, result.healthy, result.message) ?? '—'}</Text>
+              <Group justify="flex-end"><Button onClick={() => modals.closeAll()}>知道了</Button></Group>
+            </Stack>
+          ),
         });
       },
       onError: (error) => message.error(describeError(error).title),
     });
   };
 
-  const columns: ColumnsType<Drive> = [
+  const columns: Column<Drive>[] = [
     {
-      title: '网盘',
-      dataIndex: 'name',
-      key: 'name',
-      width: 220,
-      render: (name: string, record) => (
-        <div className="flex flex-col">
-          <span className="font-medium">{name}</span>
-          <span className="text-xs text-slate-500">
-            {PROVIDER_FIELD_SPECS[record.kind as ProviderKind].label}
-            {record.root_path ? ` · 根目录 ${record.root_path}` : ''}
-          </span>
-        </div>
+      key: 'name', wrap: true, title: '网盘', width: 220,
+      render: (d) => (
+        <Stack gap={2}>
+          <Text fw={600} size="sm">{d.name}</Text>
+          <Text size="xs" c="dimmed">{PROVIDER_FIELD_SPECS[d.kind as ProviderKind].label}{d.root_path ? ` · 根目录 ${d.root_path}` : ''}</Text>
+        </Stack>
       ),
     },
+    { key: 'enabled', title: '启用', width: 80, render: (d) => (d.enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>) },
+    { key: 'route', wrap: true, title: '操作节点', width: 220, render: (d) => <Text size="sm" title={routeSummary(d)}>{d.kind === 'local' ? '主端本地目录' : routeSummary(d)}</Text> },
+    { key: 'capabilities', wrap: true, title: '能力', width: 220, render: (d) => <CapabilityTags drive={d} /> },
     {
-      title: '启用',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 80,
-      render: (enabled: boolean) => (enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
-    },
-    {
-      title: '操作节点',
-      key: 'route',
-      width: 220,
-      render: (_: unknown, record) => (
-        <span className="text-sm" title={routeSummary(record)}>
-          {record.kind === 'local' ? '主端本地目录' : routeSummary(record)}
-        </span>
-      ),
-    },
-    {
-      title: '能力',
-      key: 'capabilities',
-      width: 220,
-      render: (_: unknown, record) => <CapabilityTags drive={record} />,
-    },
-    {
-      title: '副本',
-      key: 'stats',
-      width: 180,
-      render: (_: unknown, record) => {
-        const stats = record.stats ?? {};
+      key: 'stats', title: '副本', width: 200,
+      render: (d) => {
+        const stats = d.stats ?? {};
         const ready = stats.ready ?? 0;
         const failed = stats.failed ?? 0;
         const pending = (stats.pending ?? 0) + (stats.uploading ?? 0) + (stats.moving ?? 0);
         const orphaned = stats.orphaned ?? 0;
         return (
-          <span className="text-sm">
+          <Text size="sm">
             已就绪 {ready}
             {pending > 0 ? ` · 进行中 ${pending}` : ''}
-            {failed > 0 ? <span className="text-red-600"> · 失败 {failed}</span> : ''}
+            {failed > 0 ? <Text span c="red" size="sm"> · 失败 {failed}</Text> : ''}
             {orphaned > 0 ? ` · 规则外 ${orphaned}` : ''}
-          </span>
+          </Text>
         );
       },
     },
+    { key: 'on_path_change', title: '路径变化', width: 100, render: (d) => (d.on_path_change === 'move' ? '随之移动' : '保持原位') },
+    { key: 'secret', title: '凭据', width: 90, render: (d) => (d.kind === 'local' ? '—' : d.secret_configured ? <Tag color="green">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
+    { key: 'updated_at', title: '更新时间', width: 160, render: (d) => formatDateTime(d.updated_at) },
     {
-      title: '路径变化',
-      dataIndex: 'on_path_change',
-      key: 'on_path_change',
-      width: 100,
-      render: (value: Drive['on_path_change']) => (value === 'move' ? '随之移动' : '保持原位'),
-    },
-    {
-      title: '凭据',
-      dataIndex: 'secret_configured',
-      key: 'secret',
-      width: 90,
-      render: (configured: boolean, record) =>
-        record.kind === 'local' ? '—' : configured ? <Tag color="green">已保存</Tag> : <Tag color="orange">未设置</Tag>,
-    },
-    {
-      title: '更新时间',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      width: 160,
-      render: (value: string) => formatDateTime(value),
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 170,
-      fixed: 'right' as const,
-      render: (_: unknown, record) => (
-        <Space size={4}>
-          <Tooltip title={record.kind === '123pan' ? '123 云盘尚不支持同步' : undefined}>
-            <Button
-              size="small"
-              loading={testDrive.isPending && testDrive.variables === record.id}
-              onClick={() => handleTest(record)}
-              disabled={!canWrite}
-            >
-              测试连接
-            </Button>
+      key: 'actions', title: '操作', width: 190,
+      render: (d) => (
+        <Group gap={6} wrap="nowrap">
+          <Tooltip label="123 云盘尚不支持同步" disabled={d.kind !== '123pan'}>
+            <Button size="compact-sm" variant="default" loading={testDrive.isPending && testDrive.variables === d.id} onClick={() => handleTest(d)} disabled={!canWrite}>测试连接</Button>
           </Tooltip>
-          <Button size="small" onClick={() => setEditing(record)} disabled={!canWrite}>
-            编辑
-          </Button>
-        </Space>
+          <Button size="compact-sm" variant="default" onClick={() => setEditing(d)} disabled={!canWrite}>编辑</Button>
+        </Group>
       ),
     },
   ];
 
   return (
     <>
-      <Card
-        title="网盘"
-        styles={{ body: { padding: 0 } }}
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)} disabled={!canWrite}>
-            新增网盘
-          </Button>
-        }
-      >
+      <Section title="网盘" flush extra={<Button leftSection={<IconPlus size={16} />} onClick={() => setCreating(true)} disabled={!canWrite}>新增网盘</Button>}>
         {drives.isPending ? <LoadingState /> : null}
         {drives.isError ? <ErrorState error={drives.error} onRetry={() => void drives.refetch()} /> : null}
-        {drives.isSuccess ? (
-          <Table<Drive>
-            rowKey="id"
-            size="middle"
-            dataSource={drives.data}
-            columns={columns}
-            locale={{ emptyText: <EmptyState description="还没有网盘，先添加一个" /> }}
-            pagination={false}
-            scroll={{ x: 1100 }}
-          />
-        ) : null}
-      </Card>
+        {drives.isSuccess ? <DataTable bare rows={drives.data} columns={columns} rowKey={(d) => d.id} empty={<EmptyState description="还没有网盘，先添加一个" />} minWidth={1200} /> : null}
+      </Section>
 
       <ProviderFormModal
         open={creating}

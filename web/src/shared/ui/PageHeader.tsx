@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Group, Stack, Text, Title } from '@mantine/core';
 
 interface PageHeaderProps {
   title: ReactNode;
@@ -8,14 +9,12 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, description, extra }: PageHeaderProps) {
   return (
-    <header className="page-heading">
-      <div className="page-heading__copy">
-        <div className="page-heading__text">
-          <h1 className="page-heading__title">{title}</h1>
-          {description ? <p className="page-heading__description">{description}</p> : null}
-        </div>
-      </div>
-      {extra ? <div className="page-heading__extra">{extra}</div> : null}
-    </header>
+    <Group justify="space-between" align="flex-start" wrap="wrap" gap="md">
+      <Stack gap={4} miw={0}>
+        <Title order={2} fz={24}>{title}</Title>
+        {description ? <Text c="dimmed" size="sm">{description}</Text> : null}
+      </Stack>
+      {extra ? <Group gap="sm" wrap="wrap">{extra}</Group> : null}
+    </Group>
   );
 }

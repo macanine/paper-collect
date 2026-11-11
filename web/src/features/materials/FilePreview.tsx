@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Alert, Modal, Spin } from 'antd';
+import { Alert, Image, LoadingOverlay, Loader, Modal, Center } from '@mantine/core';
 import { describeError } from '../../shared/api/errors';
 import { downloadMaterial } from './api';
 
@@ -36,11 +36,11 @@ function BlobPreview({ target, onClose }: { target: Target; onClose: () => void 
     };
   }, [target.id]);
   return (
-    <Modal open title={target.title} footer={null} width={target.mediaType.startsWith('audio/') ? 520 : 960} onCancel={onClose} destroyOnHidden>
-      {error ? <Alert type="error" showIcon title={error} /> : null}
-      {!url && !error ? <Spin /> : null}
-      {url && target.mediaType.startsWith('image/') ? <img src={url} alt={target.title} className="max-w-full" /> : null}
-      {url && target.mediaType.startsWith('audio/') ? <audio src={url} controls className="w-full" /> : null}
+    <Modal opened title={target.title} size={target.mediaType.startsWith('audio/') ? 520 : 960} onClose={onClose}>
+      {error ? <Alert color="red">{error}</Alert> : null}
+      {!url && !error ? <Center py="xl"><Loader size="sm" /></Center> : null}
+      {url && target.mediaType.startsWith('image/') ? <Image src={url} alt={target.title} fit="contain" /> : null}
+      {url && target.mediaType.startsWith('audio/') ? <audio src={url} controls style={{ width: '100%' }} /> : null}
     </Modal>
   );
 }
@@ -51,7 +51,7 @@ export function FilePreviewModal({ target, onClose }: { target: Target | null; o
     return <BlobPreview target={target} onClose={onClose} />;
   }
   return (
-    <Suspense fallback={<Spin fullscreen tip="正在加载预览" />}>
+    <Suspense fallback={<LoadingOverlay visible zIndex={1000} loaderProps={{ children: <Loader size="sm" /> }} />}>
       <MaterialPreviewModal
         materialId={target.id}
         title={target.title}

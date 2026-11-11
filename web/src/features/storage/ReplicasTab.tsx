@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Alert, App, Button, Card, Select, Space, Table, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Alert, Anchor, Button, Group, Select, Stack, Text, Tooltip } from '@mantine/core';
 import { Link } from 'react-router';
 import { describeError } from '../../shared/api/errors';
-import type { Replica, ReplicaStatus } from '../../shared/api/types';
+import type { Replica } from '../../shared/api/types';
 import { formatBytes, formatDateTime } from '../../shared/lib/format';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { Section } from '../../shared/ui/Section';
+import { message, modal } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { ReplicaStatusTag, ShareStatusTag } from '../../shared/ui/StatusTags';
 import { driveName } from './ruleUtils';
@@ -13,9 +15,10 @@ import type { ReplicaBulkAction } from './api';
 import { href } from '../../app/routes';
 
 const PAGE_SIZE = 20;
+const ALL = 'all';
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: '全部状态' },
+  { value: ALL, label: '全部状态' },
   { value: 'failed', label: '失败' },
   { value: 'skipped', label: '已跳过' },
   { value: 'orphaned', label: '规则外' },
@@ -33,14 +36,13 @@ function bulkActionLabel(action: ReplicaBulkAction): string {
 }
 
 export function ReplicasTab({ canWrite }: { canWrite: boolean }) {
-  const { message, modal } = App.useApp();
-  const [status, setStatus] = useState('');
-  const [driveId, setDriveId] = useState('');
+  const [status, setStatus] = useState(ALL);
+  const [driveId, setDriveId] = useState(ALL);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
 
   const drives = useDrives();
-  const replicas = useReplicas(status, driveId, page, PAGE_SIZE);
+  const replicas = useReplicas(status === ALL ? '' : status, driveId === ALL ? '' : driveId, page, PAGE_SIZE);
   const bulk = useBulkReplicas();
 
   const runBulk = (action: ReplicaBulkAction) => {
@@ -51,11 +53,8 @@ export function ReplicasTab({ canWrite }: { canWrite: boolean }) {
         {
           onSuccess: (results) => {
             const failed = results.filter((r) => !r.success);
-            if (failed.length === 0) {
-              message.success(`已${bulkActionLabel(action)} ${results.length} 个副本`);
-            } else {
-              message.warning(`成功 ${results.length - failed.length} 个，失败 ${failed.length} 个：${failed[0]?.error ?? ''}`);
-            }
+            if (failed.length === 0) message.success(`已${bulkActionLabel(action)} ${results.length} 个副本`);
+            else message.warning(`成功 ${results.length - failed.length} 个，失败 ${failed.length} 个：${failed[0]?.error ?? ''}`);
             setSelected([]);
           },
           onError: (error) => message.error(describeError(error).title),
@@ -63,84 +62,39 @@ export function ReplicasTab({ canWrite }: { canWrite: boolean }) {
       );
     };
     if (action === 'delete_remote') {
-      modal.confirm({
-        title: `删除 ${ids.length} 个远端文件？`,
-        content: '网盘上的文件会被删除，本机原件不受影响。此操作不可撤销。',
-        okText: '删除',
-        okButtonProps: { danger: true },
-        onOk: execute,
-      });
+      modal.confirm({ title: `删除 ${ids.length} 个远端文件？`, content: '网盘上的文件会被删除，本机原件不受影响。此操作不可撤销。', okText: '删除', danger: true, onOk: execute });
     } else if (action === 'forget') {
-      modal.confirm({
-        title: `移除 ${ids.length} 条副本记录？`,
-        content: '只移除本系统中的记录，网盘上的文件保留。',
-        okText: '移除',
-        onOk: execute,
-      });
+      modal.confirm({ title: `移除 ${ids.length} 条副本记录？`, content: '只移除本系统中的记录，网盘上的文件保留。', okText: '移除', onOk: execute });
     } else {
       execute();
     }
   };
 
-  const columns: ColumnsType<Replica> = [
+  const columns: Column<Replica>[] = [
     {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      render: (value: ReplicaStatus, record) => (
-        <div className="flex flex-col items-start gap-1">
-          <ReplicaStatusTag status={value} />
-          {record.skip_reason ? <span className="text-xs text-slate-500">{record.skip_reason}</span> : null}
-          {record.error ? (
-            <Tooltip title={record.error}>
-              <span className="block max-w-40 truncate text-xs text-red-600">{record.error}</span>
-            </Tooltip>
-          ) : null}
-        </div>
+      key: 'status', wrap: true, title: '状态', width: 130,
+      render: (r) => (
+        <Stack gap={4} align="flex-start">
+          <ReplicaStatusTag status={r.status} />
+          {r.skip_reason ? <Text size="xs" c="dimmed">{r.skip_reason}</Text> : null}
+          {r.error ? <Tooltip label={r.error} multiline maw={360}><Text size="xs" c="red" maw={160} truncate>{r.error}</Text></Tooltip> : null}
+        </Stack>
       ),
     },
+    { key: 'drive', title: '网盘', width: 150, render: (r) => driveName(drives.data ?? [], r.drive_id) },
     {
-      title: '网盘',
-      dataIndex: 'drive_id',
-      key: 'drive_id',
-      width: 150,
-      render: (id: string) => driveName(drives.data ?? [], id),
-    },
-    {
-      title: '期望路径',
-      dataIndex: 'desired_path',
-      key: 'desired_path',
-      render: (path: string, record) => (
-        <div className="flex flex-col text-xs">
-          <span className="break-all">{path || '—'}</span>
-          {record.remote_path && record.remote_path !== path ? (
-            <span className="break-all text-orange-600">当前：{record.remote_path}</span>
-          ) : null}
-        </div>
+      key: 'path', wrap: true, title: '期望路径',
+      render: (r) => (
+        <Stack gap={0}>
+          <Text size="xs" style={{ wordBreak: 'break-all' }}>{r.desired_path || '—'}</Text>
+          {r.remote_path && r.remote_path !== r.desired_path ? <Text size="xs" c="orange" style={{ wordBreak: 'break-all' }}>当前：{r.remote_path}</Text> : null}
+        </Stack>
       ),
     },
-    { title: '大小', dataIndex: 'size_bytes', key: 'size_bytes', width: 100, align: 'right', render: (v: number) => formatBytes(v) },
-    {
-      title: '分享',
-      dataIndex: 'share_status',
-      key: 'share_status',
-      width: 100,
-      render: (value: Replica['share_status'], record) => (record.share || value ? <ShareStatusTag status={value || 'pending'} /> : <span className="text-slate-400">—</span>),
-    },
-    {
-      title: '任务',
-      key: 'job',
-      width: 100,
-      render: (_: unknown, record) => <Link to={href.jobs({ replica_id: record.id })}>任务</Link>,
-    },
-    {
-      title: '更新时间',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      width: 170,
-      render: (value: string) => formatDateTime(value),
-    },
+    { key: 'size', title: '大小', width: 100, align: 'right', render: (r) => formatBytes(r.size_bytes) },
+    { key: 'share', title: '分享', width: 100, render: (r) => (r.share || r.share_status ? <ShareStatusTag status={r.share_status || 'pending'} /> : <Text c="dimmed" size="sm">—</Text>) },
+    { key: 'job', title: '任务', width: 80, render: (r) => <Anchor component={Link} to={href.jobs({ replica_id: r.id })} size="sm">任务</Anchor> },
+    { key: 'updated', title: '更新时间', width: 170, render: (r) => formatDateTime(r.updated_at) },
   ];
 
   const selectedRows = (replicas.data?.items ?? []).filter((r) => selected.includes(r.id));
@@ -148,77 +102,37 @@ export function ReplicasTab({ canWrite }: { canWrite: boolean }) {
   const anyActive = selectedRows.some((r) => r.status === 'uploading' || r.status === 'moving' || r.status === 'pending');
 
   return (
-    <Card title="副本" styles={{ body: { padding: 0 } }}>
-      <div className="flex flex-wrap items-center gap-3 px-6 py-3">
-        <Select
-          value={status}
-          onChange={(value) => {
-            setStatus(value);
-            setPage(1);
-            setSelected([]);
-          }}
-          options={STATUS_OPTIONS}
-          style={{ width: 140 }}
-        />
-        <Select
-          value={driveId}
-          onChange={(value) => {
-            setDriveId(value);
-            setPage(1);
-            setSelected([]);
-          }}
-          options={[{ value: '', label: '全部网盘' }, ...(drives.data ?? []).map((d) => ({ value: d.id, label: d.name }))]}
-          style={{ width: 180 }}
-        />
-        {canWrite && selected.length > 0 ? (
-          <Space size={8}>
-            <span className="text-sm text-slate-500">已选 {selected.length} 项</span>
-            <Button size="small" loading={bulk.isPending} disabled={anyActive} onClick={() => runBulk('retry')}>
-              重试
-            </Button>
-            <Button size="small" danger loading={bulk.isPending} disabled={!allOrphaned} onClick={() => runBulk('delete_remote')}>
-              删除远端
-            </Button>
-            <Button size="small" loading={bulk.isPending} disabled={!allOrphaned} onClick={() => runBulk('forget')}>
-              移除记录
-            </Button>
-          </Space>
-        ) : null}
-      </div>
-      {!canWrite ? null : status === '' && !driveId ? (
-        <Alert className="mx-6 mb-3" type="info" showIcon title="选择「失败 / 已跳过 / 规则外 / 路径偏离」状态，可筛选出需要处理的副本并批量操作。" />
-      ) : null}
+    <Section title="副本" flush>
+      <Stack gap="sm" p="lg" pt={0}>
+        <Group gap="sm">
+          <Select w={150} allowDeselect={false} value={status} data={STATUS_OPTIONS} onChange={(v) => { setStatus(v ?? ALL); setPage(1); setSelected([]); }} />
+          <Select w={190} allowDeselect={false} value={driveId} data={[{ value: ALL, label: '全部网盘' }, ...(drives.data ?? []).map((d) => ({ value: d.id, label: d.name }))]} onChange={(v) => { setDriveId(v ?? ALL); setPage(1); setSelected([]); }} />
+          {canWrite && selected.length > 0 ? (
+            <Group gap="xs">
+              <Text size="sm" c="dimmed">已选 {selected.length} 项</Text>
+              <Button size="compact-sm" variant="default" loading={bulk.isPending} disabled={anyActive} onClick={() => runBulk('retry')}>重试</Button>
+              <Button size="compact-sm" variant="default" color="red" loading={bulk.isPending} disabled={!allOrphaned} onClick={() => runBulk('delete_remote')}>删除远端</Button>
+              <Button size="compact-sm" variant="default" loading={bulk.isPending} disabled={!allOrphaned} onClick={() => runBulk('forget')}>移除记录</Button>
+            </Group>
+          ) : null}
+        </Group>
+        {canWrite && status === ALL && driveId === ALL ? <Alert color="blue">选择「失败 / 已跳过 / 规则外 / 路径偏离」状态，可筛选出需要处理的副本并批量操作。</Alert> : null}
+      </Stack>
       {replicas.isPending ? <LoadingState /> : null}
       {replicas.isError ? <ErrorState error={replicas.error} onRetry={() => void replicas.refetch()} /> : null}
       {replicas.isSuccess ? (
-        <Table<Replica>
-          rowKey="id"
-          size="middle"
-          dataSource={replicas.data.items}
+        <DataTable
+          bare
+          rows={replicas.data.items}
           columns={columns}
-          scroll={{ x: 1100 }}
-          rowSelection={
-            canWrite
-              ? {
-                  selectedRowKeys: selected,
-                  onChange: (keys) => setSelected(keys.map(String)),
-                }
-              : undefined
-          }
-          locale={{ emptyText: <EmptyState /> }}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total: replicas.data.total,
-            showSizeChanger: false,
-            showTotal: (total) => `共 ${total} 个副本`,
-            onChange: (next) => {
-              setPage(next);
-              setSelected([]);
-            },
-          }}
+          rowKey={(r) => r.id}
+          minWidth={1100}
+          selected={canWrite ? selected : undefined}
+          onSelectedChange={canWrite ? (keys) => setSelected(keys.map(String)) : undefined}
+          empty={<EmptyState />}
+          pagination={{ page, pageSize: PAGE_SIZE, total: replicas.data.total, pageSizes: [PAGE_SIZE], onChange: (next) => { setPage(next); setSelected([]); } }}
         />
       ) : null}
-    </Card>
+    </Section>
   );
 }

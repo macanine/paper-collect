@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Button, Tooltip } from 'antd';
-import { CheckOutlined, CopyOutlined } from '@ant-design/icons';
+import { Button, Tooltip } from '@mantine/core';
+import { IconCheck, IconCopy } from '@tabler/icons-react';
 
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -36,10 +36,11 @@ interface CopyButtonProps {
 export function CopyButton({ value, label = '复制', onCopied }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
   return (
-    <Tooltip title={copied ? '已复制' : label}>
+    <Tooltip label={copied ? '已复制' : label}>
       <Button
-        size="small"
-        icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+        size="compact-sm"
+        variant="default"
+        leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
         onClick={async () => {
           const ok = await copyToClipboard(value);
           setCopied(ok);

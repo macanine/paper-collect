@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Progress, Result, Space, Statistic, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Alert, Anchor, Button, Group, Progress, SimpleGrid, Stack, Text, Title } from '@mantine/core';
+import { IconCircleCheck } from '@tabler/icons-react';
 import { Link, useParams } from 'react-router';
 import { describeError, errorMessage } from '../../shared/api/errors';
 import type { JobStatus, Upload } from '../../shared/api/types';
 import { formatBytes, formatDuration, formatRate } from '../../shared/lib/format';
-import { useCompactViewport } from '../../shared/lib/useCompactViewport';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { Section } from '../../shared/ui/Section';
+import { message } from '../../shared/ui/feedback';
 import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { LinkButton } from '../../shared/ui/LinkButton';
-import { StageTag, UploadStatusTag } from '../../shared/ui/StatusTags';
+import { StageTag, Tag, UploadStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { retryJob } from '../jobs/api';
 import { FileSelector } from './FileSelector';
@@ -27,10 +29,10 @@ export function UploadSessionPage() {
   if (query.isPending) return <LoadingState />;
   if (query.isError) {
     return (
-      <div className="page-stack">
+      <Stack gap="lg">
         <BackLink to="/imports">返回导入中心</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="清单加载失败" />
-      </div>
+      </Stack>
     );
   }
   return <UploadSessionPanel upload={query.data} />;
@@ -46,8 +48,6 @@ const ROW_STATUS: Record<RowStatus, { color: string; text: string }> = {
 
 function UploadSessionPanel({ upload }: { upload: Upload }) {
   const { can } = useAuth();
-  const compact = useCompactViewport();
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const transfer = useUploadTransfer(upload);
   const finalize = useFinalizeUpload(upload.id);
@@ -130,130 +130,68 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
 
   const retryRow = (row: TransferRow) =>
     row.status === 'failed' && !running && canTransfer ? (
-      <Button size="small" onClick={() => transfer.start([row.entry.id])}>
-        重试
-      </Button>
+      <Button size="compact-sm" variant="default" onClick={() => transfer.start([row.entry.id])}>重试</Button>
     ) : null;
 
-  const desktopColumns: ColumnsType<TransferRow> = [
+  const columns: Column<TransferRow>[] = [
     {
-      title: '相对路径',
-      key: 'path',
-      render: (_: unknown, row) => (
-        <div className="flex flex-col gap-1">
-          <span className="break-all text-sm">{row.entry.relative_path}</span>
-          {row.error ? <span className="text-xs text-red-600">{row.error}</span> : null}
-        </div>
+      key: 'path', wrap: true, title: '相对路径',
+      render: (row) => (
+        <Stack gap={2}>
+          <Text size="sm" style={{ wordBreak: 'break-all' }}>{row.entry.relative_path}</Text>
+          {row.error ? <Text size="xs" c="red">{row.error}</Text> : null}
+        </Stack>
       ),
     },
+    { key: 'size', title: '大小', width: 100, align: 'right', render: (row) => formatBytes(row.entry.size_bytes) },
+    { key: 'status', title: '状态', width: 120, render: (row) => <Tag color={ROW_STATUS[row.status].color}>{ROW_STATUS[row.status].text}</Tag> },
     {
-      title: '大小',
-      key: 'size',
-      width: 100,
-      align: 'right',
-      render: (_: unknown, row) => formatBytes(row.entry.size_bytes),
-    },
-    {
-      title: '状态',
-      key: 'status',
-      width: 120,
-      render: (_: unknown, row) => <Tag color={ROW_STATUS[row.status].color}>{ROW_STATUS[row.status].text}</Tag>,
-    },
-    {
-      title: '进度',
-      key: 'progress',
-      width: 200,
-      render: (_: unknown, row) => {
+      key: 'progress', title: '进度', width: 200,
+      render: (row) => {
         const size = row.entry.size_bytes;
         const value = size > 0 ? Math.min(100, Math.round((row.loaded / size) * 100)) : 0;
-        return row.status === 'missing-file' ? '—' : <Progress percent={row.status === 'received' ? 100 : value} size="small" />;
+        return row.status === 'missing-file' ? '—' : <Progress size="sm" value={row.status === 'received' ? 100 : value} />;
       },
     },
-    ...(stats.failedCount > 0
-      ? [
-          {
-            title: '',
-            key: 'actions',
-            width: 80,
-            render: (_: unknown, row: TransferRow) => retryRow(row),
-          },
-        ]
-      : []),
+    ...(stats.failedCount > 0 ? [{ key: 'actions', width: 80, render: (row: TransferRow) => retryRow(row) }] : []),
   ];
 
-  const compactColumns: ColumnsType<TransferRow> = [
-    {
-      title: '文件',
-      key: 'summary',
-      render: (_: unknown, row) => {
-        const size = row.entry.size_bytes;
-        const value = size > 0 ? Math.min(100, Math.round((row.loaded / size) * 100)) : 0;
-        return (
-          <div className="compact-entity">
-            <span className="compact-entity__title break-all">{row.entry.relative_path}</span>
-            <div className="compact-entity__tags">
-              <Tag color={ROW_STATUS[row.status].color}>{ROW_STATUS[row.status].text}</Tag>
-              <span className="table-subtext">{formatBytes(size)}</span>
-              {retryRow(row)}
-            </div>
-            {row.status === 'missing-file' ? (
-              <span className="compact-entity__error">需要重新选择原文件后才能继续</span>
-            ) : (
-              <Progress percent={row.status === 'received' ? 100 : value} size="small" />
-            )}
-            {row.error ? <span className="compact-entity__error">{row.error}</span> : null}
-          </div>
-        );
-      },
-    },
-  ];
+  const [filePage, setFilePage] = useState(1);
 
   return (
-    <div className="page-stack">
+    <Stack gap="lg">
       <BackLink to="/imports">返回导入中心</BackLink>
       <PageHeader
         title={upload.title}
         extra={
-          <Space wrap>
+          <>
             <UploadStatusTag status={upload.status} />
-            {canTransfer && running ? (
-              <Button danger onClick={() => transfer.cancel()}>
-                暂停
-              </Button>
-            ) : null}
+            {canTransfer && running ? <Button variant="default" color="red" onClick={() => transfer.cancel()}>暂停</Button> : null}
             {canTransfer ? (
-              <Button
-                disabled={running || stats.failedCount === 0}
-                onClick={() => transfer.start(rows.filter((row) => row.status === 'failed').map((row) => row.entry.id))}
-              >
-                重试失败项
-              </Button>
+              <Button variant="default" disabled={running || stats.failedCount === 0} onClick={() => transfer.start(rows.filter((row) => row.status === 'failed').map((row) => row.entry.id))}>重试失败项</Button>
             ) : null}
-          </Space>
+          </>
         }
       />
 
       {upload.status === 'completed' ? null : (
-      <Card>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
-          <Statistic title="已接收" value={stats.receivedCount} suffix={`/ ${stats.total}`} />
-          <Statistic title="已传输" value={formatBytes(stats.doneBytes)} />
-          <Statistic title="实时速度" value={formatRate(transferSpeed)} />
-          <Statistic title="预计剩余" value={etaMs === undefined ? '—' : formatDuration(etaMs)} />
-          <Statistic title="失败" value={stats.failedCount} />
-          <Statistic title="待重新选择" value={stats.missingCount} />
-        </div>
-        <Progress className="mt-4" percent={percent} status={stats.failedCount > 0 ? 'exception' : undefined} />
-      </Card>
+        <Section>
+          <SimpleGrid cols={{ base: 2, sm: 3, xl: 6 }} spacing="md">
+            <Metric title="已接收" value={`${stats.receivedCount} / ${stats.total}`} />
+            <Metric title="已传输" value={formatBytes(stats.doneBytes)} />
+            <Metric title="实时速度" value={formatRate(transferSpeed)} />
+            <Metric title="预计剩余" value={etaMs === undefined ? '—' : formatDuration(etaMs)} />
+            <Metric title="失败" value={stats.failedCount} />
+            <Metric title="待重新选择" value={stats.missingCount} />
+          </SimpleGrid>
+          <Progress value={percent} color={stats.failedCount > 0 ? 'red' : 'blue'} />
+        </Section>
       )}
 
       {canTransfer && stats.missingCount > 0 ? (
-        <Alert
-          type="warning"
-          showIcon
-          title={`有 ${stats.missingCount} 个文件需要重新选择`}
-          description={<FileSelector inputId="resume-upload" compact onSelected={handleAttach} />}
-        />
+        <Alert color="yellow" title={`有 ${stats.missingCount} 个文件需要重新选择`}>
+          <FileSelector inputId="resume-upload" compact onSelected={handleAttach} />
+        </Alert>
       ) : null}
 
       {isSubmitted ? (
@@ -271,25 +209,27 @@ function UploadSessionPanel({ upload }: { upload: Upload }) {
       ) : null}
 
       {upload.status === 'completed' ? null : (
-      <Card title="文件清单">
-        <Table<TransferRow>
-          rowKey={(row) => row.entry.id}
-          size="small"
-          className={compact ? 'compact-list-table' : undefined}
-          columns={compact ? compactColumns : desktopColumns}
-          dataSource={rows}
-          showHeader={!compact}
-          pagination={{
-            pageSize: 50,
-            showSizeChanger: false,
-            simple: compact,
-            showTotal: (total) => `共 ${total} 个文件`,
-          }}
-          scroll={compact ? undefined : { x: 900 }}
-        />
-      </Card>
+        <Section title="文件清单" flush>
+          <DataTable
+            bare
+            rows={rows.slice((filePage - 1) * 50, filePage * 50)}
+            columns={columns}
+            rowKey={(row) => row.entry.id}
+            minWidth={720}
+            pagination={{ page: filePage, pageSize: 50, total: rows.length, pageSizes: [50], onChange: (p) => setFilePage(p) }}
+          />
+        </Section>
       )}
-    </div>
+    </Stack>
+  );
+}
+
+function Metric({ title, value }: { title: string; value: string | number }) {
+  return (
+    <Stack gap={2}>
+      <Text size="xs" c="dimmed">{title}</Text>
+      <Text fw={600} fz={20}>{value}</Text>
+    </Stack>
   );
 }
 
@@ -306,78 +246,46 @@ interface SubmittedCardProps {
 }
 
 function SubmittedCard({ upload, jobPending, jobQueryError, jobStatus, jobFailure, jobProgress, canRetryJob, retrying, onRetry }: SubmittedCardProps) {
+  const [page, setPage] = useState(1);
   if (upload.status === 'completed') {
+    const columns: Column<Upload['results'][number]>[] = [
+      { key: 'path', wrap: true, title: '来源路径', render: (row) => <Text size="sm" style={{ wordBreak: 'break-all' }}>{row.path}</Text> },
+      { key: 'result', title: '结果', width: 120, render: (row) => (row.duplicate ? <Tag>已存在</Tag> : <Tag color="blue">新文件</Tag>) },
+      { key: 'stage', title: '整理状态', width: 110, render: (row) => <StageTag stage={row.stage} /> },
+      { key: 'pack', title: '归入', render: (row) => (row.pack_id ? <Anchor component={Link} to={href.pack(row.pack_id)} size="sm">{row.title || '查看套卷'}</Anchor> : '—') },
+    ];
     return (
-      <Card title="处理结果">
-        <Result
-          status="success"
-          title={`新增 ${upload.new_count} 个文件，${upload.duplicate_count} 个已存在`}
-          subTitle={upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : 'AI 正在阅读、分组并编目新文件；没能通过校验的会出现在“需关注”里'}
-          extra={[
-            <LinkButton key="inbox" type="primary" to="/inbox">
-              查看需关注
-            </LinkButton>,
-            <LinkButton key="library" to="/library">
-              打开资料库
-            </LinkButton>,
-          ]}
-        />
-        <Table
+      <Section title="处理结果">
+        <Stack align="center" gap="xs" py="md">
+          <IconCircleCheck size={44} color="var(--mantine-color-green-6)" />
+          <Title order={4}>{`新增 ${upload.new_count} 个文件，${upload.duplicate_count} 个已存在`}</Title>
+          <Text size="sm" c="dimmed" ta="center">{upload.skipped.length > 0 ? `${upload.skipped.length} 个文件格式不支持，已跳过` : 'AI 正在阅读、分组并编目新文件；没能通过校验的会出现在“需关注”里'}</Text>
+          <Group mt="xs"><LinkButton to="/inbox">查看需关注</LinkButton><LinkButton variant="default" to="/library">打开资料库</LinkButton></Group>
+        </Stack>
+        <DataTable
+          rows={upload.results.slice((page - 1) * 50, page * 50)}
+          columns={columns}
           rowKey={(row) => `${row.material_id}-${row.path}`}
-          size="small"
-          dataSource={upload.results}
-          pagination={{ pageSize: 50, hideOnSinglePage: true }}
-          columns={[
-            { title: '来源路径', dataIndex: 'path', key: 'path', render: (path: string) => <span className="break-all">{path}</span> },
-            {
-              title: '结果',
-              key: 'result',
-              width: 120,
-              render: (_: unknown, row) => (row.duplicate ? <Tag>已存在</Tag> : <Tag color="blue">新文件</Tag>),
-            },
-            { title: '整理状态', key: 'stage', width: 110, render: (_: unknown, row) => <StageTag stage={row.stage} /> },
-            {
-              title: '归入',
-              key: 'pack',
-              render: (_: unknown, row) => (row.pack_id ? <Link to={href.pack(row.pack_id)}>{row.title || '查看套卷'}</Link> : '—'),
-            },
-          ]}
+          minWidth={560}
+          pagination={upload.results.length > 50 ? { page, pageSize: 50, total: upload.results.length, pageSizes: [50], onChange: (p) => setPage(p) } : undefined}
         />
-        {upload.skipped.length > 0 ? (
-          <Alert
-            className="mt-3"
-            type="warning"
-            showIcon
-            title="以下文件格式不支持，未归档"
-            description={<Typography.Paragraph className="!mb-0">{upload.skipped.join('、')}</Typography.Paragraph>}
-          />
-        ) : null}
-      </Card>
+        {upload.skipped.length > 0 ? <Alert color="yellow" title="以下文件格式不支持，未归档">{upload.skipped.join('、')}</Alert> : null}
+      </Section>
     );
   }
 
   return (
-    <Card title="正在处理">
-      {jobQueryError ? <Alert type="error" showIcon title="导入状态加载失败" className="mb-3" /> : null}
-      <Typography.Text type="secondary">
-        {jobPending ? '正在安排导入…' : jobProgress || (jobStatus === 'failed' ? '导入失败' : '文件正在整理，请稍候')}
-      </Typography.Text>
+    <Section title="正在处理">
+      {jobQueryError ? <Alert color="red">导入状态加载失败</Alert> : null}
+      <Text size="sm" c="dimmed">{jobPending ? '正在安排导入…' : jobProgress || (jobStatus === 'failed' ? '导入失败' : '文件正在整理，请稍候')}</Text>
       {jobStatus === 'failed' ? (
-        <Alert
-          className="mt-3"
-          type="error"
-          showIcon
-          title="归档失败"
-          description={jobFailure || undefined}
-          action={
-            canRetryJob ? (
-              <Button size="small" danger loading={retrying} onClick={onRetry}>
-                重新排队
-              </Button>
-            ) : undefined
-          }
-        />
+        <Alert color="red" title="归档失败">
+          <Group justify="space-between" wrap="nowrap">
+            <Text size="sm">{jobFailure}</Text>
+            {canRetryJob ? <Button size="compact-sm" variant="default" color="red" loading={retrying} onClick={onRetry}>重新排队</Button> : null}
+          </Group>
+        </Alert>
       ) : null}
-    </Card>
+    </Section>
   );
 }

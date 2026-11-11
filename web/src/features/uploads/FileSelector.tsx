@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react';
-import { Alert, Button, Space, theme } from 'antd';
-import { FileAddOutlined, FolderOpenOutlined, InboxOutlined } from '@ant-design/icons';
+import { Alert, Button, Group, Stack, Text } from '@mantine/core';
+import { IconFilePlus, IconFolderOpen, IconInbox } from '@tabler/icons-react';
 import { fromDataTransfer, fromFileList, type SourceResult } from './fileSources';
 import { ALLOWED_SUFFIXES } from './manifest';
 
@@ -15,7 +15,6 @@ interface FileSelectorProps {
 const ACCEPT = ALLOWED_SUFFIXES.join(',');
 
 export function FileSelector({ onSelected, disabled = false, compact = false, inputId }: FileSelectorProps) {
-  const { token } = theme.useToken();
   const [dragging, setDragging] = useState(false);
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState(false);
@@ -49,15 +48,17 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
   };
 
   return (
-    <div
-      className={[
-        'flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed px-4 text-center transition-colors',
-        compact ? 'py-4' : 'py-8',
-        busy ? 'opacity-60' : '',
-      ].join(' ')}
+    <Stack
+      align="center"
+      gap="sm"
+      px="md"
+      py={compact ? 'md' : 'xl'}
       style={{
-        borderColor: dragging ? token.colorPrimary : token.colorBorder,
-        background: dragging ? token.colorPrimaryBg : token.colorFillAlter,
+        border: `1px dashed ${dragging ? 'var(--mantine-color-blue-6)' : 'var(--mantine-color-gray-4)'}`,
+        borderRadius: 'var(--mantine-radius-md)',
+        background: dragging ? 'var(--mantine-color-blue-0)' : 'var(--mantine-color-gray-0)',
+        opacity: busy ? 0.6 : 1,
+        textAlign: 'center',
       }}
       onDragOver={(event) => {
         event.preventDefault();
@@ -66,17 +67,13 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
       onDragLeave={() => setDragging(false)}
       onDrop={(event) => void handleDrop(event)}
     >
-      {compact ? null : <InboxOutlined style={{ fontSize: 28, color: token.colorTextSecondary }} />}
-      <span role="status">{reading ? '正在读取…' : compact ? '拖拽或选择文件' : '拖拽文件或文件夹到这里'}</span>
-      {readError ? <Alert type="error" showIcon title="无法读取文件或文件夹，请重新选择" /> : null}
-      <Space wrap>
-        <Button icon={<FileAddOutlined />} disabled={busy} onClick={() => document.getElementById(fileInputId)?.click()}>
-          选择文件
-        </Button>
-        <Button icon={<FolderOpenOutlined />} disabled={busy} onClick={() => document.getElementById(folderInputId)?.click()}>
-          选择文件夹
-        </Button>
-      </Space>
+      {compact ? null : <IconInbox size={32} stroke={1.3} color="var(--mantine-color-gray-6)" />}
+      <Text size="sm" role="status">{reading ? '正在读取…' : compact ? '拖拽或选择文件' : '拖拽文件或文件夹到这里'}</Text>
+      {readError ? <Alert color="red">无法读取文件或文件夹，请重新选择</Alert> : null}
+      <Group gap="sm" justify="center">
+        <Button variant="default" leftSection={<IconFilePlus size={16} />} disabled={busy} onClick={() => document.getElementById(fileInputId)?.click()}>选择文件</Button>
+        <Button variant="default" leftSection={<IconFolderOpen size={16} />} disabled={busy} onClick={() => document.getElementById(folderInputId)?.click()}>选择文件夹</Button>
+      </Group>
       <input
         id={fileInputId}
         disabled={busy}
@@ -104,6 +101,6 @@ export function FileSelector({ onSelected, disabled = false, compact = false, in
           event.target.value = '';
         }}
       />
-    </div>
+    </Stack>
   );
 }

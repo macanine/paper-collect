@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import { App, Button, Card, Form, Input, Modal, Popconfirm, Space } from 'antd';
-import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons';
+import { Anchor, Button, Group, Modal, Stack, TextInput, Textarea, ActionIcon } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { IconArrowDown, IconArrowUp } from '@tabler/icons-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { errorMessage } from '../../shared/api/errors';
 import { BackLink } from '../../shared/ui/BackLink';
+import { ItemList, ItemRow } from '../../shared/ui/ItemList';
 import { LinkButton } from '../../shared/ui/LinkButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { message, modal } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
 import { useAuth } from '../auth/AuthContext';
 import { Completeness, PackMeta } from '../packs/PackBadges';
@@ -16,34 +19,35 @@ export function CollectionDetailPage() {
   const { collectionId = '' } = useParams();
   const { can } = useAuth();
   const canWrite = can('collections:write');
-  const { message } = App.useApp();
   const navigate = useNavigate();
   const query = useCollection(collectionId);
   const { update, replacePacks, remove } = useCollectionMutations();
   const [editing, setEditing] = useState(false);
-  const [form] = Form.useForm<{ title: string; description?: string }>();
+  const form = useForm({
+    initialValues: { title: '', description: '' },
+    validate: { title: (v) => (v.trim() ? null : '请填写名称') },
+  });
 
   if (query.isPending) return <LoadingState />;
   if (query.isError) {
     return (
-      <div className="page-stack">
+      <Stack gap="lg">
         <BackLink to="/collections">返回专题</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="专题加载失败" />
-      </div>
+      </Stack>
     );
   }
   const collection = query.data;
   const order = collection.packs.map((p) => p.id);
 
-  const save = async () => {
-    const values = await form.validateFields();
+  const save = form.onSubmit(async (values) => {
     try {
-      await update.mutateAsync({ id: collection.id, body: { title: values.title, description: values.description ?? '' } });
+      await update.mutateAsync({ id: collection.id, body: { title: values.title, description: values.description } });
       setEditing(false);
     } catch (error) {
       message.error(errorMessage(error));
     }
-  };
+  });
   const setOrder = async (next: string[]) => {
     try {
       await replacePacks.mutateAsync({ id: collection.id, packIds: next });
@@ -59,74 +63,68 @@ export function CollectionDetailPage() {
   };
 
   return (
-    <div className="page-stack">
+    <Stack gap="lg">
       <BackLink to="/collections">返回专题</BackLink>
       <PageHeader
         title={collection.title}
         description={collection.description || `${collection.packs.length} 个套卷`}
         extra={
-          <Space wrap>
-            <LinkButton type="primary" to={`/library?collection_id=${collection.id}`}>
-              在资料库中查看
-            </LinkButton>
+          <>
+            <LinkButton to={`/library?collection_id=${collection.id}`}>在资料库中查看</LinkButton>
             {canWrite ? (
               <>
+                <Button variant="default" onClick={() => { form.setValues({ title: collection.title, description: collection.description ?? '' }); setEditing(true); }}>编辑</Button>
                 <Button
-                  onClick={() => {
-                    form.setFieldsValue({ title: collection.title, description: collection.description });
-                    setEditing(true);
-                  }}
+                  variant="default"
+                  color="red"
+                  onClick={() => modal.confirm({
+                    title: '删除专题？',
+                    content: '其中的套卷不会被删除',
+                    okText: '删除',
+                    danger: true,
+                    onOk: () => remove.mutateAsync(collection.id).then(() => navigate('/collections', { replace: true })),
+                  })}
                 >
-                  编辑
+                  删除专题
                 </Button>
-                <Popconfirm title="删除专题？其中的套卷不会被删除" onConfirm={() => void remove.mutateAsync(collection.id).then(() => navigate('/collections', { replace: true }))}>
-                  <Button danger>删除专题</Button>
-                </Popconfirm>
               </>
             ) : null}
-          </Space>
+          </>
         }
       />
-      <Card styles={{ body: { padding: 0 } }}>
-        {collection.packs.length === 0 ? (
-          <EmptyState description="专题还是空的：在资料库勾选套卷，点“加入专题”" />
-        ) : (
-          <ul className="collection-pack-list">
-            {collection.packs.map((pack, index) => (
-              <li key={pack.id} className="collection-pack-list__item">
-                <div className="collection-pack-list__content">
-                  <Link to={href.pack(pack.id)} className="collection-pack-list__title">
-                    {pack.title}
-                  </Link>
-                  <div className="collection-pack-list__meta">
-                    <PackMeta pack={pack} />
-                    <Completeness pack={pack} />
-                  </div>
-                </div>
-                {canWrite ? (
-                  <Space size={4} className="collection-pack-list__actions">
-                    <Button type="text" size="small" aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, -1)} />
-                    <Button type="text" size="small" aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === order.length - 1} onClick={() => move(index, 1)} />
-                    <Button type="link" size="small" danger onClick={() => void setOrder(order.filter((id) => id !== pack.id))}>
-                      移出
-                    </Button>
-                  </Space>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-      <Modal open={editing} title="编辑专题" okText="保存" onOk={() => void save()} onCancel={() => setEditing(false)} confirmLoading={update.isPending} destroyOnHidden>
-        <Form form={form} layout="vertical">
-          <Form.Item name="title" label="名称" rules={[{ required: true, whitespace: true, message: '请填写名称' }]}>
-            <Input maxLength={255} />
-          </Form.Item>
-          <Form.Item name="description" label="说明">
-            <Input.TextArea autoSize={{ minRows: 2 }} maxLength={4000} />
-          </Form.Item>
-        </Form>
+      {collection.packs.length === 0 ? (
+        <EmptyState description="专题还是空的：在资料库勾选套卷，点“加入专题”" />
+      ) : (
+        <ItemList>
+          {collection.packs.map((pack, index) => (
+            <ItemRow
+              key={pack.id}
+              main={
+                <Stack gap={4}>
+                  <Anchor component={Link} to={href.pack(pack.id)} fw={600} c="inherit" truncate>{pack.title}</Anchor>
+                  <Group gap="sm"><PackMeta pack={pack} /><Completeness pack={pack} /></Group>
+                </Stack>
+              }
+              aside={canWrite ? (
+                <>
+                  <ActionIcon variant="subtle" color="gray" aria-label="上移" disabled={index === 0} onClick={() => move(index, -1)}><IconArrowUp size={16} /></ActionIcon>
+                  <ActionIcon variant="subtle" color="gray" aria-label="下移" disabled={index === order.length - 1} onClick={() => move(index, 1)}><IconArrowDown size={16} /></ActionIcon>
+                  <Button variant="subtle" color="red" size="compact-sm" onClick={() => void setOrder(order.filter((id) => id !== pack.id))}>移出</Button>
+                </>
+              ) : null}
+            />
+          ))}
+        </ItemList>
+      )}
+      <Modal opened={editing} onClose={() => setEditing(false)} title="编辑专题">
+        <form onSubmit={save}>
+          <Stack gap="md">
+            <TextInput label="名称" withAsterisk maxLength={255} {...form.getInputProps('title')} />
+            <Textarea label="说明" autosize minRows={2} maxLength={4000} {...form.getInputProps('description')} />
+            <Group justify="flex-end"><Button variant="default" onClick={() => setEditing(false)}>取消</Button><Button type="submit" loading={update.isPending}>保存</Button></Group>
+          </Stack>
+        </form>
       </Modal>
-    </div>
+    </Stack>
   );
 }

@@ -1,22 +1,24 @@
 import { useState } from 'react';
-import { App, Form, Input, Modal, Radio, Select, Space, Typography } from 'antd';
+import { Radio, Select, Stack, Text, TextInput } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { useDebouncedValue } from '@mantine/hooks';
 import type { Pack } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
+import { FormModal } from '../../shared/ui/FormModal';
+import { message } from '../../shared/ui/feedback';
 import { useCollectionMutations, useCollectionsList } from '../collections/queries';
-import { PackCatalogFields, formToUpdate, type CatalogField, type CatalogFormValues } from './PackCatalogFields';
+import { PackCatalogFields, formToUpdate, validateCatalog, type CatalogField, type CatalogFormValues } from './PackCatalogFields';
 import { usePackFacets, usePackMutations } from './queries';
 
 const BULK_FIELDS: CatalogField[] = ['doc_type', 'subject_codes', 'grade', 'cohort', 'term', 'region', 'organization', 'exam_date', 'tags'];
 
 /** 批量编目：只提交用户动过的字段，其余保持各自原值。 */
 export function BulkEditModal({ ids, open, onClose }: { ids: string[]; open: boolean; onClose: () => void }) {
-  const { message } = App.useApp();
-  const [form] = Form.useForm<CatalogFormValues>();
+  const form = useForm<CatalogFormValues>({ initialValues: {}, validate: validateCatalog });
   const facets = usePackFacets();
   const { bulkUpdate } = usePackMutations();
-  const submit = async () => {
-    const values = await form.validateFields();
-    const touched = BULK_FIELDS.filter((field) => form.isFieldTouched(field));
+  const submit = form.onSubmit(async (values) => {
+    const touched = BULK_FIELDS.filter((field) => form.isDirty(field));
     if (touched.length === 0) {
       message.info('没有修改任何字段');
       return;
@@ -24,30 +26,28 @@ export function BulkEditModal({ ids, open, onClose }: { ids: string[]; open: boo
     try {
       const result = await bulkUpdate.mutateAsync({ ids, patch: formToUpdate(values, touched) });
       message.success(`已更新 ${result.count} 个套卷`);
-      form.resetFields();
+      form.reset();
       onClose();
     } catch (error) {
       message.error(errorMessage(error));
     }
-  };
+  });
   return (
-    <Modal open={open} title={`批量编目 ${ids.length} 个套卷`} width={720} okText="应用" onOk={() => void submit()} onCancel={onClose} confirmLoading={bulkUpdate.isPending} destroyOnHidden>
-      <Typography.Paragraph type="secondary">只会修改你填写或清空过的字段，标题会按新字段自动重命名。</Typography.Paragraph>
-      <Form form={form} layout="vertical">
-        <PackCatalogFields fields={BULK_FIELDS} facets={facets.data} />
-      </Form>
-    </Modal>
+    <FormModal opened={open} onClose={onClose} title={`批量编目 ${ids.length} 个套卷`} size={720} okText="应用" loading={bulkUpdate.isPending} onSubmit={submit}>
+      <Text size="sm" c="dimmed">只会修改你填写或清空过的字段，标题会按新字段自动重命名。</Text>
+      <PackCatalogFields form={form} fields={BULK_FIELDS} facets={facets.data} />
+    </FormModal>
   );
 }
 
 /** 加入专题：选已有专题或新建。 */
 export function AddToCollectionModal({ ids, open, onClose }: { ids: string[]; open: boolean; onClose: () => void }) {
-  const { message } = App.useApp();
   const [mode, setMode] = useState<'existing' | 'new'>('existing');
-  const [target, setTarget] = useState<string>();
+  const [target, setTarget] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [search, setSearch] = useState('');
-  const list = useCollectionsList({ page: 1, page_size: 50, q: search || undefined }, open);
+  const [debounced] = useDebouncedValue(search, 250);
+  const list = useCollectionsList({ page: 1, page_size: 50, q: debounced || undefined }, open);
   const { addPacks, create } = useCollectionMutations();
   const submit = async () => {
     try {
@@ -65,32 +65,21 @@ export function AddToCollectionModal({ ids, open, onClose }: { ids: string[]; op
     }
   };
   return (
-    <Modal open={open} title={`把 ${ids.length} 个套卷加入专题`} okText="加入" onOk={() => void submit()} onCancel={onClose} confirmLoading={addPacks.isPending || create.isPending} destroyOnHidden>
-      <Space direction="vertical" className="w-full">
-        <Radio.Group value={mode} onChange={(e) => setMode(e.target.value as 'existing' | 'new')} options={[{ value: 'existing', label: '已有专题' }, { value: 'new', label: '新建专题' }]} />
-        {mode === 'existing' ? (
-          <Select
-            showSearch
-            className="w-full"
-            placeholder="搜索专题"
-            filterOption={false}
-            onSearch={setSearch}
-            value={target}
-            onChange={setTarget}
-            options={(list.data?.items ?? []).map((c) => ({ value: c.id, label: `${c.title}（${c.pack_count}）` }))}
-            loading={list.isFetching}
-          />
-        ) : (
-          <Input placeholder="专题名称，如 导数压轴题汇编" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={255} />
-        )}
-      </Space>
-    </Modal>
+    <FormModal opened={open} onClose={onClose} title={`把 ${ids.length} 个套卷加入专题`} okText="加入" loading={addPacks.isPending || create.isPending} onSubmit={() => void submit()}>
+      <Radio.Group value={mode} onChange={(v) => setMode(v as 'existing' | 'new')}>
+        <Stack gap="xs"><Radio value="existing" label="已有专题" /><Radio value="new" label="新建专题" /></Stack>
+      </Radio.Group>
+      {mode === 'existing' ? (
+        <Select searchable placeholder="搜索专题" searchValue={search} onSearchChange={setSearch} value={target} onChange={setTarget} filter={({ options }) => options} data={(list.data?.items ?? []).map((c) => ({ value: c.id, label: `${c.title}（${c.pack_count}）` }))} />
+      ) : (
+        <TextInput placeholder="专题名称，如 导数压轴题汇编" value={title} onChange={(e) => setTitle(e.currentTarget.value)} maxLength={255} />
+      )}
+    </FormModal>
   );
 }
 
 /** 合并：选一个保留的套卷，其余套卷的文件并入它。 */
 export function MergeModal({ packs, open, onClose, onMerged }: { packs: Pack[]; open: boolean; onClose: () => void; onMerged?: (id: string) => void }) {
-  const { message } = App.useApp();
   const [target, setTarget] = useState<string>();
   const { merge } = usePackMutations();
   const chosen = target ?? packs[0]?.id;
@@ -106,15 +95,11 @@ export function MergeModal({ packs, open, onClose, onMerged }: { packs: Pack[]; 
     }
   };
   return (
-    <Modal open={open} title={`合并 ${packs.length} 个套卷`} okText="合并" onOk={() => void submit()} onCancel={onClose} confirmLoading={merge.isPending} destroyOnHidden>
-      <Typography.Paragraph type="secondary">选择保留哪一个套卷的编目信息，其余套卷的文件会并入它，空字段会自动补齐。</Typography.Paragraph>
-      <Radio.Group value={chosen} onChange={(e) => setTarget(e.target.value as string)} className="flex flex-col gap-2">
-        {packs.map((p) => (
-          <Radio key={p.id} value={p.id}>
-            {p.title}（{p.members.length} 个文件）
-          </Radio>
-        ))}
+    <FormModal opened={open} onClose={onClose} title={`合并 ${packs.length} 个套卷`} okText="合并" loading={merge.isPending} onSubmit={() => void submit()}>
+      <Text size="sm" c="dimmed">选择保留哪一个套卷的编目信息，其余套卷的文件会并入它，空字段会自动补齐。</Text>
+      <Radio.Group value={chosen} onChange={setTarget}>
+        <Stack gap="xs">{packs.map((p) => <Radio key={p.id} value={p.id} label={`${p.title}（${p.members.length} 个文件）`} />)}</Stack>
       </Radio.Group>
-    </Modal>
+    </FormModal>
   );
 }

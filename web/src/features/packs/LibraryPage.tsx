@@ -1,7 +1,6 @@
-import { useCallback, useMemo, useState, type Key, type ReactNode } from 'react';
-import { App, Button, Card, Checkbox, Dropdown, Input, Select, Space, Table, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { DownOutlined, FilterOutlined } from '@ant-design/icons';
+import { useCallback, useMemo, useState, type Key } from 'react';
+import { Anchor, Button, Checkbox, Group, Menu, Paper, Select, SimpleGrid, Stack, Text, TextInput } from '@mantine/core';
+import { IconChevronDown, IconFilter, IconSearch } from '@tabler/icons-react';
 import { Link, useNavigate } from 'react-router';
 import type { DocType, Grade, Pack, Stage, SubjectCode } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
@@ -10,10 +9,10 @@ import { formatDateTime } from '../../shared/lib/format';
 import { DOC_TYPE_LABELS, GRADE_LABELS, SUBJECT_LABELS } from '../../shared/lib/labels';
 import { useListSearch } from '../../shared/lib/listSearch';
 import { STAGE_OPTIONS } from '../../shared/lib/options';
-import { navigateTableRow } from '../../shared/lib/tableNavigation';
-import { useCompactViewport } from '../../shared/lib/useCompactViewport';
 import { useDebouncedFilterInput } from '../../shared/lib/useDebouncedFilterInput';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { message, modal } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { useAuth } from '../auth/AuthContext';
 import { downloadPack, type PackSort } from './api';
@@ -28,27 +27,16 @@ function facetOptions<T extends string>(values: { value: string; count: number }
   return (values ?? []).map((f) => ({ value: f.value, label: `${label(f.value as T)}（${f.count}）` }));
 }
 
-function FilterField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="library-filter-field">
-      <span className="library-filter-field__label">{label}</span>
-      {children}
-    </label>
-  );
-}
-
 export function LibraryPage() {
   const { can } = useAuth();
   const canWrite = can('materials:write');
-  const compact = useCompactViewport();
   const navigate = useNavigate();
-  const { message, modal: confirmModal } = App.useApp();
   const [selectMode, setSelectMode] = useState(false);
   const list = useListSearch(FILTER_KEYS);
   const { filters, setFilters } = list;
   const [qInput, setQInput] = useDebouncedFilterInput(filters.q, (q) => setFilters({ q }));
   const [selected, setSelected] = useState<Pack[]>([]);
-  const [modal, setModal] = useState<'' | 'edit' | 'topic' | 'merge'>('');
+  const [dialog, setDialog] = useState<'' | 'edit' | 'topic' | 'merge'>('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const facets = usePackFacets();
   const { trash } = usePackMutations();
@@ -82,7 +70,7 @@ export function LibraryPage() {
     } catch (error) {
       message.error(errorMessage(error));
     }
-  }, [ids, message, trash]);
+  }, [ids, trash]);
 
   const handleDownload = useCallback(async () => {
     for (const pack of selected) {
@@ -93,201 +81,124 @@ export function LibraryPage() {
         message.error(`${pack.title}：${errorMessage(error)}`);
       }
     }
-  }, [message, selected]);
+  }, [selected]);
 
-  const columns = useMemo<ColumnsType<Pack>>(
-    () => [
-      {
-        title: '套卷',
-        key: 'title',
-        render: (_: unknown, pack) => (
-          <div className="cell-stack">
-            <Link to={href.pack(pack.id)} className="font-semibold">
-              {pack.title}
-            </Link>
-            <PackMeta pack={pack} />
-          </div>
-        ),
-      },
-      ...(compact
-        ? []
-        : [
-            { title: '齐全度', key: 'complete', width: 190, render: (_: unknown, pack: Pack) => <Completeness pack={pack} /> },
-            { title: '文件', key: 'files', width: 70, align: 'right' as const, render: (_: unknown, pack: Pack) => pack.members.length },
-            { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 170, render: (value: string) => formatDateTime(value) },
-          ]),
-    ],
-    [compact],
-  );
+  const columns = useMemo<Column<Pack>[]>(() => [
+    {
+      key: 'title', wrap: true,
+      title: '套卷',
+      render: (pack) => (
+        <Stack gap={4} miw={0}>
+          <Anchor component={Link} to={href.pack(pack.id)} fw={600} c="inherit">{pack.title}</Anchor>
+          <PackMeta pack={pack} />
+        </Stack>
+      ),
+    },
+    { key: 'complete', title: '齐全度', width: 200, hideOnCompact: true, render: (pack) => <Completeness pack={pack} /> },
+    { key: 'files', title: '文件', width: 70, align: 'right', hideOnCompact: true, render: (pack) => pack.members.length },
+    { key: 'updated_at', title: '更新时间', width: 170, hideOnCompact: true, render: (pack) => formatDateTime(pack.updated_at) },
+  ], []);
 
   const clear = useCallback(() => {
     setQInput('');
     setFilters(Object.fromEntries(FILTER_KEYS.filter((k) => k !== 'sort').map((k) => [k, ''])));
   }, [setFilters, setQInput]);
 
-  const rowSelection = useMemo(
-    () =>
-      canWrite && selectMode
-        ? {
-            selectedRowKeys: ids,
-            preserveSelectedRowKeys: true,
-            onChange: (_keys: Key[], rows: Pack[]) => setSelected(rows.filter(Boolean)),
-          }
-        : undefined,
-    [canWrite, selectMode, ids],
-  );
-
-  const confirmTrash = () =>
-    confirmModal.confirm({
-      title: `把 ${selected.length} 个套卷移入回收站？`,
-      content: '30 天内可以恢复。',
-      okText: '移入',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: handleTrash,
-    });
-
-  const exitSelect = () => {
-    setSelectMode(false);
-    setSelected([]);
+  const onSelectedChange = (keys: Key[]) => {
+    const pool = new Map<string, Pack>([...selected, ...(query.data?.items ?? [])].map((p) => [p.id, p]));
+    setSelected(keys.map((k) => pool.get(String(k))).filter((p): p is Pack => !!p));
   };
 
+  const confirmTrash = () =>
+    modal.confirm({ title: `把 ${selected.length} 个套卷移入回收站？`, content: '30 天内可以恢复。', okText: '移入', danger: true, onOk: handleTrash });
+
+  const exitSelect = () => { setSelectMode(false); setSelected([]); };
+
+  const select = (label: string, key: (typeof FILTER_KEYS)[number], data: { value: string; label: string }[], searchable = false) => (
+    <Select label={label} placeholder="全部" clearable searchable={searchable} data={data} value={filters[key] || null} onChange={(v) => setFilters({ [key]: v ?? '' })} />
+  );
+
   return (
-    <div className="page-stack">
+    <Stack gap="lg">
       <PageHeader title="资料库" />
 
-      <Card size="small" className="library-filter-card">
-        <div className="library-filters__primary">
-          <Input.Search
-            allowClear
-            placeholder="搜索名称、考试、机构、地区或标签"
-            value={qInput}
-            onChange={(e) => setQInput(e.target.value)}
-            className="library-filters__search"
-          />
-          <Button type={advancedOpen || activeFilterCount > 0 ? 'default' : 'text'} icon={<FilterOutlined />} onClick={() => setAdvancedOpen((open) => !open)}>
-            筛选{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
-          </Button>
-          {canWrite ? (
-            <Button type={selectMode ? 'default' : 'text'} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>
-              {selectMode ? '完成' : '选择'}
+      <Paper p="md">
+        <Stack gap="md">
+          <Group gap="sm" wrap="wrap">
+            <TextInput flex={1} miw={220} placeholder="搜索名称、考试、机构、地区或标签" leftSection={<IconSearch size={16} />} value={qInput} onChange={(e) => setQInput(e.currentTarget.value)} />
+            <Button variant={advancedOpen || activeFilterCount > 0 ? 'light' : 'default'} leftSection={<IconFilter size={16} />} onClick={() => setAdvancedOpen((o) => !o)}>
+              筛选{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
             </Button>
+            {canWrite ? <Button variant={selectMode ? 'light' : 'default'} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}>{selectMode ? '完成' : '选择'}</Button> : null}
+          </Group>
+          {advancedOpen ? (
+            <Stack gap="md" aria-label="高级筛选">
+              <SimpleGrid cols={{ base: 1, xs: 2, md: 3, lg: 4 }} spacing="md">
+                {select('学科', 'subject', facetOptions<SubjectCode>(facets.data?.subjects, (v) => SUBJECT_LABELS[v] ?? v))}
+                {select('年级', 'grade', facetOptions<Grade>(facets.data?.grades, (v) => GRADE_LABELS[v] ?? v))}
+                {select('资料类型', 'doc_type', facetOptions<DocType>(facets.data?.doc_types, (v) => DOC_TYPE_LABELS[v] ?? v))}
+                {select('届别', 'cohort', facetOptions<string>(facets.data?.cohorts, (v) => `${v} 届`))}
+                {select('地区', 'region', facetOptions<string>(facets.data?.regions, (v) => v), true)}
+                {select('来源机构', 'organization', facetOptions<string>(facets.data?.organizations, (v) => v), true)}
+                {select('标签', 'tag', facetOptions<string>(facets.data?.tags, (v) => v), true)}
+                {select('整理状态', 'stage', STAGE_OPTIONS)}
+                <Select
+                  label="排序"
+                  allowDeselect={false}
+                  value={filters.sort || 'updated'}
+                  onChange={(sort) => setFilters({ sort: sort === 'updated' ? '' : (sort ?? '') })}
+                  data={[{ value: 'updated', label: '最近更新' }, { value: 'cohort', label: '按届别与考试时间' }, { value: 'title', label: '按名称' }]}
+                />
+              </SimpleGrid>
+              <Group gap="lg">
+                <Checkbox label="只看缺答案" checked={filters.missing === 'answers'} onChange={(e) => setFilters({ missing: e.currentTarget.checked ? 'answers' : '' })} />
+                <Checkbox label="同时搜索正文" checked={filters.content === '1'} onChange={(e) => setFilters({ content: e.currentTarget.checked ? '1' : '' })} />
+                {hasFilters ? <Button variant="subtle" size="compact-sm" onClick={clear}>清除全部</Button> : null}
+              </Group>
+            </Stack>
           ) : null}
-        </div>
-        {advancedOpen ? (
-          <div className="library-filters__advanced" aria-label="高级筛选">
-            <FilterField label="学科">
-              <Select allowClear placeholder="全部" value={filters.subject || undefined} onChange={(v) => setFilters({ subject: v ?? '' })} options={facetOptions<SubjectCode>(facets.data?.subjects, (v) => SUBJECT_LABELS[v] ?? v)} />
-            </FilterField>
-            <FilterField label="年级">
-              <Select allowClear placeholder="全部" value={filters.grade || undefined} onChange={(v) => setFilters({ grade: v ?? '' })} options={facetOptions<Grade>(facets.data?.grades, (v) => GRADE_LABELS[v] ?? v)} />
-            </FilterField>
-            <FilterField label="资料类型">
-              <Select allowClear placeholder="全部" value={filters.doc_type || undefined} onChange={(v) => setFilters({ doc_type: v ?? '' })} options={facetOptions<DocType>(facets.data?.doc_types, (v) => DOC_TYPE_LABELS[v] ?? v)} />
-            </FilterField>
-            <FilterField label="届别">
-              <Select allowClear placeholder="全部" value={filters.cohort || undefined} onChange={(v) => setFilters({ cohort: v ?? '' })} options={facetOptions<string>(facets.data?.cohorts, (v) => `${v} 届`)} />
-            </FilterField>
-            <FilterField label="地区">
-              <Select allowClear showSearch placeholder="全部" value={filters.region || undefined} onChange={(v) => setFilters({ region: v ?? '' })} options={facetOptions<string>(facets.data?.regions, (v) => v)} />
-            </FilterField>
-            <FilterField label="来源机构">
-              <Select allowClear showSearch placeholder="全部" value={filters.organization || undefined} onChange={(v) => setFilters({ organization: v ?? '' })} options={facetOptions<string>(facets.data?.organizations, (v) => v)} />
-            </FilterField>
-            <FilterField label="标签">
-              <Select allowClear showSearch placeholder="全部" value={filters.tag || undefined} onChange={(v) => setFilters({ tag: v ?? '' })} options={facetOptions<string>(facets.data?.tags, (v) => v)} />
-            </FilterField>
-            <FilterField label="整理状态">
-              <Select allowClear placeholder="全部" value={filters.stage || undefined} onChange={(v) => setFilters({ stage: v ?? '' })} options={STAGE_OPTIONS} />
-            </FilterField>
-            <FilterField label="排序">
-              <Select
-                value={filters.sort || 'updated'}
-                onChange={(sort) => setFilters({ sort: sort === 'updated' ? '' : sort })}
-                options={[
-                  { value: 'updated', label: '最近更新' },
-                  { value: 'cohort', label: '按届别与考试时间' },
-                  { value: 'title', label: '按名称' },
-                ]}
-              />
-            </FilterField>
-            <div className="library-filter-field library-filter-field--check">
-              <Space wrap size={16}>
-                <Checkbox checked={filters.missing === 'answers'} onChange={(e) => setFilters({ missing: e.target.checked ? 'answers' : '' })}>
-                  只看缺答案
-                </Checkbox>
-                <Checkbox checked={filters.content === '1'} onChange={(e) => setFilters({ content: e.target.checked ? '1' : '' })}>
-                  同时搜索正文
-                </Checkbox>
-                {hasFilters ? (
-                  <Button type="link" size="small" onClick={clear}>
-                    清除全部
-                  </Button>
-                ) : null}
-              </Space>
-            </div>
-          </div>
-        ) : null}
-      </Card>
+        </Stack>
+      </Paper>
 
       {canWrite && selectMode && selected.length > 0 ? (
-        <Card size="small" className="bulk-bar">
-          <Space wrap>
-            <Typography.Text strong>已选 {selected.length} 个</Typography.Text>
-            <Button onClick={() => setModal('topic')}>加入专题</Button>
-            <Button onClick={() => void handleDownload()}>下载</Button>
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  { key: 'edit', label: '批量编目' },
-                  { key: 'merge', label: '合并为一套', disabled: selected.length < 2 },
-                  { type: 'divider' },
-                  { key: 'trash', label: '移入回收站', danger: true },
-                ],
-                onClick: ({ key }) => {
-                  if (key === 'trash') confirmTrash();
-                  else setModal(key as 'edit' | 'merge');
-                },
-              }}
-            >
-              <Button>
-                更多 <DownOutlined />
-              </Button>
-            </Dropdown>
-          </Space>
-        </Card>
+        <Paper p="sm" px="md">
+          <Group gap="sm">
+            <Text fw={600} size="sm">已选 {selected.length} 个</Text>
+            <Button variant="default" onClick={() => setDialog('topic')}>加入专题</Button>
+            <Button variant="default" onClick={() => void handleDownload()}>下载</Button>
+            <Menu position="bottom-start">
+              <Menu.Target><Button variant="default" rightSection={<IconChevronDown size={14} />}>更多</Button></Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item onClick={() => setDialog('edit')}>批量编目</Menu.Item>
+                <Menu.Item disabled={selected.length < 2} onClick={() => setDialog('merge')}>合并为一套</Menu.Item>
+                <Menu.Divider />
+                <Menu.Item color="red" onClick={confirmTrash}>移入回收站</Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
+          </Group>
+        </Paper>
       ) : null}
 
       {query.isError ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : (
-        <Card styles={{ body: { padding: 0 } }}>
-          <Table<Pack>
-            rowKey="id"
-            size="middle"
-            loading={query.isFetching}
-            columns={columns}
-            dataSource={query.data?.items ?? []}
-            rowSelection={rowSelection}
-            onRow={(pack) => ({ onClick: (event) => navigateTableRow(event, `/packs/${pack.id}`, navigate), className: 'cursor-pointer' })}
-            locale={{ emptyText: <EmptyState description={hasFilters ? '没有符合条件的套卷' : '资料库还是空的，把文件拖到页面任意位置即可上传'} /> }}
-            pagination={{
-              current: list.page,
-              pageSize: list.pageSize,
-              total: query.data?.total ?? 0,
-              showSizeChanger: !compact,
-              simple: compact,
-              showTotal: (total) => `共 ${total} 套`,
-              onChange: list.setPage,
-            }}
-          />
-        </Card>
+        <DataTable
+          rows={query.data?.items ?? []}
+          columns={columns}
+          rowKey={(p) => p.id}
+          minWidth={320}
+          loading={query.isFetching}
+          selected={canWrite && selectMode ? ids : undefined}
+          onSelectedChange={canWrite && selectMode ? onSelectedChange : undefined}
+          onRowClick={(pack) => navigate(href.pack(pack.id))}
+          empty={<EmptyState description={hasFilters ? '没有符合条件的套卷' : '资料库还是空的，把文件拖到页面任意位置即可上传'} />}
+          pagination={{ page: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: list.setPage }}
+        />
       )}
 
-      <BulkEditModal ids={ids} open={modal === 'edit'} onClose={() => setModal('')} />
-      <AddToCollectionModal ids={ids} open={modal === 'topic'} onClose={() => setModal('')} />
-      <MergeModal packs={selected} open={modal === 'merge'} onClose={() => setModal('')} onMerged={() => setSelected([])} />
-    </div>
+      <BulkEditModal ids={ids} open={dialog === 'edit'} onClose={() => setDialog('')} />
+      <AddToCollectionModal ids={ids} open={dialog === 'topic'} onClose={() => setDialog('')} />
+      <MergeModal packs={selected} open={dialog === 'merge'} onClose={() => setDialog('')} onMerged={() => setSelected([])} />
+    </Stack>
   );
 }

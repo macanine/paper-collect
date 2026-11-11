@@ -1,27 +1,19 @@
 import { useEffect, useState } from 'react';
-import {
-  App,
-  Button,
-  Card,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Select,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined } from '@ant-design/icons';
+import { Button, Group, NumberInput, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { modals } from '@mantine/modals';
+import { IconPlus } from '@tabler/icons-react';
 import { useAuth } from '../auth/AuthContext';
 import { describeError } from '../../shared/api/errors';
 import type { OCRProvider, OCRProviderKind } from '../../shared/api/types';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { FormModal } from '../../shared/ui/FormModal';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { Section } from '../../shared/ui/Section';
+import { message } from '../../shared/ui/feedback';
 import { RerunCard } from './RerunCard';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
+import { Tag } from '../../shared/ui/StatusTags';
 import {
   useAISettings,
   useCreateOCRProvider,
@@ -30,12 +22,6 @@ import {
   useUpdateAISettings,
   useUpdateOCRProvider,
 } from './queries';
-
-interface SettingsFormValues {
-  ocr_provider_id: string;
-  max_pages: number;
-  max_images: number;
-}
 
 interface OCRFormValues {
   name: string;
@@ -82,75 +68,65 @@ const KIND_LABELS: Record<OCRProviderKind, string> = {
 export function AiSettingsPage() {
   const { can } = useAuth();
   const canWrite = can('ai:write');
-  const { message, modal } = App.useApp();
   const settings = useAISettings();
   const providers = useOCRProviders();
   const save = useUpdateAISettings();
   const createProvider = useCreateOCRProvider();
   const updateProvider = useUpdateOCRProvider();
   const testProvider = useTestOCRProvider();
-  const [form] = Form.useForm<SettingsFormValues>();
-  const [providerForm] = Form.useForm<OCRFormValues>();
+  const form = useForm<{ ocr_provider_id: string | null; max_pages: number; max_images: number }>({
+    initialValues: { ocr_provider_id: null, max_pages: 1, max_images: 0 },
+    validate: {
+      max_pages: (v) => (typeof v === 'number' && v >= 1 && v <= 10 ? null : '请输入 1 到 10'),
+      max_images: (v) => (typeof v === 'number' && v >= 0 && v <= 4 ? null : '请输入 0 到 4'),
+    },
+  });
   const [providerOpen, setProviderOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<OCRProvider | null>(null);
-  const [providerKind, setProviderKind] = useState<OCRProviderKind>('paddleocr');
+  const providerForm = useForm<OCRFormValues>({
+    initialValues: EMPTY_PROVIDER,
+    validate: {
+      name: (v) => (!v.trim() ? '请输入名称' : v.length > 128 ? '最多 128 个字符' : null),
+      base_url: (v) => { try { const u = new URL(v.trim()); return u.protocol === 'http:' || u.protocol === 'https:' ? null : '请输入完整的 http(s) 地址'; } catch { return '请输入完整的 http(s) 地址'; } },
+    },
+  });
+  const providerKind = providerForm.values.kind;
 
   useEffect(() => {
     if (!settings.data) return;
-    form.setFieldsValue({
-      ocr_provider_id: settings.data.ocr_provider_id,
-      max_pages: settings.data.max_pages,
-      max_images: settings.data.max_images,
-    });
-  }, [settings.data, form]);
+    const values = { ocr_provider_id: settings.data.ocr_provider_id || null, max_pages: settings.data.max_pages, max_images: settings.data.max_images };
+    form.setValues(values);
+    form.resetDirty(values);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.data]);
 
-  const handleSave = async () => {
-    const values = await form.validateFields();
+  const handleSave = form.onSubmit(async (values) => {
     try {
-      await save.mutateAsync({
-        ocr_provider_id: values.ocr_provider_id ?? '',
-        max_pages: values.max_pages,
-        max_images: values.max_images,
-      });
+      await save.mutateAsync({ ocr_provider_id: values.ocr_provider_id ?? '', max_pages: values.max_pages, max_images: values.max_images });
       message.success('AI 解析设置已保存，等待 AI 的文件会自动继续');
     } catch (error) {
       const { title, detail } = describeError(error);
       message.error(detail ? `${title}：${detail}` : title);
     }
-  };
+  });
 
   const openProvider = (provider?: OCRProvider) => {
     setEditingProvider(provider ?? null);
-    setProviderKind(provider?.kind ?? 'paddleocr');
-    providerForm.setFieldsValue(
-      provider
-        ? {
-            name: provider.name,
-            kind: provider.kind,
-            base_url: provider.base_url,
-            model: provider.model,
-            token: '',
-            enabled: provider.enabled,
-            priority: provider.priority,
-          }
-        : EMPTY_PROVIDER,
-    );
+    const values = provider
+      ? { name: provider.name, kind: provider.kind, base_url: provider.base_url, model: provider.model, token: '', enabled: provider.enabled, priority: provider.priority }
+      : EMPTY_PROVIDER;
+    providerForm.setValues(values);
+    providerForm.resetDirty(values);
+    providerForm.clearErrors();
     setProviderOpen(true);
   };
 
   const handleKindChange = (kind: OCRProviderKind) => {
-    setProviderKind(kind);
     const preset = PROVIDER_PRESETS[kind];
-    providerForm.setFieldsValue({
-      kind,
-      base_url: preset.base_url,
-      model: preset.model,
-      name: preset.name,
-    });
+    providerForm.setValues({ kind, base_url: preset.base_url, model: preset.model, name: preset.name });
   };
 
-  const handleProviderSubmit = async () => {
-    const values = await providerForm.validateFields();
+  const handleProviderSubmit = providerForm.onSubmit(async (values) => {
     const payload = {
       name: values.name.trim(),
       base_url: values.base_url.trim(),
@@ -172,14 +148,19 @@ export function AiSettingsPage() {
       const { title, detail } = describeError(error);
       message.error(detail ? `${title}：${detail}` : title);
     }
-  };
+  });
 
   const handleTest = (provider: OCRProvider) => {
     testProvider.mutate(provider.id, {
       onSuccess: (result) =>
-        modal.info({
+        modals.open({
           title: result.healthy ? `${provider.name}：连接成功` : `${provider.name}：连接失败`,
-          content: result.message,
+          children: (
+            <Stack gap="md">
+              <Text size="sm">{result.message}</Text>
+              <Group justify="flex-end"><Button onClick={() => modals.closeAll()}>知道了</Button></Group>
+            </Stack>
+          ),
         }),
       onError: (error) => {
         const { title, detail } = describeError(error);
@@ -188,68 +169,32 @@ export function AiSettingsPage() {
     });
   };
 
-  const providerColumns: ColumnsType<OCRProvider> = [
+  const providerColumns: Column<OCRProvider>[] = [
     {
-      title: '服务商',
-      key: 'name',
-      render: (_: unknown, row) => (
-        <div className="flex flex-col gap-1">
-          <span className="font-medium">{row.name}</span>
-          <span className="font-mono text-xs">{KIND_LABELS[row.kind]}</span>
-        </div>
-      ),
+      key: 'name', title: '服务商',
+      render: (row) => <Stack gap={2}><Text fw={600} size="sm">{row.name}</Text><Text ff="monospace" size="xs" c="dimmed">{KIND_LABELS[row.kind]}</Text></Stack>,
     },
+    { key: 'model', title: '模型', render: (row) => row.model || '—' },
+    { key: 'token', title: '令牌', width: 90, render: (row) => (row.token_configured ? <Tag color="green">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
+    { key: 'priority', title: '优先级', width: 85, render: (row) => row.priority },
     {
-      title: '模型',
-      dataIndex: 'model',
-      key: 'model',
-      render: (value: string) => value || '—',
-    },
-    {
-      title: '令牌',
-      dataIndex: 'token_configured',
-      key: 'token',
-      width: 90,
-      render: (configured: boolean) => (configured ? <Tag color="green">已保存</Tag> : <Tag color="orange">未设置</Tag>),
-    },
-    {
-      title: '优先级',
-      dataIndex: 'priority',
-      key: 'priority',
-      width: 85,
-    },
-    {
-      title: '启用',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 80,
-      render: (enabled: boolean, row) => (
+      key: 'enabled', title: '启用', width: 80,
+      render: (row) => (
         <Switch
-          size="small"
-          checked={enabled}
+          checked={row.enabled}
           disabled={!canWrite}
-          onChange={(next) =>
-            updateProvider.mutate(
-              { id: row.id, patch: { enabled: next } },
-              { onError: (error) => message.error(describeError(error).title) },
-            )
-          }
+          aria-label={`启用 ${row.name}`}
+          onChange={(e) => updateProvider.mutate({ id: row.id, patch: { enabled: e.currentTarget.checked } }, { onError: (error) => message.error(describeError(error).title) })}
         />
       ),
     },
     {
-      title: '操作',
-      key: 'actions',
-      width: 140,
-      render: (_: unknown, row) => (
-        <Space size={4}>
-          <Button size="small" onClick={() => handleTest(row)} disabled={!canWrite}>
-            测试
-          </Button>
-          <Button size="small" onClick={() => openProvider(row)} disabled={!canWrite}>
-            编辑
-          </Button>
-        </Space>
+      key: 'actions', title: '操作', width: 140,
+      render: (row) => (
+        <Group gap={6} wrap="nowrap">
+          <Button size="compact-sm" variant="default" onClick={() => handleTest(row)} disabled={!canWrite}>测试</Button>
+          <Button size="compact-sm" variant="default" onClick={() => openProvider(row)} disabled={!canWrite}>编辑</Button>
+        </Group>
       ),
     },
   ];
@@ -261,148 +206,60 @@ export function AiSettingsPage() {
   }));
 
   return (
-    <div className="page-stack">
-      <PageHeader
-        title="AI 解析"
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openProvider()} disabled={!canWrite}>
-            新增 OCR 服务商
-          </Button>
-        }
-      />
+    <Stack gap="lg">
+      <PageHeader title="AI 解析" extra={<Button leftSection={<IconPlus size={16} />} onClick={() => openProvider()} disabled={!canWrite}>新增 OCR 服务商</Button>} />
 
       {settings.isPending ? <LoadingState /> : null}
       {settings.isError ? <ErrorState error={settings.error} onRetry={() => void settings.refetch()} /> : null}
       {providers.isError ? <ErrorState error={providers.error} onRetry={() => void providers.refetch()} /> : null}
       {settings.isSuccess ? (
-        <Card title="解析设置" className="max-w-[760px]">
-          <Form form={form} layout="vertical">
-            <Typography.Paragraph type="secondary">
-              每个新文件都由 AI 阅读、分组成套并确定编目，结果通过校验后自动入库；没有可用的模型或 OCR 时文件会等待，配置好后自动继续。
-            </Typography.Paragraph>
-            <Form.Item
-              name="ocr_provider_id"
-              label="OCR 服务商"
-              extra="分析与搜题索引共用当前选中的服务商；切换后旧解析缓存会自动失效。"
-            >
-              <Select allowClear placeholder="选择服务商" options={providerOptions} notFoundContent="请先新增 OCR 服务商" />
-            </Form.Item>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Form.Item name="max_pages" label="最多解析页数" rules={[{ required: true }]}>
-                <InputNumber min={1} max={10} className="w-full" />
-              </Form.Item>
-              <Form.Item name="max_images" label="发送给视觉模型的图片数" rules={[{ required: true }]}>
-                <InputNumber min={0} max={4} className="w-full" />
-              </Form.Item>
-            </div>
-            <Button onClick={() => void handleSave()} loading={save.isPending} disabled={!canWrite}>
-              保存设置
-            </Button>
-          </Form>
-        </Card>
+        <Section title="解析设置">
+          <form onSubmit={handleSave}>
+            <Stack gap="md">
+              <Text size="sm" c="dimmed">每个新文件都由 AI 阅读、分组成套并确定编目，结果通过校验后自动入库；没有可用的模型或 OCR 时文件会等待，配置好后自动继续。</Text>
+              <Select label="OCR 服务商" description="分析与搜题索引共用当前选中的服务商；切换后旧解析缓存会自动失效。" clearable allowDeselect placeholder="选择服务商" data={providerOptions} nothingFoundMessage="请先新增 OCR 服务商" {...form.getInputProps('ocr_provider_id')} />
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                <NumberInput label="最多解析页数" min={1} max={10} allowDecimal={false} {...form.getInputProps('max_pages')} />
+                <NumberInput label="发送给视觉模型的图片数" min={0} max={4} allowDecimal={false} {...form.getInputProps('max_images')} />
+              </SimpleGrid>
+              <Group><Button type="submit" loading={save.isPending} disabled={!canWrite}>保存设置</Button></Group>
+            </Stack>
+          </form>
+        </Section>
       ) : null}
 
       <RerunCard canWrite={canWrite} />
 
       {providers.isPending ? <LoadingState /> : null}
       {providers.isSuccess ? (
-        <Card title="OCR 服务商" styles={{ body: { padding: 0 } }}>
-          <Table<OCRProvider>
-            rowKey="id"
-            size="middle"
-            dataSource={providers.data}
-            columns={providerColumns}
-            locale={{ emptyText: <EmptyState /> }}
-            pagination={false}
-          />
-        </Card>
+        <Section title="OCR 服务商" flush>
+          <DataTable bare rows={providers.data} columns={providerColumns} rowKey={(p) => p.id} empty={<EmptyState />} minWidth={640} />
+        </Section>
       ) : null}
 
-      <Modal
-        title={editingProvider ? '编辑 OCR 服务商' : '新增 OCR 服务商'}
-        open={providerOpen}
-        onCancel={() => setProviderOpen(false)}
-        onOk={() => void handleProviderSubmit()}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={createProvider.isPending || updateProvider.isPending}
-        width={640}
-        destroyOnHidden
-      >
-        <Form form={providerForm} layout="vertical" initialValues={EMPTY_PROVIDER}>
-          <Form.Item name="kind" label="类型" rules={[{ required: true }]}>
-            <Select
-              disabled={Boolean(editingProvider)}
-              options={[
-                { value: 'rapidocr', label: 'RapidOCR（自建）' },
-                { value: 'paddleocr', label: 'PaddleOCR' },
-                { value: 'mineru', label: 'MinerU' },
-              ]}
-              onChange={(value: OCRProviderKind) => handleKindChange(value)}
-            />
-          </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { max: 128 }]}>
-            <Input placeholder="例如：PaddleOCR 主服务" />
-          </Form.Item>
-          <Form.Item
-            name="base_url"
-            label="Base URL"
-            rules={[
-              { required: true },
-              {
-                validator: async (_rule, value: string) => {
-                  try {
-                    const url = new URL((value ?? '').trim());
-                    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('scheme');
-                  } catch {
-                    throw new Error('请输入完整的 http(s) 地址');
-                  }
-                },
-              },
-            ]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item name="model" label="模型">
-            <Input
-              placeholder={
-                providerKind === 'paddleocr'
-                  ? 'PP-OCRv6'
-                  : providerKind === 'rapidocr'
-                    ? 'PP-OCRv5'
-                    : 'MinerU 不需要模型名'
-              }
-            />
-          </Form.Item>
-          <Form.Item
-            name="token"
-            label={
-              providerKind === 'rapidocr'
-                ? '令牌（自建服务可留空）'
-                : editingProvider?.token_configured
-                  ? '令牌（留空保留原令牌）'
-                  : '令牌'
-            }
-            extra={
-              providerKind === 'paddleocr'
-                ? '在 AI Studio 的 PaddleOCR 任务页获取 access token。'
-                : providerKind === 'rapidocr'
-                  ? '自建 RapidOCR 默认不校验令牌。'
-                  : undefined
-            }
-          >
-            <Input.Password autoComplete="new-password" />
-          </Form.Item>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Form.Item name="priority" label="优先级" rules={[{ required: true }]}>
-              <InputNumber min={0} max={1000} className="w-full" />
-            </Form.Item>
-            <Form.Item name="enabled" label="启用" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </div>
-        </Form>
-      </Modal>
-    </div>
+      <FormModal opened={providerOpen} onClose={() => setProviderOpen(false)} title={editingProvider ? '编辑 OCR 服务商' : '新增 OCR 服务商'} size={640} loading={createProvider.isPending || updateProvider.isPending} onSubmit={handleProviderSubmit}>
+        <Select
+          label="类型"
+          withAsterisk
+          disabled={Boolean(editingProvider)}
+          data={[{ value: 'rapidocr', label: 'RapidOCR（自建）' }, { value: 'paddleocr', label: 'PaddleOCR' }, { value: 'mineru', label: 'MinerU' }]}
+          value={providerKind}
+          onChange={(value) => value && handleKindChange(value as OCRProviderKind)}
+        />
+        <TextInput label="名称" withAsterisk placeholder="例如：PaddleOCR 主服务" {...providerForm.getInputProps('name')} />
+        <TextInput label="Base URL" withAsterisk {...providerForm.getInputProps('base_url')} />
+        <TextInput label="模型" placeholder={providerKind === 'paddleocr' ? 'PP-OCRv6' : providerKind === 'rapidocr' ? 'PP-OCRv5' : 'MinerU 不需要模型名'} {...providerForm.getInputProps('model')} />
+        <PasswordInput
+          label={providerKind === 'rapidocr' ? '令牌（自建服务可留空）' : editingProvider?.token_configured ? '令牌（留空保留原令牌）' : '令牌'}
+          description={providerKind === 'paddleocr' ? '在 AI Studio 的 PaddleOCR 任务页获取 access token。' : providerKind === 'rapidocr' ? '自建 RapidOCR 默认不校验令牌。' : undefined}
+          autoComplete="new-password"
+          {...providerForm.getInputProps('token')}
+        />
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <NumberInput label="优先级" min={0} max={1000} allowDecimal={false} {...providerForm.getInputProps('priority')} />
+          <Switch label="启用" mt={{ base: 0, sm: 28 }} {...providerForm.getInputProps('enabled', { type: 'checkbox' })} />
+        </SimpleGrid>
+      </FormModal>
+    </Stack>
   );
 }

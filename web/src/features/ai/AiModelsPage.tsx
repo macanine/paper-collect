@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react';
-import { App, AutoComplete, Button, Card, Form, Input, InputNumber, Modal, Space, Switch, Table, Tag } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Autocomplete, Button, Group, NumberInput, PasswordInput, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { modals } from '@mantine/modals';
+import { useForm } from '@mantine/form';
+import { IconBolt, IconPlus } from '@tabler/icons-react';
 import { useAuth } from '../auth/AuthContext';
 import { describeError } from '../../shared/api/errors';
 import type { AIProvider } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { FormModal } from '../../shared/ui/FormModal';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { message } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState, LoadingState } from '../../shared/ui/States';
+import { Tag } from '../../shared/ui/StatusTags';
 import {
   useAIProviders,
   useCreateAIProvider,
@@ -37,10 +42,18 @@ const EMPTY_FORM: ProviderFormValues = {
   vision_model: '',
 };
 
+function validUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export function AiModelsPage() {
   const { can } = useAuth();
   const canWrite = can('ai:write');
-  const { message, modal } = App.useApp();
   const providers = useAIProviders();
   const create = useCreateAIProvider();
   const update = useUpdateAIProvider();
@@ -50,39 +63,36 @@ export function AiModelsPage() {
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AIProvider | null>(null);
-  const [form] = Form.useForm<ProviderFormValues>();
   const [models, setModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
+  const form = useForm<ProviderFormValues>({
+    initialValues: EMPTY_FORM,
+    validate: {
+      name: (v) => (!v.trim() ? '请输入名称' : v.length > 128 ? '最多 128 个字符' : null),
+      base_url: (v) => (!v.trim() ? '请输入 OpenAI 兼容根地址' : validUrl(v) ? null : '请输入完整的 http(s) 地址，通常以 /v1 结尾'),
+      api_key: (v) => (editing || v.trim() ? null : '请输入 API Key'),
+    },
+  });
 
   useEffect(() => {
     if (!open) return;
     const initial: ProviderFormValues = editing
-      ? {
-          name: editing.name,
-          base_url: editing.base_url,
-          api_key: '',
-          priority: editing.priority,
-          enabled: editing.enabled,
-          default_model: editing.default_model,
-          vision_model: editing.vision_model,
-        }
+      ? { name: editing.name, base_url: editing.base_url, api_key: '', priority: editing.priority, enabled: editing.enabled, default_model: editing.default_model, vision_model: editing.vision_model }
       : EMPTY_FORM;
-    form.setFieldsValue(initial);
+    form.setValues(initial);
+    form.resetDirty(initial);
+    form.clearErrors();
     setModels(editing?.models ?? []);
-  }, [open, editing, form]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing]);
 
-  const openCreate = () => {
-    setEditing(null);
-    setOpen(true);
-  };
-
-  const openEdit = (provider: AIProvider) => {
-    setEditing(provider);
-    setOpen(true);
-  };
+  const openCreate = () => { setEditing(null); setOpen(true); };
+  const openEdit = (provider: AIProvider) => { setEditing(provider); setOpen(true); };
 
   const handleProbe = async () => {
-    const values = await form.validateFields(['base_url', 'api_key']);
+    const urlError = !validUrl(form.values.base_url) ? '请输入完整的 http(s) 地址，通常以 /v1 结尾' : null;
+    if (urlError) { form.setFieldError('base_url', urlError); return; }
+    const values = form.values;
     setProbing(true);
     try {
       let result;
@@ -93,9 +103,7 @@ export function AiModelsPage() {
       }
       setModels(result.models);
       message.success(`探测到 ${result.count} 个模型`);
-      if (result.models.length > 0 && !form.getFieldValue('default_model')) {
-        form.setFieldsValue({ default_model: result.models[0] });
-      }
+      if (result.models.length > 0 && !form.values.default_model) form.setFieldValue('default_model', result.models[0]!);
     } catch (error) {
       const { title, detail } = describeError(error);
       message.error(detail ? `${title}：${detail}` : title);
@@ -104,8 +112,7 @@ export function AiModelsPage() {
     }
   };
 
-  const handleSubmit = async () => {
-    const values = await form.validateFields();
+  const handleSubmit = form.onSubmit(async (values) => {
     const payload = {
       name: values.name.trim(),
       base_url: values.base_url.trim(),
@@ -129,20 +136,21 @@ export function AiModelsPage() {
       const { title, detail } = describeError(error);
       message.error(detail ? `${title}：${detail}` : title);
     }
-  };
+  });
 
   const handleTest = (provider: AIProvider) => {
     test.mutate(
       { id: provider.id, model: provider.default_model },
       {
         onSuccess: (result) =>
-          modal.info({
+          modals.open({
             title: result.healthy ? `${provider.name}：调用成功` : `${provider.name}：调用失败`,
-            content: (
-              <div className="flex flex-col gap-1">
-                <span>模型：{result.model || '未配置'}</span>
-                <span>{result.message}</span>
-              </div>
+            children: (
+              <Stack gap={4}>
+                <Text size="sm">模型：{result.model || '未配置'}</Text>
+                <Text size="sm">{result.message}</Text>
+                <Group justify="flex-end" mt="md"><Button onClick={() => modals.closeAll()}>知道了</Button></Group>
+              </Stack>
             ),
           }),
         onError: (error) => message.error(describeError(error).title),
@@ -150,174 +158,57 @@ export function AiModelsPage() {
     );
   };
 
-  const columns: ColumnsType<AIProvider> = [
+  const columns: Column<AIProvider>[] = [
+    { key: 'name', title: '端点', render: (p) => <Text fw={600} size="sm">{p.name}</Text> },
+    { key: 'default_model', title: '默认模型', render: (p) => p.default_model || '—' },
+    { key: 'vision_model', title: '视觉模型', render: (p) => p.vision_model || '—' },
+    { key: 'priority', title: '优先级', width: 90, render: (p) => <Text ff="monospace" size="sm">{p.priority}</Text> },
+    { key: 'key', title: '密钥', width: 90, render: (p) => (p.api_key_configured ? <Tag color="green">已保存</Tag> : <Tag color="warning">未设置</Tag>) },
     {
-      title: '端点',
-      dataIndex: 'name',
-      key: 'name',
-      render: (name: string) => <span className="font-medium">{name}</span>,
-    },
-    {
-      title: '默认模型',
-      dataIndex: 'default_model',
-      key: 'default_model',
-      render: (value: string) => value || '—',
-    },
-    {
-      title: '视觉模型',
-      dataIndex: 'vision_model',
-      key: 'vision_model',
-      render: (value: string) => value || '—',
-    },
-    {
-      title: '优先级',
-      dataIndex: 'priority',
-      key: 'priority',
-      width: 90,
-      render: (value: number) => <span className="font-mono text-sm">{value}</span>,
-    },
-    {
-      title: '密钥',
-      dataIndex: 'api_key_configured',
-      key: 'key',
-      width: 90,
-      render: (configured: boolean) => (configured ? <Tag color="green">已保存</Tag> : <Tag color="orange">未设置</Tag>),
-    },
-    {
-      title: '启用',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 90,
-      render: (enabled: boolean, record) => (
+      key: 'enabled', title: '启用', width: 90,
+      render: (p) => (
         <Switch
-          size="small"
-          checked={enabled}
+          checked={p.enabled}
           disabled={!canWrite}
-          onChange={(next) =>
-            update.mutate(
-              { id: record.id, patch: { enabled: next } },
-              { onError: (error) => message.error(describeError(error).title) },
-            )
-          }
+          aria-label={`启用 ${p.name}`}
+          onChange={(e) => update.mutate({ id: p.id, patch: { enabled: e.currentTarget.checked } }, { onError: (error) => message.error(describeError(error).title) })}
         />
       ),
     },
+    { key: 'updated_at', title: '更新时间', width: 170, render: (p) => formatDateTime(p.updated_at) },
     {
-      title: '更新时间',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
-      width: 170,
-      render: (value: string) => formatDateTime(value),
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 160,
-      render: (_: unknown, record) => (
-        <Space size={4}>
-          <Button size="small" onClick={() => handleTest(record)} disabled={!canWrite || !record.default_model}>
-            测试
-          </Button>
-          <Button size="small" onClick={() => openEdit(record)} disabled={!canWrite}>
-            编辑
-          </Button>
-        </Space>
+      key: 'actions', title: '操作', width: 150,
+      render: (p) => (
+        <Group gap={6} wrap="nowrap">
+          <Button size="compact-sm" variant="default" onClick={() => handleTest(p)} disabled={!canWrite || !p.default_model}>测试</Button>
+          <Button size="compact-sm" variant="default" onClick={() => openEdit(p)} disabled={!canWrite}>编辑</Button>
+        </Group>
       ),
     },
   ];
 
-  const modelOptions = models.map((model) => ({ value: model }));
-
   return (
-    <div className="page-stack">
-      <PageHeader
-        title="AI 模型"
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} disabled={!canWrite}>
-            新增端点
-          </Button>
-        }
-      />
+    <Stack gap="lg">
+      <PageHeader title="AI 模型" extra={<Button leftSection={<IconPlus size={16} />} onClick={openCreate} disabled={!canWrite}>新增端点</Button>} />
 
       {providers.isPending ? <LoadingState /> : null}
       {providers.isError ? <ErrorState error={providers.error} onRetry={() => void providers.refetch()} /> : null}
-      {providers.isSuccess ? (
-        <Card styles={{ body: { padding: 0 } }}>
-          <Table<AIProvider>
-            rowKey="id"
-            size="middle"
-            dataSource={providers.data}
-            columns={columns}
-            locale={{ emptyText: <EmptyState /> }}
-            pagination={false}
-          />
-        </Card>
-      ) : null}
+      {providers.isSuccess ? <DataTable rows={providers.data} columns={columns} rowKey={(p) => p.id} empty={<EmptyState />} minWidth={900} /> : null}
 
-      <Modal
-        title={editing ? '编辑模型端点' : '新增模型端点'}
-        open={open}
-        onCancel={() => setOpen(false)}
-        onOk={() => void handleSubmit()}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={create.isPending || update.isPending}
-        width={640}
-        destroyOnHidden
-      >
-        <Form form={form} layout="vertical" initialValues={EMPTY_FORM}>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { max: 128 }]}>
-            <Input placeholder="例如：主模型网关" />
-          </Form.Item>
-          <Form.Item
-            name="base_url"
-            label="Base URL"
-            rules={[
-              { required: true, message: '请输入 OpenAI 兼容根地址' },
-              {
-                validator: async (_rule, value: string) => {
-                  try {
-                    const url = new URL((value ?? '').trim());
-                    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('scheme');
-                  } catch {
-                    throw new Error('请输入完整的 http(s) 地址，通常以 /v1 结尾');
-                  }
-                },
-              },
-            ]}
-          >
-            <Input placeholder="https://api.example.com/v1" />
-          </Form.Item>
-          <Form.Item
-            name="api_key"
-            label={editing?.api_key_configured ? 'API Key（留空保留原密钥）' : 'API Key'}
-            rules={editing ? [] : [{ required: true, message: '请输入 API Key' }]}
-          >
-            <Input.Password autoComplete="new-password" placeholder="API Key" />
-          </Form.Item>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Form.Item name="priority" label="优先级" rules={[{ required: true }]}>
-              <InputNumber min={0} max={1000} className="w-full" />
-            </Form.Item>
-            <Form.Item name="enabled" label="启用" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <Button icon={<ThunderboltOutlined />} onClick={() => void handleProbe()} loading={probing}>
-              探测模型
-            </Button>
-          </div>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Form.Item name="default_model" label="默认模型">
-              <AutoComplete options={modelOptions} placeholder="选择或输入" filterOption />
-            </Form.Item>
-            <Form.Item name="vision_model" label="视觉模型">
-              <AutoComplete options={modelOptions} placeholder="选择或输入" filterOption />
-            </Form.Item>
-          </div>
-        </Form>
-      </Modal>
-    </div>
+      <FormModal opened={open} onClose={() => setOpen(false)} title={editing ? '编辑模型端点' : '新增模型端点'} size={640} loading={create.isPending || update.isPending} onSubmit={handleSubmit}>
+        <TextInput label="名称" withAsterisk placeholder="例如：主模型网关" data-autofocus {...form.getInputProps('name')} />
+        <TextInput label="Base URL" withAsterisk placeholder="https://api.example.com/v1" {...form.getInputProps('base_url')} />
+        <PasswordInput label={editing?.api_key_configured ? 'API Key（留空保留原密钥）' : 'API Key'} withAsterisk={!editing} autoComplete="new-password" placeholder="API Key" {...form.getInputProps('api_key')} />
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <NumberInput label="优先级" min={0} max={1000} allowDecimal={false} {...form.getInputProps('priority')} />
+          <Switch label="启用" mt={{ base: 0, sm: 28 }} {...form.getInputProps('enabled', { type: 'checkbox' })} />
+        </SimpleGrid>
+        <Group><Button variant="default" leftSection={<IconBolt size={16} />} onClick={() => void handleProbe()} loading={probing}>探测模型</Button></Group>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <Autocomplete label="默认模型" data={models} placeholder="选择或输入" {...form.getInputProps('default_model')} />
+          <Autocomplete label="视觉模型" data={models} placeholder="选择或输入" {...form.getInputProps('vision_model')} />
+        </SimpleGrid>
+      </FormModal>
+    </Stack>
   );
 }

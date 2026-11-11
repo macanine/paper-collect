@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Alert, App, Button, Card, Descriptions, Dropdown, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { DownloadOutlined, DownOutlined, EyeOutlined, MoreOutlined } from '@ant-design/icons';
+import { ActionIcon, Alert, Anchor, Button, Group, Menu, Select, Stack, Text, TextInput, Textarea } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { IconChevronDown, IconDots, IconDownload, IconEye } from '@tabler/icons-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import type { Pack, PackMember, Part } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
@@ -10,9 +10,13 @@ import { formatBytes, formatDateTime } from '../../shared/lib/format';
 import { DOC_TYPE_LABELS, GRADE_LABELS, SUBJECT_LABELS, TERM_LABELS } from '../../shared/lib/labels';
 import { PART_OPTIONS } from '../../shared/lib/options';
 import { BackLink } from '../../shared/ui/BackLink';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { Descriptions } from '../../shared/ui/Descriptions';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { Section } from '../../shared/ui/Section';
+import { ConfirmButton, message, modal } from '../../shared/ui/feedback';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
-import { StageTag } from '../../shared/ui/StatusTags';
+import { StageTag, Tag } from '../../shared/ui/StatusTags';
 import { PackAIPanel } from '../ai/AIPanels';
 import { PURGE_NOTE } from '../trash/TrashPage';
 import { useAuth } from '../auth/AuthContext';
@@ -24,7 +28,7 @@ import { downloadPack } from './api';
 import { AddToCollectionModal } from './BulkModals';
 import { MovePackModal } from './MovePackModal';
 import { Completeness, PackMeta } from './PackBadges';
-import { PackCatalogFields, formToUpdate, packToForm, type CatalogField, type CatalogFormValues } from './PackCatalogFields';
+import { PackCatalogFields, formToUpdate, packToForm, validateCatalog, type CatalogField, type CatalogFormValues } from './PackCatalogFields';
 import { usePack, usePackFacets, usePackMutations, useUpdatePack } from './queries';
 import { href } from '../../app/routes';
 
@@ -34,8 +38,7 @@ function CatalogView({ pack }: { pack: Pack }) {
   const dash = (value: string | number | undefined) => (value ? value : '—');
   return (
     <Descriptions
-      size="small"
-      column={{ xs: 1, md: 2, xl: 3 }}
+      cols={3}
       items={[
         { key: 'type', label: '资料类型', children: pack.doc_type ? DOC_TYPE_LABELS[pack.doc_type] : '—' },
         { key: 'subject', label: '学科', children: pack.subject_codes.map((c) => SUBJECT_LABELS[c]).join('、') || '—' },
@@ -47,7 +50,7 @@ function CatalogView({ pack }: { pack: Pack }) {
         { key: 'org', label: '来源机构', children: dash(pack.organization) },
         { key: 'exam', label: '考试名称', children: dash(pack.exam_name) },
         { key: 'chapter', label: '章节 / 知识点', children: dash(pack.chapter) },
-        { key: 'tags', label: '标签', children: pack.tags.length > 0 ? pack.tags.map((t) => <Tag key={t}>{t}</Tag>) : '—' },
+        { key: 'tags', label: '标签', children: pack.tags.length > 0 ? <Group gap={4}>{pack.tags.map((t) => <Tag key={t}>{t}</Tag>)}</Group> : '—' },
         { key: 'desc', label: '备注', children: dash(pack.description) },
       ]}
     />
@@ -60,12 +63,11 @@ export function PackDetailPage() {
   const canWrite = can('materials:write');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { message, modal } = App.useApp();
   const query = usePack(packId);
   const facets = usePackFacets();
   const update = useUpdatePack(packId);
   const { trash, restore, purge, reorder } = usePackMutations();
-  const [form] = Form.useForm<CatalogFormValues & { description?: string }>();
+  const form = useForm<CatalogFormValues & { description?: string }>({ initialValues: {}, validate: validateCatalog });
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState<PackMember | null>(null);
   const [moving, setMoving] = useState<PackMember | null>(null);
@@ -75,26 +77,26 @@ export function PackDetailPage() {
   if (query.isPending) return <LoadingState />;
   if (query.isError) {
     return (
-      <div className="page-stack">
+      <Stack gap="lg">
         <BackLink to="/library">返回资料库</BackLink>
         <ErrorState error={query.error} onRetry={() => void query.refetch()} title="套卷加载失败" />
-      </div>
+      </Stack>
     );
   }
   const pack = query.data;
   const trashed = pack.deleted_at !== null;
 
   const startEdit = () => {
-    form.resetFields(); // clears touched state from an earlier edit
-    form.setFieldsValue({ ...packToForm(pack), description: pack.description || undefined });
+    const values = { ...packToForm(pack), description: pack.description || undefined };
+    form.setValues(values);
+    form.resetDirty(values);
     setEditing(true);
   };
-  const save = async () => {
-    const values = await form.validateFields();
+  const save = form.onSubmit(async (values) => {
     // Only fields the person changed are sent: each one sent becomes locked.
-    const touched = EDITABLE_FIELDS.filter((field) => form.isFieldTouched(field));
+    const touched = EDITABLE_FIELDS.filter((field) => form.isDirty(field));
     const patch = formToUpdate(values, touched);
-    if (form.isFieldTouched('description')) patch.description = values.description ?? '';
+    if (form.isDirty('description')) patch.description = values.description ?? '';
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -106,9 +108,17 @@ export function PackDetailPage() {
     } catch (error) {
       message.error(errorMessage(error));
     }
+  });
+  const run = async (action: () => Promise<unknown>, done: string, after?: () => void) => {
+    try {
+      await action();
+      message.success(done);
+      after?.();
+    } catch (error) {
+      message.error(errorMessage(error));
+    }
   };
-  const unlockAll = () =>
-    run(() => update.mutateAsync({ unlock_fields: pack.locked_fields }), 'AI 将重新编目这套资料');
+  const unlockAll = () => run(() => update.mutateAsync({ unlock_fields: pack.locked_fields }), 'AI 将重新编目这套资料');
   const changePart = async (member: PackMember, part: Part) => {
     try {
       await updateMaterial(member.id, { part });
@@ -139,205 +149,139 @@ export function PackDetailPage() {
       setDownloading(false);
     }
   };
-  const run = async (action: () => Promise<unknown>, done: string, after?: () => void) => {
-    try {
-      await action();
-      message.success(done);
-      after?.();
-    } catch (error) {
-      message.error(errorMessage(error));
-    }
-  };
 
-  const columns: ColumnsType<PackMember> = [
+  const columns: Column<PackMember>[] = [
     {
-      title: '部件',
       key: 'part',
-      width: 150,
-      render: (_: unknown, member) =>
+      title: '部件',
+      width: 160,
+      render: (member) =>
         canWrite && !trashed && editing ? (
-          <Select size="small" value={member.part} options={PART_OPTIONS} onChange={(part) => void changePart(member, part)} style={{ width: 128 }} />
+          <Select size="xs" w={128} allowDeselect={false} value={member.part} data={PART_OPTIONS} onChange={(part) => part && void changePart(member, part as Part)} />
         ) : (
           PART_OPTIONS.find((o) => o.value === member.part)?.label
         ),
     },
     {
+      key: 'file', wrap: true,
       title: '文件',
-      key: 'file',
-      render: (_: unknown, member) => (
-        <div className="flex flex-col gap-1">
-          <Link to={href.material(member.id)}>{member.file_name}</Link>
-          <span className="table-subtext">
+      render: (member) => (
+        <Stack gap={2}>
+          <Anchor component={Link} to={href.material(member.id)} size="sm">{member.file_name}</Anchor>
+          <Text size="xs" c="dimmed">
             {formatBytes(member.size_bytes)}
             {member.part === 'full' && member.answer_start_page > 0 ? ` · 答案从第 ${member.answer_start_page} 页开始` : ''}
-          </span>
-        </div>
+          </Text>
+        </Stack>
       ),
     },
-    { title: '状态', key: 'stage', width: 100, render: (_: unknown, member) => <StageTag stage={member.stage} /> },
+    { key: 'stage', title: '状态', width: 100, render: (member) => <StageTag stage={member.stage} /> },
     {
-      title: '',
       key: 'actions',
-      width: 120,
+      width: 140,
       align: 'right',
-      render: (_: unknown, member, index) => (
-        <Space size={0}>
-          {canPreview(member.media_type) ? (
-            <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setPreview(member)}>
-              预览
-            </Button>
-          ) : null}
-          {canWrite && !trashed ? (
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  { key: 'move', label: '移到其他套卷' },
-                  { key: 'up', label: '上移', disabled: index === 0 },
-                  { key: 'down', label: '下移', disabled: index === pack.members.length - 1 },
-                ],
-                onClick: ({ key }) => {
-                  if (key === 'move') setMoving(member);
-                  else void move(index, key === 'up' ? -1 : 1);
-                },
-              }}
-            >
-              <Button type="text" size="small" aria-label="更多操作" icon={<MoreOutlined />} />
-            </Dropdown>
-          ) : null}
-        </Space>
-      ),
+      render: (member) => {
+        const index = pack.members.findIndex((m) => m.id === member.id);
+        return (
+          <Group gap={4} justify="flex-end" wrap="nowrap">
+            {canPreview(member.media_type) ? <Button variant="subtle" size="compact-sm" leftSection={<IconEye size={14} />} onClick={() => setPreview(member)}>预览</Button> : null}
+            {canWrite && !trashed ? (
+              <Menu position="bottom-end">
+                <Menu.Target><ActionIcon variant="subtle" color="gray" aria-label="更多操作"><IconDots size={16} /></ActionIcon></Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item onClick={() => setMoving(member)}>移到其他套卷</Menu.Item>
+                  <Menu.Item disabled={index === 0} onClick={() => void move(index, -1)}>上移</Menu.Item>
+                  <Menu.Item disabled={index === pack.members.length - 1} onClick={() => void move(index, 1)}>下移</Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+            ) : null}
+          </Group>
+        );
+      },
     },
   ];
 
   return (
-    <div className="page-stack">
+    <Stack gap="lg">
       <BackLink to={trashed ? '/trash' : '/library'}>{trashed ? '返回回收站' : '返回资料库'}</BackLink>
       <PageHeader
         title={pack.title}
-        description={
-          <span className="flex flex-wrap items-center gap-2">
-            <PackMeta pack={pack} />
-            <Completeness pack={pack} />
-          </span>
-        }
+        description={<Group gap="sm"><PackMeta pack={pack} /><Completeness pack={pack} /></Group>}
         extra={
           trashed ? (
             canWrite ? (
-              <Space wrap>
-                <Button type="primary" onClick={() => void run(() => restore.mutateAsync([pack.id]), '已恢复')}>
-                  恢复
-                </Button>
-                <Popconfirm title="彻底删除后无法恢复，确定？" description={PURGE_NOTE} okButtonProps={{ danger: true }} onConfirm={() => void run(() => purge.mutateAsync([pack.id]), '已彻底删除', () => navigate('/trash', { replace: true }))}>
-                  <Button danger>彻底删除</Button>
-                </Popconfirm>
-              </Space>
+              <>
+                <Button onClick={() => void run(() => restore.mutateAsync([pack.id]), '已恢复')}>恢复</Button>
+                <ConfirmButton variant="default" color="red" confirmTitle="彻底删除后无法恢复，确定？" confirmDescription={PURGE_NOTE} okText="彻底删除" danger onConfirm={() => run(() => purge.mutateAsync([pack.id]), '已彻底删除', () => navigate('/trash', { replace: true }))}>彻底删除</ConfirmButton>
+              </>
             ) : null
           ) : (
-            <Space wrap>
-              <Button type={editing ? 'default' : 'primary'} icon={<DownloadOutlined />} loading={downloading} onClick={() => void downloadAll()}>
+            <>
+              <Button variant={editing ? 'default' : 'filled'} leftSection={<IconDownload size={16} />} loading={downloading} onClick={() => void downloadAll()}>
                 {pack.members.length > 1 ? '下载整套' : '下载'}
               </Button>
               {canWrite ? (
-                <Dropdown
-                  trigger={['click']}
-                  menu={{
-                    items: [
-                      { key: 'edit', label: '编辑编目与部件', disabled: editing },
-                      { key: 'topic', label: '加入专题' },
-                      { type: 'divider' },
-                      { key: 'trash', label: '移入回收站', danger: true },
-                    ],
-                    onClick: ({ key }) => {
-                      if (key === 'edit') startEdit();
-                      else if (key === 'topic') setTopicOpen(true);
-                      else
-                        modal.confirm({
-                          title: '移入回收站？',
-                          content: '30 天内可以恢复。',
-                          okText: '移入',
-                          okButtonProps: { danger: true },
-                          cancelText: '取消',
-                          onOk: () => run(() => trash.mutateAsync([pack.id]), '已移入回收站', () => navigate('/library', { replace: true })),
-                        });
-                    },
-                  }}
-                >
-                  <Button>
-                    更多 <DownOutlined />
-                  </Button>
-                </Dropdown>
+                <Menu position="bottom-end">
+                  <Menu.Target><Button variant="default" rightSection={<IconChevronDown size={14} />}>更多</Button></Menu.Target>
+                  <Menu.Dropdown>
+                    <Menu.Item disabled={editing} onClick={startEdit}>编辑编目与部件</Menu.Item>
+                    <Menu.Item onClick={() => setTopicOpen(true)}>加入专题</Menu.Item>
+                    <Menu.Divider />
+                    <Menu.Item color="red" onClick={() => modal.confirm({ title: '移入回收站？', content: '30 天内可以恢复。', okText: '移入', danger: true, onOk: () => run(() => trash.mutateAsync([pack.id]), '已移入回收站', () => navigate('/library', { replace: true })) })}>移入回收站</Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
               ) : null}
-            </Space>
+            </>
           )
         }
       />
 
-      {trashed ? <Alert type="warning" showIcon title={`已于 ${formatDateTime(pack.deleted_at)} 移入回收站，30 天后自动彻底删除`} /> : null}
+      {trashed ? <Alert color="yellow">{`已于 ${formatDateTime(pack.deleted_at)} 移入回收站，30 天后自动彻底删除`}</Alert> : null}
       {pack.is_exam && !pack.has_answers && !trashed ? (
-        <Alert
-          type="info"
-          showIcon
-          title="这套试卷还缺答案"
-          description="上传答案后，AI 会判断它是否属于这套试卷并自动归入；也可以在资料库里勾选两个套卷后“合并为一套”，合并后 AI 会重新编目。"
-        />
+        <Alert color="blue" title="这套试卷还缺答案">上传答案后，AI 会判断它是否属于这套试卷并自动归入；也可以在资料库里勾选两个套卷后“合并为一套”，合并后 AI 会重新编目。</Alert>
       ) : null}
 
-      <Card
+      <Section
         title="编目信息"
         extra={
-          <Space size={4}>
-            <Typography.Text type="secondary">
-              {pack.stage === 'processing' ? 'AI 整理中' : pack.locked_fields.length > 0 ? `人工锁定 ${pack.locked_fields.length} 个字段` : '由 AI 编目'}
-            </Typography.Text>
+          <Group gap="xs">
+            <Text size="sm" c="dimmed">{pack.stage === 'processing' ? 'AI 整理中' : pack.locked_fields.length > 0 ? `人工锁定 ${pack.locked_fields.length} 个字段` : '由 AI 编目'}</Text>
             {canWrite && !trashed && !editing && pack.locked_fields.length > 0 ? (
-              <Popconfirm title="交还 AI？" description="人工设定的字段解除锁定，AI 会重新编目这套资料。" onConfirm={() => void unlockAll()}>
-                <Button type="link" size="small" loading={update.isPending}>
-                  交还 AI
-                </Button>
-              </Popconfirm>
+              <ConfirmButton variant="subtle" size="compact-sm" loading={update.isPending} confirmTitle="交还 AI？" confirmDescription="人工设定的字段解除锁定，AI 会重新编目这套资料。" onConfirm={unlockAll}>交还 AI</ConfirmButton>
             ) : null}
-          </Space>
+          </Group>
         }
       >
         {editing ? (
-          <Form form={form} layout="vertical">
-            <Form.Item name="title" label="自定义标题" tooltip="留空则按编目信息自动命名">
-              <Input allowClear placeholder={pack.title} maxLength={255} />
-            </Form.Item>
-            <PackCatalogFields facets={facets.data} columns={3} locked={pack.locked_fields} />
-            <Form.Item name="description" label="备注">
-              <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} maxLength={4000} />
-            </Form.Item>
-            <Typography.Paragraph type="secondary">只有你修改过的字段会被锁定，其余字段继续由 AI 维护。部件修改立即生效。</Typography.Paragraph>
-            <Space>
-              <Button type="primary" loading={update.isPending} onClick={() => void save()}>
-                保存
-              </Button>
-              <Button onClick={() => setEditing(false)}>取消</Button>
-            </Space>
-          </Form>
+          <form onSubmit={save}>
+            <Stack gap="md">
+              <TextInput label="自定义标题" description="留空则按编目信息自动命名" placeholder={pack.title} maxLength={255} value={form.values.title ?? ''} onChange={(e) => form.setFieldValue('title', e.currentTarget.value || undefined)} />
+              <PackCatalogFields form={form} facets={facets.data} columns={3} locked={pack.locked_fields} />
+              <Textarea label="备注" autosize minRows={2} maxRows={6} maxLength={4000} value={form.values.description ?? ''} onChange={(e) => form.setFieldValue('description', e.currentTarget.value || undefined)} />
+              <Text size="sm" c="dimmed">只有你修改过的字段会被锁定，其余字段继续由 AI 维护。部件修改立即生效。</Text>
+              <Group><Button type="submit" loading={update.isPending}>保存</Button><Button variant="default" onClick={() => setEditing(false)}>取消</Button></Group>
+            </Stack>
+          </form>
         ) : (
           <CatalogView pack={pack} />
         )}
-      </Card>
+      </Section>
 
-      <Card title={`文件（${pack.members.length}）`} styles={{ body: { padding: 0 } }}>
-        <Table<PackMember> rowKey="id" size="middle" columns={columns} dataSource={pack.members} pagination={false} scroll={{ x: 720 }} />
-      </Card>
+      <Stack gap="sm">
+        <Text fw={600}>文件（{pack.members.length}）</Text>
+        <DataTable rows={pack.members} columns={columns} rowKey={(m) => m.id} minWidth={640} />
+      </Stack>
 
       {!trashed ? <PackAIPanel packId={pack.id} canWrite={canWrite} /> : null}
 
       {pack.collections && pack.collections.length > 0 ? (
-        <Card title="所在专题">
-          <Space wrap>
+        <Section title="所在专题">
+          <Group gap="xs">
             {pack.collections.map((c) => (
-              <Link key={c.id} to={href.collection(c.id)}>
-                <Tag>{c.title}</Tag>
-              </Link>
+              <Anchor key={c.id} component={Link} to={href.collection(c.id)}><Tag>{c.title}</Tag></Anchor>
             ))}
-          </Space>
-        </Card>
+          </Group>
+        </Section>
       ) : null}
 
       <FilePreviewModal
@@ -356,6 +300,6 @@ export function PackDetailPage() {
         />
       ) : null}
       <AddToCollectionModal ids={[pack.id]} open={topicOpen} onClose={() => setTopicOpen(false)} />
-    </div>
+    </Stack>
   );
 }

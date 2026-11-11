@@ -1,13 +1,9 @@
-import { Button, Checkbox, Form, Input, InputNumber, Modal, Select } from 'antd';
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import { Button, Checkbox, Group, MultiSelect, NumberInput, Paper, SimpleGrid, Stack, Select, TagsInput, Text, TextInput, ActionIcon } from '@mantine/core';
+import { useForm } from '@mantine/form';
+import { IconPlus, IconTrash } from '@tabler/icons-react';
 import type { Drive, SyncRule, SyncTarget } from '../../shared/api/types';
-import {
-  DOC_TYPE_OPTIONS,
-  GRADE_OPTIONS,
-  PART_OPTIONS,
-  SUBJECT_OPTIONS,
-  cohortOptions,
-} from '../../shared/lib/options';
+import { FormModal } from '../../shared/ui/FormModal';
+import { DOC_TYPE_OPTIONS, GRADE_OPTIONS, PART_OPTIONS, SUBJECT_OPTIONS, cohortOptions } from '../../shared/lib/options';
 import { DEFAULT_PATH_TEMPLATE, TEMPLATE_VARIABLES, driveName } from './ruleUtils';
 
 const MEDIA_TYPE_OPTIONS = [
@@ -26,13 +22,13 @@ interface RuleFormValues {
   subjects: string[];
   doc_types: string[];
   grades: string[];
-  cohorts: number[];
+  cohorts: string[];
   regions: string[];
   tags: string[];
   parts: string[];
   media_types: string[];
-  min_size_mb?: number | null;
-  max_size_mb?: number | null;
+  min_size_mb: number | string;
+  max_size_mb: number | string;
   targets: SyncTarget[];
 }
 
@@ -53,208 +49,138 @@ function toFormValues(rule: SyncRule | null): RuleFormValues {
     subjects: c.subjects ?? [],
     doc_types: c.doc_types ?? [],
     grades: c.grades ?? [],
-    cohorts: c.cohorts ?? [],
+    cohorts: (c.cohorts ?? []).map(String),
     regions: c.regions ?? [],
     tags: c.tags ?? [],
     parts: c.parts ?? [],
     media_types: c.media_types ?? [],
-    min_size_mb: c.min_size ? Math.round(c.min_size / 1024 / 1024) : null,
-    max_size_mb: c.max_size ? Math.round(c.max_size / 1024 / 1024) : null,
+    min_size_mb: c.min_size ? Math.round(c.min_size / 1024 / 1024) : '',
+    max_size_mb: c.max_size ? Math.round(c.max_size / 1024 / 1024) : '',
     targets: (rule?.targets ?? []).map((t) => ({ ...t })),
   };
 }
 
+function validateTemplate(value: string | undefined): string | null {
+  if (!value || !value.trim()) return '请输入路径模板';
+  if (value.startsWith('/') || value.includes('\\')) return '必须为相对路径，不能包含反斜杠';
+  if (!value.trim().endsWith('{文件名}')) return '必须以 {文件名} 结尾';
+  const known = new Set<string>(TEMPLATE_VARIABLES);
+  for (const match of value.matchAll(/\{([^}]*)\}/g)) {
+    const name = match[1] ?? '';
+    if (!known.has(name)) return `未知变量 {${name}}`;
+  }
+  return null;
+}
+
 export function RuleFormModal({ open, rule, drives, onClose, onSave }: RuleFormModalProps) {
-  const [form] = Form.useForm<RuleFormValues>();
   const isDefault = rule?.is_default ?? false;
   const driveOptions = drives.filter((d) => d.kind !== '123pan');
+  const form = useForm<RuleFormValues>({
+    initialValues: toFormValues(rule),
+    validate: {
+      name: (v) => (!v.trim() ? '请输入规则名称' : v.length > 128 ? '名称不能超过 128 个字符' : null),
+      targets: {
+        drive_id: (v) => (v ? null : '请选择网盘'),
+        path_template: validateTemplate,
+      },
+    },
+  });
 
-  const handleOk = async () => {
-    const values = await form.validateFields();
+  const handleSubmit = form.onSubmit((values) => {
     const conditions: SyncRule['conditions'] = {};
-    if (values.subjects?.length) conditions.subjects = values.subjects as SyncRule['conditions']['subjects'];
-    if (values.doc_types?.length) conditions.doc_types = values.doc_types as SyncRule['conditions']['doc_types'];
-    if (values.grades?.length) conditions.grades = values.grades as SyncRule['conditions']['grades'];
-    if (values.cohorts?.length) conditions.cohorts = values.cohorts;
-    if (values.regions?.length) conditions.regions = values.regions.map((v) => v.trim()).filter(Boolean);
-    if (values.tags?.length) conditions.tags = values.tags.map((v) => v.trim()).filter(Boolean);
-    if (values.parts?.length) conditions.parts = values.parts as SyncRule['conditions']['parts'];
-    if (values.media_types?.length) conditions.media_types = values.media_types;
-    if (values.min_size_mb) conditions.min_size = Math.round(values.min_size_mb * 1024 * 1024);
-    if (values.max_size_mb) conditions.max_size = Math.round(values.max_size_mb * 1024 * 1024);
-    const saved: SyncRule = {
+    if (values.subjects.length) conditions.subjects = values.subjects as SyncRule['conditions']['subjects'];
+    if (values.doc_types.length) conditions.doc_types = values.doc_types as SyncRule['conditions']['doc_types'];
+    if (values.grades.length) conditions.grades = values.grades as SyncRule['conditions']['grades'];
+    if (values.cohorts.length) conditions.cohorts = values.cohorts.map(Number);
+    if (values.regions.length) conditions.regions = values.regions.map((v) => v.trim()).filter(Boolean);
+    if (values.tags.length) conditions.tags = values.tags.map((v) => v.trim()).filter(Boolean);
+    if (values.parts.length) conditions.parts = values.parts as SyncRule['conditions']['parts'];
+    if (values.media_types.length) conditions.media_types = values.media_types;
+    if (values.min_size_mb) conditions.min_size = Math.round(Number(values.min_size_mb) * 1024 * 1024);
+    if (values.max_size_mb) conditions.max_size = Math.round(Number(values.max_size_mb) * 1024 * 1024);
+    onSave({
       id: rule?.id ?? '',
       name: values.name.trim(),
       enabled: isDefault ? true : values.enabled,
       is_default: isDefault,
       conditions: isDefault ? {} : conditions,
-      targets: (values.targets ?? []).map((t) => ({ ...t, path_template: t.path_template.trim() })),
-    };
-    onSave(saved);
+      targets: values.targets.map((t) => ({ ...t, path_template: t.path_template.trim() })),
+    });
+  });
+
+  const addTarget = () => {
+    const used = new Set(form.values.targets.map((t) => t.drive_id));
+    const drive = driveOptions.find((d) => !used.has(d.id));
+    if (!drive) return;
+    form.insertListItem('targets', { drive_id: drive.id, path_template: DEFAULT_PATH_TEMPLATE, share: false, required: false });
   };
 
+  const multi = (label: string, key: keyof RuleFormValues, data: { value: string; label: string }[]) => (
+    <MultiSelect label={label} clearable placeholder="不限" data={data} {...form.getInputProps(key)} />
+  );
+
   return (
-    <Modal
-      title={rule ? (isDefault ? '编辑兜底规则' : `编辑规则：${rule.name}`) : '新建规则'}
-      open={open}
-      onOk={() => void handleOk()}
-      onCancel={onClose}
-      okText="确定"
-      cancelText="取消"
-      destroyOnHidden
-      width={760}
-      afterOpenChange={(visible) => {
-        if (visible) {
-          form.resetFields();
-          form.setFieldsValue(toFormValues(rule));
-        }
-      }}
-    >
-      <Form<RuleFormValues> form={form} layout="vertical" requiredMark="optional" initialValues={toFormValues(rule)}>
-        <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
-          <Form.Item name="name" label="规则名称" rules={[{ required: true, whitespace: true, message: '请输入规则名称' }, { max: 128, message: '名称不能超过 128 个字符' }]}>
-            <Input maxLength={128} placeholder="例如：数学试卷" disabled={isDefault} />
-          </Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked">
-            <Checkbox disabled={isDefault}>启用这条规则</Checkbox>
-          </Form.Item>
-        </div>
+    <FormModal opened={open} onClose={onClose} title={rule ? (isDefault ? '编辑兜底规则' : `编辑规则：${rule.name}`) : '新建规则'} okText="确定" size={760} onSubmit={handleSubmit}>
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+        <TextInput label="规则名称" withAsterisk maxLength={128} placeholder="例如：数学试卷" disabled={isDefault} {...form.getInputProps('name')} />
+        <Checkbox label="启用这条规则" mt={{ base: 0, md: 28 }} disabled={isDefault} {...form.getInputProps('enabled', { type: 'checkbox' })} />
+      </SimpleGrid>
 
-        {!isDefault ? (
-          <>
-            <div className="mb-2 text-sm font-medium">匹配条件（同一字段内为「或」，字段之间为「且」；全部留空表示匹配所有文件）</div>
-            <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
-              <Form.Item name="subjects" label="学科">
-                <Select mode="multiple" allowClear options={SUBJECT_OPTIONS} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="doc_types" label="资料类型">
-                <Select mode="multiple" allowClear options={DOC_TYPE_OPTIONS} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="grades" label="年级">
-                <Select mode="multiple" allowClear options={GRADE_OPTIONS} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="cohorts" label="届别">
-                <Select mode="multiple" allowClear options={cohortOptions()} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="parts" label="部件">
-                <Select mode="multiple" allowClear options={PART_OPTIONS} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="media_types" label="文件格式">
-                <Select mode="multiple" allowClear options={MEDIA_TYPE_OPTIONS} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="regions" label="地区">
-                <Select mode="tags" open={false} suffixIcon={null} placeholder="输入后回车，留空不限" tokenSeparators={[',', ' ', '；', ';']} />
-              </Form.Item>
-              <Form.Item name="tags" label="标签">
-                <Select mode="tags" open={false} suffixIcon={null} placeholder="输入后回车，留空不限" tokenSeparators={[',', ' ', '；', ';']} />
-              </Form.Item>
-              <Form.Item name="min_size_mb" label="大小下限（MB）">
-                <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="不限" />
-              </Form.Item>
-              <Form.Item name="max_size_mb" label="大小上限（MB）">
-                <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="不限" />
-              </Form.Item>
-            </div>
-          </>
-        ) : (
-          <p className="mb-4 text-sm text-slate-500">兜底规则固定匹配所有未被前面规则命中的文件，不能停用或设置条件。</p>
-        )}
+      {!isDefault ? (
+        <Stack gap="sm">
+          <Text fw={600} size="sm">匹配条件（同一字段内为「或」，字段之间为「且」；全部留空表示匹配所有文件）</Text>
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+            {multi('学科', 'subjects', SUBJECT_OPTIONS)}
+            {multi('资料类型', 'doc_types', DOC_TYPE_OPTIONS)}
+            {multi('年级', 'grades', GRADE_OPTIONS)}
+            {multi('届别', 'cohorts', cohortOptions().map((o) => ({ value: String(o.value), label: o.label })))}
+            {multi('部件', 'parts', PART_OPTIONS)}
+            {multi('文件格式', 'media_types', MEDIA_TYPE_OPTIONS)}
+            <TagsInput label="地区" placeholder="输入后回车，留空不限" splitChars={[',', ' ', '；', ';']} {...form.getInputProps('regions')} />
+            <TagsInput label="标签" placeholder="输入后回车，留空不限" splitChars={[',', ' ', '；', ';']} {...form.getInputProps('tags')} />
+            <NumberInput label="大小下限（MB）" min={0} allowDecimal={false} placeholder="不限" {...form.getInputProps('min_size_mb')} />
+            <NumberInput label="大小上限（MB）" min={0} allowDecimal={false} placeholder="不限" {...form.getInputProps('max_size_mb')} />
+          </SimpleGrid>
+        </Stack>
+      ) : (
+        <Text size="sm" c="dimmed">兜底规则固定匹配所有未被前面规则命中的文件，不能停用或设置条件。</Text>
+      )}
 
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-sm font-medium">同步目标</span>
-          <Form.Item noStyle shouldUpdate>
-            {({ getFieldValue, setFieldValue }) => (
-              <Button
-                size="small"
-                icon={<PlusOutlined />}
-                disabled={driveOptions.length === 0}
-                onClick={() => {
-                  const targets: SyncTarget[] = getFieldValue('targets') ?? [];
-                  const used = new Set(targets.map((t) => t.drive_id));
-                  const drive = driveOptions.find((d) => !used.has(d.id));
-                  if (!drive) return;
-                  setFieldValue('targets', [...targets, { drive_id: drive.id, path_template: DEFAULT_PATH_TEMPLATE, share: false, required: false }]);
-                }}
-              >
-                添加目标
-              </Button>
-            )}
-          </Form.Item>
-        </div>
-        {driveOptions.length === 0 ? <p className="mb-3 text-sm text-slate-500">还没有可用的网盘，请先在「网盘」标签页添加。</p> : null}
-        <Form.List name="targets">
-          {(fields, { remove }) => (
-            <div className="flex flex-col gap-3">
-              {fields.map((field) => (
-                <div key={field.key} className="rounded-md border border-solid border-slate-200 p-3">
-                  <div className="grid grid-cols-1 items-end gap-x-3 gap-y-1 md:grid-cols-[180px_1fr_auto]">
-                    <Form.Item
-                      name={[field.name, 'drive_id']}
-                      label="网盘"
-                      rules={[{ required: true, message: '请选择网盘' }]}
-                      className="mb-2"
-                    >
-                      <Select
-                        options={driveOptions.map((d) => ({ value: d.id, label: d.name + (d.enabled ? '' : '（已停用）') }))}
-                        placeholder="选择网盘"
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, 'path_template']}
-                      label="路径模板"
-                      className="mb-2"
-                      rules={[
-                        { required: true, whitespace: true, message: '请输入路径模板' },
-                        {
-                          validator: (_rule, value: string | undefined) => {
-                            if (!value) return Promise.resolve();
-                            if (value.startsWith('/') || value.includes('\\')) return Promise.reject(new Error('必须为相对路径，不能包含反斜杠'));
-                            if (!value.trim().endsWith('{文件名}')) return Promise.reject(new Error('必须以 {文件名} 结尾'));
-                            const known = new Set<string>(TEMPLATE_VARIABLES);
-                            for (const match of value.matchAll(/\{([^}]*)\}/g)) {
-                              const name = match[1] ?? '';
-                              if (!known.has(name)) return Promise.reject(new Error(`未知变量 {${name}}`));
-                            }
-                            return Promise.resolve();
-                          },
-                        },
-                      ]}
-                    >
-                      <Input maxLength={2048} placeholder={DEFAULT_PATH_TEMPLATE} />
-                    </Form.Item>
-                    <div className="mb-2 flex items-center gap-3">
-                      <Form.Item name={[field.name, 'share']} valuePropName="checked" noStyle>
-                        <Checkbox>分享</Checkbox>
-                      </Form.Item>
-                      <Form.Item name={[field.name, 'required']} valuePropName="checked" noStyle>
-                        <Checkbox>必需</Checkbox>
-                      </Form.Item>
-                      <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} aria-label="删除目标" />
-                    </div>
-                  </div>
-                  <Form.Item noStyle shouldUpdate>
-                    {({ getFieldValue }) => {
-                      const targets: SyncTarget[] = getFieldValue('targets') ?? [];
-                      const target = targets[field.name];
-                      if (!target) return null;
-                      const drive = drives.find((d) => d.id === target.drive_id);
-                      if (!drive) return null;
-                      return (
-                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                          <span>目标网盘：{driveName(drives, drive.id)}</span>
-                          {!drive.capabilities.folders ? <span className="text-orange-600">该网盘不支持子目录，仅使用文件名部分</span> : null}
-                          {target.share && !drive.capabilities.share ? <span className="text-orange-600">该网盘不支持分享</span> : null}
-                        </div>
-                      );
-                    }}
-                  </Form.Item>
-                </div>
-              ))}
-            </div>
-          )}
-        </Form.List>
-        <p className="mt-2 text-xs text-slate-500">可用变量：{TEMPLATE_VARIABLES.map((v) => `{${v}}`).join(' ')}</p>
-      </Form>
-    </Modal>
+      <Stack gap="sm">
+        <Group justify="space-between">
+          <Text fw={600} size="sm">同步目标</Text>
+          <Button size="compact-sm" variant="default" leftSection={<IconPlus size={14} />} disabled={driveOptions.length === 0} onClick={addTarget}>添加目标</Button>
+        </Group>
+        {driveOptions.length === 0 ? <Text size="sm" c="dimmed">还没有可用的网盘，请先在「网盘」标签页添加。</Text> : null}
+        {form.values.targets.map((target, index) => {
+          const drive = drives.find((d) => d.id === target.drive_id);
+          return (
+            <Paper key={index} p="sm">
+              <Stack gap="xs">
+                <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
+                  <Select label="网盘" placeholder="选择网盘" data={driveOptions.map((d) => ({ value: d.id, label: d.name + (d.enabled ? '' : '（已停用）') }))} {...form.getInputProps(`targets.${index}.drive_id`)} />
+                  <TextInput label="路径模板" maxLength={2048} placeholder={DEFAULT_PATH_TEMPLATE} style={{ gridColumn: 'span 2' }} {...form.getInputProps(`targets.${index}.path_template`)} />
+                </SimpleGrid>
+                <Group justify="space-between">
+                  <Group gap="md">
+                    <Checkbox label="分享" {...form.getInputProps(`targets.${index}.share`, { type: 'checkbox' })} />
+                    <Checkbox label="必需" {...form.getInputProps(`targets.${index}.required`, { type: 'checkbox' })} />
+                  </Group>
+                  <ActionIcon variant="subtle" color="red" onClick={() => form.removeListItem('targets', index)} aria-label="删除目标"><IconTrash size={16} /></ActionIcon>
+                </Group>
+                {drive ? (
+                  <Group gap="sm">
+                    <Text size="xs" c="dimmed">目标网盘：{driveName(drives, drive.id)}</Text>
+                    {!drive.capabilities.folders ? <Text size="xs" c="orange">该网盘不支持子目录，仅使用文件名部分</Text> : null}
+                    {target.share && !drive.capabilities.share ? <Text size="xs" c="orange">该网盘不支持分享</Text> : null}
+                  </Group>
+                ) : null}
+              </Stack>
+            </Paper>
+          );
+        })}
+        <Text size="xs" c="dimmed">可用变量：{TEMPLATE_VARIABLES.map((v) => `{${v}}`).join(' ')}</Text>
+      </Stack>
+    </FormModal>
   );
 }

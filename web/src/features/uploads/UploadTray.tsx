@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Button, Progress, Tag, Typography } from 'antd';
-import { CloseOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
+import { ActionIcon, Anchor, Box, Button, Group, Paper, Progress, ScrollArea, Stack, Text } from '@mantine/core';
+import { IconChevronDown, IconChevronUp, IconX } from '@tabler/icons-react';
 import { Link } from 'react-router';
 import { formatBytes } from '../../shared/lib/format';
+import { Tag } from '../../shared/ui/StatusTags';
 import { useUploads, type UploadBatch } from './UploadManager';
 import { href } from '../../app/routes';
 
@@ -26,33 +27,23 @@ function BatchRow({ batch, onDismiss }: { batch: UploadBatch; onDismiss: () => v
   const percent = batch.totalBytes > 0 ? Math.round((batch.sentBytes / batch.totalBytes) * 100) : 0;
   const finished = batch.phase === 'done' || batch.phase === 'failed';
   return (
-    <div className="upload-tray__row">
-      <div className="upload-tray__row-head">
-        <Typography.Text strong ellipsis className="upload-tray__title">
-          {batch.uploadId ? <Link to={href.upload(batch.uploadId)}>{batch.title}</Link> : batch.title}
-        </Typography.Text>
+    <Stack gap={6} p="sm" style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}>
+      <Group justify="space-between" wrap="nowrap" gap="xs">
+        <Text fw={600} size="sm" truncate flex={1}>
+          {batch.uploadId ? <Anchor component={Link} to={href.upload(batch.uploadId)} c="inherit" size="sm" fw={600}>{batch.title}</Anchor> : batch.title}
+        </Text>
         <Tag color={PHASE_COLOR[batch.phase]}>{PHASE_TEXT[batch.phase]}</Tag>
-        {finished ? <Button type="text" size="small" aria-label="移除" icon={<CloseOutlined />} onClick={onDismiss} /> : null}
-      </div>
-      {batch.phase === 'uploading' || batch.phase === 'preparing' ? (
-        <Progress percent={percent} size="small" status="active" />
-      ) : null}
-      <div className="upload-tray__meta">
-        {batch.phase === 'done' ? (
-          <span>
-            新增 {batch.newCount ?? 0} · 已存在 {batch.duplicateCount ?? 0}
-            {batch.skipped.length > 0 ? ` · 跳过 ${batch.skipped.length}` : ''}
-          </span>
-        ) : batch.phase === 'failed' ? (
-          <span className="upload-tray__error">{batch.error}</span>
-        ) : (
-          <span>
-            {batch.fileCount} 个文件 · {formatBytes(batch.totalBytes)}
-            {batch.knownCount > 0 ? ` · ${batch.knownCount} 个已存在免传` : ''}
-          </span>
-        )}
-      </div>
-    </div>
+        {finished ? <ActionIcon variant="subtle" color="gray" size="sm" aria-label="移除" onClick={onDismiss}><IconX size={14} /></ActionIcon> : null}
+      </Group>
+      {batch.phase === 'uploading' || batch.phase === 'preparing' ? <Progress size="sm" value={percent} animated /> : null}
+      {batch.phase === 'done' ? (
+        <Text size="xs" c="dimmed">新增 {batch.newCount ?? 0} · 已存在 {batch.duplicateCount ?? 0}{batch.skipped.length > 0 ? ` · 跳过 ${batch.skipped.length}` : ''}</Text>
+      ) : batch.phase === 'failed' ? (
+        <Text size="xs" c="red">{batch.error}</Text>
+      ) : (
+        <Text size="xs" c="dimmed">{batch.fileCount} 个文件 · {formatBytes(batch.totalBytes)}{batch.knownCount > 0 ? ` · ${batch.knownCount} 个已存在免传` : ''}</Text>
+      )}
+    </Stack>
   );
 }
 
@@ -63,36 +54,22 @@ export function UploadTray() {
   if (batches.length === 0) return null;
   const active = batches.filter((b) => b.phase !== 'done' && b.phase !== 'failed').length;
   return (
-    <section className="upload-tray" aria-label="导入进度">
-      <header className="upload-tray__header">
-        <strong>{active > 0 ? `正在导入 ${active} 批` : '导入完成'}</strong>
-        <span className="upload-tray__actions">
-          {active < batches.length ? (
-            <Button type="link" size="small" onClick={clearFinished}>
-              清除已完成
-            </Button>
-          ) : null}
-          <Button
-            type="text"
-            size="small"
-            aria-label={collapsed ? '展开' : '收起'}
-            icon={collapsed ? <UpOutlined /> : <DownOutlined />}
-            onClick={() => setCollapsed((v) => !v)}
-          />
-        </span>
-      </header>
+    <Paper component="section" aria-label="导入进度" shadow="md" pos="fixed" bottom={16} right={16} w={{ base: 'calc(100vw - 32px)', sm: 360 }} style={{ zIndex: 200, overflow: 'hidden' }}>
+      <Group justify="space-between" px="sm" py={8} bg="gray.0" style={{ borderBottom: collapsed ? undefined : '1px solid var(--mantine-color-gray-2)' }}>
+        <Text fw={600} size="sm">{active > 0 ? `正在导入 ${active} 批` : '导入完成'}</Text>
+        <Group gap={4}>
+          {active < batches.length ? <Button variant="subtle" size="compact-sm" onClick={clearFinished}>清除已完成</Button> : null}
+          <ActionIcon variant="subtle" color="gray" aria-label={collapsed ? '展开' : '收起'} onClick={() => setCollapsed((v) => !v)}>{collapsed ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />}</ActionIcon>
+        </Group>
+      </Group>
       {collapsed ? null : (
-        <div className="upload-tray__body">
-          {batches.map((batch) => (
-            <BatchRow key={batch.key} batch={batch} onDismiss={() => dismiss(batch.key)} />
-          ))}
-          {batches.some((b) => b.phase === 'done') ? (
-            <div className="upload-tray__footer">
-              <Link to="/inbox">查看需关注 →</Link>
-            </div>
-          ) : null}
-        </div>
+        <Box>
+          <ScrollArea.Autosize mah={320}>
+            {batches.map((batch) => <BatchRow key={batch.key} batch={batch} onDismiss={() => dismiss(batch.key)} />)}
+          </ScrollArea.Autosize>
+          {batches.some((b) => b.phase === 'done') ? <Box px="sm" py={8}><Anchor component={Link} to="/inbox" size="sm">查看需关注 →</Anchor></Box> : null}
+        </Box>
       )}
-    </section>
+    </Paper>
   );
 }

@@ -1,9 +1,13 @@
 import { useEffect } from 'react';
-import { App, Button, Card, Checkbox, Form, InputNumber, Space, Spin, Tag, Typography } from 'antd';
+import { Button, Checkbox, Group, Loader, NumberInput, SimpleGrid, Stack, Text } from '@mantine/core';
+import { useForm } from '@mantine/form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { describeError } from '../../shared/api/errors';
 import type { ClusterSettings, NodeKind } from '../../shared/api/types';
 import { JOB_KIND_LABELS } from '../../shared/lib/labels';
+import { Section } from '../../shared/ui/Section';
+import { message } from '../../shared/ui/feedback';
+import { Tag } from '../../shared/ui/StatusTags';
 import { getClusterSettings, patchClusterSettings, type ClusterSettingsPatch } from './api';
 import { NODE_POLL_MS } from './nodeUtils';
 import { qk } from '../../app/queryKeys';
@@ -40,11 +44,25 @@ export function useClusterSettings() {
   });
 }
 
+const range = (min: number, max: number) => (v: number) => (typeof v === 'number' && v >= min && v <= max ? null : `请输入 ${min} 到 ${max}`);
+const seconds = (label: string) => `${label}`;
+
 export function ClusterSettingsCard() {
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
-  const [form] = Form.useForm<ClusterSettingsFormValues>();
   const query = useClusterSettings();
+  const form = useForm<ClusterSettingsFormValues>({
+    initialValues: { master_kinds: [], master_ingest_concurrency: 1, master_replicate_concurrency: 1, master_analyze_concurrency: 1, master_index_concurrency: 1, lease_seconds: 120, heartbeat_seconds: 15, claim_wait_seconds: 10, poll_seconds: 5 },
+    validate: {
+      master_ingest_concurrency: range(1, 64),
+      master_replicate_concurrency: range(1, 64),
+      master_analyze_concurrency: range(1, 64),
+      master_index_concurrency: range(1, 64),
+      lease_seconds: range(30, 3600),
+      heartbeat_seconds: (v, all) => (typeof v !== 'number' || v < 1 ? '请输入大于 0 的值' : v >= all.lease_seconds ? '心跳必须小于租约' : null),
+      claim_wait_seconds: (v, all) => (typeof v !== 'number' || v < 1 || v > 25 ? '请输入 1 到 25' : v >= all.lease_seconds ? '领取等待必须小于租约' : null),
+      poll_seconds: range(1, 60),
+    },
+  });
   const save = useMutation({
     mutationFn: (body: ClusterSettingsPatch) => patchClusterSettings(body),
     onSuccess: (settings) => {
@@ -59,124 +77,62 @@ export function ClusterSettingsCard() {
   });
 
   useEffect(() => {
-    if (query.data) form.setFieldsValue(settingValues(query.data));
-  }, [form, query.data]);
-
-  const submit = async () => {
-    const values = await form.validateFields();
-    save.mutate(values);
-  };
+    if (query.data) form.setValues(settingValues(query.data));
+    form.resetDirty();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.data]);
 
   return (
-    <Card
-      title="集群调度"
-      extra={query.data ? <Tag color="blue">修订 {query.data.revision}</Tag> : null}
-    >
-      {query.isPending ? <Spin /> : null}
+    <Section title="集群调度" extra={query.data ? <Tag color="blue">修订 {query.data.revision}</Tag> : null}>
+      {query.isPending ? <Loader size="sm" /> : null}
       {query.isError ? (
-        <Space direction="vertical">
-          <Typography.Text type="danger">调度设置加载失败</Typography.Text>
-          <Button onClick={() => void query.refetch()}>重试</Button>
-        </Space>
+        <Stack gap="xs" align="flex-start">
+          <Text c="red" size="sm">调度设置加载失败</Text>
+          <Button variant="default" onClick={() => void query.refetch()}>重试</Button>
+        </Stack>
       ) : null}
       {query.isSuccess ? (
-        <Form form={form} layout="vertical" onFinish={() => void submit()}>
-          <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-            这些参数保存在主端数据库，保存后主端立即重配；从端在下一次心跳获取并应用，节点详情会显示配置修订状态。
-          </Typography.Paragraph>
+        <form onSubmit={form.onSubmit((values) => save.mutate(values))}>
+          <Stack gap="lg">
+            <Text size="sm" c="dimmed">这些参数保存在主端数据库，保存后主端立即重配；从端在下一次心跳获取并应用，节点详情会显示配置修订状态。</Text>
 
-          <Form.Item
-            name="master_kinds"
-            label="主端执行的可下放任务"
-            extra="归档、配套和 local 网盘复制始终留在主端；这里决定主端是否也执行复制、AI 分析或索引。"
-          >
             <Checkbox.Group
-              options={(['replicate', 'analyze', 'index'] as const).map((kind) => ({
-                value: kind,
-                label: JOB_KIND_LABELS[kind],
-              }))}
-            />
-          </Form.Item>
+              label="主端执行的可下放任务"
+              description="归档、配套和 local 网盘复制始终留在主端；这里决定主端是否也执行复制、AI 分析或索引。"
+              {...form.getInputProps('master_kinds')}
+            >
+              <Group mt="xs" gap="lg">
+                {(['replicate', 'analyze', 'index'] as const).map((kind) => <Checkbox key={kind} value={kind} label={JOB_KIND_LABELS[kind]} />)}
+              </Group>
+            </Checkbox.Group>
 
-          <Typography.Text strong>主端并发</Typography.Text>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" style={{ marginTop: 12 }}>
-            {[
-              ['master_ingest_concurrency', '归档'],
-              ['master_replicate_concurrency', '复制上传'],
-              ['master_analyze_concurrency', 'AI 分析'],
-              ['master_index_concurrency', '题目索引'],
-            ].map(([name, label]) => (
-              <Form.Item
-                key={name}
-                name={name}
-                label={label}
-                rules={[{ required: true, type: 'number', min: 1, max: 64, message: '请输入 1 到 64' }]}
-                style={{ marginBottom: 0 }}
-              >
-                <InputNumber min={1} max={64} precision={0} className="w-full" />
-              </Form.Item>
-            ))}
-          </div>
+            <Stack gap="xs">
+              <Text fw={600} size="sm">主端并发</Text>
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+                <NumberInput label="归档" min={1} max={64} allowDecimal={false} {...form.getInputProps('master_ingest_concurrency')} />
+                <NumberInput label="复制上传" min={1} max={64} allowDecimal={false} {...form.getInputProps('master_replicate_concurrency')} />
+                <NumberInput label="AI 分析" min={1} max={64} allowDecimal={false} {...form.getInputProps('master_analyze_concurrency')} />
+                <NumberInput label="题目索引" min={1} max={64} allowDecimal={false} {...form.getInputProps('master_index_concurrency')} />
+              </SimpleGrid>
+            </Stack>
 
-          <Typography.Text strong style={{ display: 'block', marginTop: 20 }}>租约与调度周期</Typography.Text>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" style={{ marginTop: 12 }}>
-            <Form.Item
-              name="lease_seconds"
-              label="任务租约"
-              extra="30–3600 秒"
-              rules={[{ required: true, type: 'number', min: 30, max: 3600 }]}
-            >
-              <InputNumber min={30} max={3600} precision={0} addonAfter="秒" className="w-full" />
-            </Form.Item>
-            <Form.Item
-              name="heartbeat_seconds"
-              label="从端心跳"
-              extra="必须小于租约"
-              dependencies={['lease_seconds']}
-              rules={[
-                { required: true, type: 'number', min: 1 },
-                ({ getFieldValue }) => ({
-                  validator: async (_rule, value: number) => {
-                    if (value >= getFieldValue('lease_seconds')) throw new Error('心跳必须小于租约');
-                  },
-                }),
-              ]}
-            >
-              <InputNumber min={1} precision={0} addonAfter="秒" className="w-full" />
-            </Form.Item>
-            <Form.Item
-              name="claim_wait_seconds"
-              label="从端领取等待"
-              extra="1–25 秒"
-              dependencies={['lease_seconds']}
-              rules={[
-                { required: true, type: 'number', min: 1, max: 25 },
-                ({ getFieldValue }) => ({
-                  validator: async (_rule, value: number) => {
-                    if (value >= getFieldValue('lease_seconds')) throw new Error('领取等待必须小于租约');
-                  },
-                }),
-              ]}
-            >
-              <InputNumber min={1} max={25} precision={0} addonAfter="秒" className="w-full" />
-            </Form.Item>
-            <Form.Item
-              name="poll_seconds"
-              label="主端空闲轮询"
-              rules={[{ required: true, type: 'number', min: 1, max: 60 }]}
-            >
-              <InputNumber min={1} max={60} precision={0} addonAfter="秒" className="w-full" />
-            </Form.Item>
-          </div>
+            <Stack gap="xs">
+              <Text fw={600} size="sm">租约与调度周期</Text>
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+                <NumberInput label="任务租约" description="30–3600 秒" min={30} max={3600} allowDecimal={false} suffix={seconds(' 秒')} {...form.getInputProps('lease_seconds')} />
+                <NumberInput label="从端心跳" description="必须小于租约" min={1} allowDecimal={false} suffix=" 秒" {...form.getInputProps('heartbeat_seconds')} />
+                <NumberInput label="从端领取等待" description="1–25 秒" min={1} max={25} allowDecimal={false} suffix=" 秒" {...form.getInputProps('claim_wait_seconds')} />
+                <NumberInput label="主端空闲轮询" description="1–60 秒" min={1} max={60} allowDecimal={false} suffix=" 秒" {...form.getInputProps('poll_seconds')} />
+              </SimpleGrid>
+            </Stack>
 
-          <Space style={{ marginTop: 20 }} wrap>
-            <Button type="primary" htmlType="submit" loading={save.isPending}>保存调度设置</Button>
-            <Typography.Text type="secondary">
-              {query.data ? `最近更新 ${new Date(query.data.updated_at).toLocaleString()}` : null}
-            </Typography.Text>
-          </Space>
-        </Form>
+            <Group>
+              <Button type="submit" loading={save.isPending}>保存调度设置</Button>
+              {query.data ? <Text size="sm" c="dimmed">最近更新 {new Date(query.data.updated_at).toLocaleString()}</Text> : null}
+            </Group>
+          </Stack>
+        </form>
       ) : null}
-    </Card>
+    </Section>
   );
 }

@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { App, Button, Card, Popconfirm, Space, Table, Typography } from 'antd';
+import { Anchor, Button, Group, Paper, Stack, Text } from '@mantine/core';
 import { Link } from 'react-router';
 import type { Pack } from '../../shared/api/types';
 import { errorMessage } from '../../shared/api/errors';
 import { formatDateTime } from '../../shared/lib/format';
 import { useListSearch } from '../../shared/lib/listSearch';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { ConfirmButton, message } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { PackMeta } from '../packs/PackBadges';
 import { usePackMutations, usePacksList } from '../packs/queries';
@@ -23,7 +25,6 @@ function daysLeft(deletedAt: string | null): number {
 }
 
 export function TrashPage() {
-  const { message } = App.useApp();
   const list = useListSearch([] as const);
   const query = usePacksList({ page: list.page, page_size: list.pageSize, trashed: true });
   const { restore, purge } = usePackMutations();
@@ -39,73 +40,62 @@ export function TrashPage() {
     }
   };
 
+  const columns: Column<Pack>[] = [
+    {
+      key: 'title', wrap: true,
+      title: '套卷',
+      render: (pack) => (
+        <Stack gap={4}>
+          <Anchor component={Link} to={href.pack(pack.id)} fw={600} c="inherit">{pack.title}</Anchor>
+          <PackMeta pack={pack} />
+        </Stack>
+      ),
+    },
+    { key: 'files', title: '文件', width: 70, render: (pack) => pack.members.length },
+    { key: 'deleted', title: '删除时间', width: 170, render: (pack) => formatDateTime(pack.deleted_at) },
+    { key: 'left', title: '剩余', width: 90, render: (pack) => `${daysLeft(pack.deleted_at)} 天` },
+    {
+      key: 'actions',
+      width: 180,
+      align: 'right',
+      render: (pack) => (
+        <Group gap="xs" justify="flex-end" wrap="nowrap">
+          <Button variant="subtle" size="compact-sm" onClick={() => void run('restore', [pack.id])}>恢复</Button>
+          <ConfirmButton variant="subtle" color="red" size="compact-sm" confirmTitle="彻底删除？" confirmDescription={PURGE_NOTE} okText="彻底删除" danger onConfirm={() => run('purge', [pack.id])}>彻底删除</ConfirmButton>
+        </Group>
+      ),
+    },
+  ];
+
   return (
-    <div className="page-stack">
+    <Stack gap="lg">
       <PageHeader title="回收站" description={`删除的套卷会在这里保留 ${RETENTION_DAYS} 天，之后自动彻底删除。再次上传同一文件也会自动恢复。`} />
       {selected.length > 0 ? (
-        <Card size="small">
-          <Space wrap>
-            <Typography.Text strong>已选 {selected.length} 个</Typography.Text>
-            <Button type="primary" onClick={() => void run('restore', selected)}>
-              恢复
-            </Button>
-            <Popconfirm title="彻底删除后无法恢复，确定？" description={PURGE_NOTE} okButtonProps={{ danger: true }} onConfirm={() => void run('purge', selected)}>
-              <Button danger>彻底删除</Button>
-            </Popconfirm>
-          </Space>
-        </Card>
+        <Paper p="sm" px="md">
+          <Group>
+            <Text fw={600} size="sm">已选 {selected.length} 个</Text>
+            <Button size="compact-md" onClick={() => void run('restore', selected)}>恢复</Button>
+            <ConfirmButton size="compact-md" variant="default" color="red" confirmTitle="彻底删除后无法恢复，确定？" confirmDescription={PURGE_NOTE} okText="彻底删除" danger onConfirm={() => run('purge', selected)}>彻底删除</ConfirmButton>
+          </Group>
+        </Paper>
       ) : null}
       {query.isError ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : (
-        <Card styles={{ body: { padding: 0 } }}>
-          <Table<Pack>
-            rowKey="id"
-            loading={query.isFetching}
-            dataSource={query.data?.items ?? []}
-            rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as string[]) }}
-            locale={{ emptyText: <EmptyState description="回收站是空的" /> }}
-            pagination={{ current: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: (page, pageSize) => {
-                // A bulk action only applies to rows the person can see.
-                setSelected([]);
-                list.setPage(page, pageSize);
-              },
-              hideOnSinglePage: true }}
-            columns={[
-              {
-                title: '套卷',
-                key: 'title',
-                render: (_: unknown, pack) => (
-                  <div className="flex flex-col gap-1">
-                    <Link to={href.pack(pack.id)}>{pack.title}</Link>
-                    <PackMeta pack={pack} />
-                  </div>
-                ),
-              },
-              { title: '文件', key: 'files', width: 70, render: (_: unknown, pack) => pack.members.length },
-              { title: '删除时间', key: 'deleted', width: 170, render: (_: unknown, pack) => formatDateTime(pack.deleted_at) },
-              { title: '剩余', key: 'left', width: 90, render: (_: unknown, pack) => `${daysLeft(pack.deleted_at)} 天` },
-              {
-                title: '',
-                key: 'actions',
-                width: 160,
-                render: (_: unknown, pack) => (
-                  <Space size={0}>
-                    <Button type="link" size="small" onClick={() => void run('restore', [pack.id])}>
-                      恢复
-                    </Button>
-                    <Popconfirm title="彻底删除？" description={PURGE_NOTE} okButtonProps={{ danger: true }} onConfirm={() => void run('purge', [pack.id])}>
-                      <Button type="link" size="small" danger>
-                        彻底删除
-                      </Button>
-                    </Popconfirm>
-                  </Space>
-                ),
-              },
-            ]}
-          />
-        </Card>
+        <DataTable
+          rows={query.data?.items ?? []}
+          columns={columns}
+          rowKey={(p) => p.id}
+          loading={query.isFetching}
+          selected={selected}
+          onSelectedChange={(keys) => setSelected(keys as string[])}
+          empty={<EmptyState description="回收站是空的" />}
+          pagination={{
+            page: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0,
+            onChange: (page, pageSize) => { setSelected([]); list.setPage(page, pageSize); },
+          }}
+        />
       )}
-    </div>
+    </Stack>
   );
 }

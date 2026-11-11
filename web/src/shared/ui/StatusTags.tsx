@@ -1,5 +1,4 @@
-import { Tag } from 'antd';
-import type { TagProps } from 'antd';
+import { Badge, Group, Text } from '@mantine/core';
 import type {
   DocType,
   JobKind,
@@ -31,7 +30,17 @@ import {
   VERIFICATION_LABELS,
 } from '../lib/labels';
 
-type TagColor = NonNullable<TagProps['color']>;
+type TagColor = string;
+
+/** 语义色到 Mantine 颜色的映射。 */
+const PALETTE: Record<string, string> = {
+  default: 'gray', success: 'green', error: 'red', warning: 'yellow', processing: 'blue',
+  blue: 'blue', green: 'teal', cyan: 'cyan', purple: 'grape', geekblue: 'indigo', magenta: 'pink', gold: 'orange',
+};
+
+function Tag({ color = 'default', children }: { color?: TagColor; children?: React.ReactNode }) {
+  return <Badge color={PALETTE[color] ?? 'gray'} variant="light" radius="sm" style={{ textTransform: 'none', fontWeight: 500, flexShrink: 0 }} styles={{ label: { overflow: 'visible', textOverflow: 'clip' } }} maw="none">{children}</Badge>;
+}
 
 const MATERIAL_STATUS_COLORS: Record<MaterialStatus, TagColor> = {
   archived: 'success',
@@ -95,6 +104,8 @@ const STAGE_COLORS: Record<Stage, TagColor> = {
   ready: 'success',
 };
 
+export { Tag };
+
 export function MaterialStatusTag({ status }: { status: MaterialStatus }) {
   return <Tag color={MATERIAL_STATUS_COLORS[status]}>{MATERIAL_STATUS_LABELS[status]}</Tag>;
 }
@@ -154,13 +165,13 @@ export function DocTypeTag({ type }: { type: DocType | '' }) {
 }
 
 export function SubjectTags({ codes }: { codes: SubjectCode[] }) {
-  if (codes.length === 0) return <span className="text-slate-400">—</span>;
+  if (codes.length === 0) return <Text span c="dimmed">—</Text>;
   return (
-    <span className="inline-flex flex-wrap gap-1">
+    <Group gap={4}>
       {codes.map((code) => (
         <Tag key={code}>{SUBJECT_LABELS[code]}</Tag>
       ))}
-    </span>
+    </Group>
   );
 }
 

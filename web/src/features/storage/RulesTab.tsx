@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Modal, Space, Table, Tag } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { ActionIcon, Button, Group, Modal, Stack, Text } from '@mantine/core';
+import { IconArrowDown, IconArrowUp, IconEdit, IconPlus, IconTrash } from '@tabler/icons-react';
 import { describeError } from '../../shared/api/errors';
 import type { Drive, SyncAction, SyncPreview, SyncRule } from '../../shared/api/types';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { Section } from '../../shared/ui/Section';
+import { message } from '../../shared/ui/feedback';
 import { EmptyState } from '../../shared/ui/States';
+import { Tag } from '../../shared/ui/StatusTags';
 import { RuleFormModal } from './RuleFormModal';
 import { SYNC_ACTION_COLORS, SYNC_ACTION_LABELS, describeConditions, driveName, makeRule } from './ruleUtils';
 import { usePreviewRules, usePutRules } from './queries';
@@ -26,7 +29,6 @@ interface RulesTabProps {
 }
 
 export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
-  const { message } = App.useApp();
   const [draft, setDraft] = useState<SyncRule[]>(rules);
   const [editing, setEditing] = useState<SyncRule | null>(null);
   const [editingIndex, setEditingIndex] = useState<number>(-1);
@@ -109,202 +111,124 @@ export function RulesTab({ canWrite, rules, drives }: RulesTabProps) {
     );
   };
 
-  const ruleColumns: ColumnsType<SyncRule> = [
+  const ruleColumns: Column<SyncRule>[] = [
     {
-      title: '顺序',
-      key: 'order',
-      width: 90,
-      render: (_: unknown, _record, index) => (
-        <Space size={0}>
-          <Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={!canWrite || index === 0 || Boolean(draft[index]?.is_default)} onClick={() => moveRule(index, -1)} aria-label="上移" />
-          <Button
-            size="small"
-            type="text"
-            icon={<ArrowDownOutlined />}
-            disabled={!canWrite || index >= draft.length - 1 || draft[index + 1]?.is_default === true}
-            onClick={() => moveRule(index, 1)}
-            aria-label="下移"
-          />
-        </Space>
-      ),
-    },
-    {
-      title: '规则',
-      key: 'rule',
-      width: 240,
-      render: (_: unknown, record) => {
-        const conditions = describeConditions(record.conditions);
+      key: 'order', title: '顺序', width: 90,
+      render: (record) => {
+        const index = draft.findIndex((r) => r.id === record.id);
         return (
-          <div className="flex flex-col gap-1">
-            <span className="font-medium">
-              {record.name}
-              {!record.enabled ? <Tag className="ml-2">已停用</Tag> : null}
-              {record.is_default ? <Tag className="ml-2" color="blue">兜底</Tag> : null}
-            </span>
-            {record.is_default ? <span className="text-xs text-slate-500">匹配所有未被前面规则命中的文件</span> : conditions ? <span className="text-xs text-slate-500">{conditions}</span> : <span className="text-xs text-slate-500">无条件（匹配所有文件）</span>}
-          </div>
+          <Group gap={0} wrap="nowrap">
+            <ActionIcon variant="subtle" color="gray" disabled={!canWrite || index === 0 || Boolean(draft[index]?.is_default)} onClick={() => moveRule(index, -1)} aria-label="上移"><IconArrowUp size={16} /></ActionIcon>
+            <ActionIcon variant="subtle" color="gray" disabled={!canWrite || index >= draft.length - 1 || draft[index + 1]?.is_default === true} onClick={() => moveRule(index, 1)} aria-label="下移"><IconArrowDown size={16} /></ActionIcon>
+          </Group>
         );
       },
     },
     {
-      title: '目标',
-      key: 'targets',
-      width: 420,
-      render: (_: unknown, record) =>
-        record.targets.length === 0 ? (
-          <span className="text-slate-500">不上传</span>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {record.targets.map((target) => (
-              <div key={target.drive_id} className="text-sm">
-                <span className="font-medium">{driveName(drives, target.drive_id)}</span>
-                <span className="mx-1 text-slate-400">→</span>
-                <span className="break-all font-mono text-xs">{target.path_template}</span>
-                {target.share ? <Tag className="ml-2">分享</Tag> : null}
-                {target.required ? <Tag className="ml-1" color="blue">必需</Tag> : null}
-              </div>
-            ))}
-          </div>
-        ),
+      key: 'rule', wrap: true, title: '规则', width: 260,
+      render: (record) => {
+        const conditions = describeConditions(record.conditions);
+        return (
+          <Stack gap={4}>
+            <Group gap={6} wrap="nowrap">
+              <Text fw={600} size="sm">{record.name}</Text>
+              {!record.enabled ? <Tag>已停用</Tag> : null}
+              {record.is_default ? <Tag color="blue">兜底</Tag> : null}
+            </Group>
+            <Text size="xs" c="dimmed">{record.is_default ? '匹配所有未被前面规则命中的文件' : conditions || '无条件（匹配所有文件）'}</Text>
+          </Stack>
+        );
+      },
     },
     {
-      title: '操作',
-      key: 'actions',
-      width: 130,
-      fixed: 'right' as const,
-      render: (_: unknown, record, index) => (
-        <Space size={4}>
-          <Button
-            size="small"
-            icon={<EditOutlined />}
-            disabled={!canWrite}
-            onClick={() => {
-              setEditing(record);
-              setEditingIndex(index);
-              setCreating(false);
-            }}
-          >
-            编辑
-          </Button>
-          {!record.is_default ? (
-            <Button size="small" danger icon={<DeleteOutlined />} disabled={!canWrite} onClick={() => removeRule(index)} aria-label="删除规则" />
-          ) : null}
-        </Space>
+      key: 'targets', wrap: true, title: '目标',
+      render: (record) => record.targets.length === 0 ? <Text size="sm" c="dimmed">不上传</Text> : (
+        <Stack gap={4}>
+          {record.targets.map((target) => (
+            <Group key={target.drive_id} gap={6} wrap="wrap">
+              <Text fw={600} size="sm">{driveName(drives, target.drive_id)}</Text>
+              <Text c="dimmed" size="sm">→</Text>
+              <Text ff="monospace" size="xs" style={{ wordBreak: 'break-all' }}>{target.path_template}</Text>
+              {target.share ? <Tag>分享</Tag> : null}
+              {target.required ? <Tag color="blue">必需</Tag> : null}
+            </Group>
+          ))}
+        </Stack>
       ),
+    },
+    {
+      key: 'actions', title: '操作', width: 150,
+      render: (record) => {
+        const index = draft.findIndex((r) => r.id === record.id);
+        return (
+          <Group gap={6} wrap="nowrap">
+            <Button size="compact-sm" variant="default" leftSection={<IconEdit size={14} />} disabled={!canWrite} onClick={() => { setEditing(record); setEditingIndex(index); setCreating(false); }}>编辑</Button>
+            {!record.is_default ? <ActionIcon variant="default" color="red" disabled={!canWrite} onClick={() => removeRule(index)} aria-label="删除规则"><IconTrash size={14} /></ActionIcon> : null}
+          </Group>
+        );
+      },
     },
   ];
 
-  const previewColumns: ColumnsType<SyncAction> = [
+  const previewColumns: Column<SyncAction>[] = [
+    { key: 'action', title: '动作', width: 100, render: (r) => <Tag color={SYNC_ACTION_COLORS[r.action]}>{SYNC_ACTION_LABELS[r.action] ?? r.action}</Tag> },
+    { key: 'file_name', wrap: true, title: '文件', render: (r) => <Text size="sm" style={{ wordBreak: 'break-all' }}>{r.file_name}</Text> },
+    { key: 'drive', title: '网盘', width: 140, render: (r) => driveName(drives, r.drive_id) },
+    { key: 'rule', wrap: true, title: '规则', width: 120, render: (r) => r.rule_name || '—' },
     {
-      title: '动作',
-      dataIndex: 'action',
-      key: 'action',
-      width: 100,
-      render: (action: string) => <Tag color={SYNC_ACTION_COLORS[action]}>{SYNC_ACTION_LABELS[action] ?? action}</Tag>,
-    },
-    { title: '文件', dataIndex: 'file_name', key: 'file_name', render: (name: string) => <span className="break-all">{name}</span> },
-    { title: '网盘', dataIndex: 'drive_id', key: 'drive_id', width: 140, render: (id: string) => driveName(drives, id) },
-    { title: '规则', dataIndex: 'rule_name', key: 'rule_name', width: 120, render: (name: string) => name || '—' },
-    {
-      title: '路径',
-      key: 'path',
-      render: (_: unknown, record) => (
-        <div className="flex flex-col text-xs">
-          {record.desired_path ? <span className="break-all">期望：{record.desired_path}</span> : null}
-          {record.remote_path && record.remote_path !== record.desired_path ? <span className="break-all text-slate-500">当前：{record.remote_path}</span> : null}
-        </div>
+      key: 'path', wrap: true, title: '路径',
+      render: (r) => (
+        <Stack gap={0}>
+          {r.desired_path ? <Text size="xs" style={{ wordBreak: 'break-all' }}>期望：{r.desired_path}</Text> : null}
+          {r.remote_path && r.remote_path !== r.desired_path ? <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>当前：{r.remote_path}</Text> : null}
+        </Stack>
       ),
     },
-    { title: '原因', dataIndex: 'reason', key: 'reason', width: 140, render: (reason: string) => reason || '—' },
+    { key: 'reason', title: '原因', width: 140, render: (r) => r.reason || '—' },
   ];
 
   return (
     <>
-      <Card
+      <Section
         title="同步规则"
-        styles={{ body: { padding: 0 } }}
+        flush
         extra={
-          <Space size={8}>
-            <Button
-              icon={<PlusOutlined />}
-              aria-label="新建规则"
-              disabled={!canWrite}
-              onClick={() => {
-                setCreating(true);
-                setEditing(null);
-                setEditingIndex(-1);
-              }}
-            >
-              <span className="max-sm:hidden">新建规则</span>
-            </Button>
-            <Button type="primary" disabled={!canWrite || !dirty} loading={previewMutation.isPending} onClick={() => runPreview(1)}>
-              预览并保存
-            </Button>
-          </Space>
+          <Group gap="xs">
+            <Button variant="default" leftSection={<IconPlus size={16} />} disabled={!canWrite} onClick={() => { setCreating(true); setEditing(null); setEditingIndex(-1); }}>新建规则</Button>
+            <Button disabled={!canWrite || !dirty} loading={previewMutation.isPending} onClick={() => runPreview(1)}>预览并保存</Button>
+          </Group>
         }
       >
-        <Table<SyncRule>
-          rowKey="id"
-          size="middle"
-          dataSource={draft}
-          columns={ruleColumns}
-          locale={{ emptyText: <EmptyState description="还没有同步规则" /> }}
-          pagination={false}
-          scroll={{ x: 880 }}
-        />
-        <div className="border-t border-solid border-0 border-slate-100 px-6 py-3 text-xs text-slate-500">
-          规则自上而下匹配，命中第一条为止；修改后需要「预览并保存」才会生效。
-        </div>
-      </Card>
+        <DataTable bare rows={draft} columns={ruleColumns} rowKey={(r) => r.id} empty={<EmptyState description="还没有同步规则" />} minWidth={880} />
+        <Text size="xs" c="dimmed" px="lg" py="sm" style={{ borderTop: '1px solid var(--mantine-color-gray-2)' }}>规则自上而下匹配，命中第一条为止；修改后需要「预览并保存」才会生效。</Text>
+      </Section>
 
       {editing !== null || creating ? (
         <RuleFormModal
           open
           rule={creating ? null : editing}
           drives={drives}
-          onClose={() => {
-            setCreating(false);
-            setEditing(null);
-            setEditingIndex(-1);
-          }}
+          onClose={() => { setCreating(false); setEditing(null); setEditingIndex(-1); }}
           onSave={saveRule}
         />
       ) : null}
 
-      <Modal
-        title="规则变更预览"
-        open={preview !== null}
-        onCancel={() => setPreview(null)}
-        width={960}
-        footer={
-          <Space>
-            <Button onClick={() => setPreview(null)}>取消</Button>
-            <Button type="primary" loading={putRules.isPending} onClick={applyRules}>
-              应用规则
-            </Button>
-          </Space>
-        }
-      >
+      <Modal opened={preview !== null} onClose={() => setPreview(null)} title="规则变更预览" size={960}>
         {preview ? (
-          <div className="flex flex-col gap-3">
-            <div className="text-sm">{previewSummary(preview) || '没有需要变更的内容'}</div>
-            <Table<SyncAction>
-              rowKey={(record) => `${record.replica_id}:${record.action}`}
-              size="small"
+          <Stack gap="md">
+            <Text size="sm">{previewSummary(preview) || '没有需要变更的内容'}</Text>
+            <DataTable
+              rows={preview.items}
               columns={previewColumns}
-              dataSource={preview.items}
-              locale={{ emptyText: '没有明细（所有文件保持现状或等待编目）' }}
+              rowKey={(r) => `${r.replica_id}:${r.action}`}
               loading={previewMutation.isPending}
-              pagination={{
-                current: previewPage,
-                pageSize: PREVIEW_PAGE_SIZE,
-                total: preview.total,
-                showSizeChanger: false,
-                onChange: (page) => runPreview(page),
-              }}
+              minWidth={760}
+              empty={<Text size="sm" c="dimmed">没有明细（所有文件保持现状或等待编目）</Text>}
+              pagination={{ page: previewPage, pageSize: PREVIEW_PAGE_SIZE, total: preview.total, pageSizes: [PREVIEW_PAGE_SIZE], onChange: (page) => runPreview(page) }}
             />
-            <div className="text-xs text-slate-500">预览 15 分钟内有效；期间若网盘或规则被其他人修改，应用时会要求重新预览。</div>
-          </div>
+            <Text size="xs" c="dimmed">预览 15 分钟内有效；期间若网盘或规则被其他人修改，应用时会要求重新预览。</Text>
+            <Group justify="flex-end"><Button variant="default" onClick={() => setPreview(null)}>取消</Button><Button loading={putRules.isPending} onClick={applyRules}>应用规则</Button></Group>
+          </Stack>
         ) : null}
       </Modal>
     </>

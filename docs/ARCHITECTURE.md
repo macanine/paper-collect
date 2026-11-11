@@ -24,8 +24,8 @@
 | 后端 | Go（`go.mod` 声明 1.26；最近一次在 Go 1.27.3 上验证）、Gin 1.10、GORM 1.31 |
 | 数据库 | 默认 SQLite（`glebarez/sqlite` 纯 Go 驱动）；可切换 PostgreSQL（`gorm.io/driver/postgres`） |
 | 后端基础库 | `golang-jwt/jwt/v5`、`golang.org/x/crypto`（argon2id）、`golang.org/x/text`（ZIP 文件名解码） |
-| 前端 | React 19、Ant Design 6、React Router 8、TanStack Query 5、Vite 8 |
-| 前端语言/样式/测试 | TypeScript 7 strict、UnoCSS 66（Tailwind v4 兼容 preset）、Vitest 5 |
+| 前端 | React 19、Mantine 9、React Router 8、TanStack Query 5、Vite 8 |
+| 前端语言/样式/测试 | TypeScript 7 strict、Vitest 5 |
 | 运行形态 | 主端一个 Go 进程：HTTP/MCP + 后台 worker；从端是同一二进制的 `ROLE=worker` 模式，不提供 HTTP 服务；前端构建为 `web/dist` 静态文件，由同一进程从磁盘托管 |
 | 外部依赖 | OpenAI 兼容端点、MinerU v4/PaddleOCR 异步解析 API、各网盘；RapidOCR 为 Compose 内自建依赖 |
 
@@ -509,7 +509,7 @@ OneDrive 新建表单默认引导使用 OpenList 应用；服务端旧配置缺�
 
 ### 12.4 界面约定
 
-- 主题使用 Ant Design 默认 token（默认蓝色主色、6px 圆角、默认布局背景），不硬编码品牌色；状态色经 `Tag` 的语义色表达。
+- 主题由 `web/src/app/theme.ts` 的 Mantine 主题统一定义（默认蓝色主色、`md` 圆角），不硬编码品牌色；列表、详情、表单弹窗等通过 `shared/ui` 共享组件保持对齐；状态色经 `StatusTags` 的语义色表达。
 - 侧栏桌面宽 240、折叠宽 64；品牌区和顶栏统一 56px 高，边框对齐；菜单按“业务/系统”分组，顶部提供折叠按钮。
 - 顶栏左侧面包屑（首页 / 当前栏目），右侧用户菜单；页面标题只由内容区的 `PageHeader` 提供，不在顶栏重复。
 - 内容区最大宽度 1440，桌面内边距 24、窄屏 16；列表表格统一放在 `Card` 内，表体使用无内边距容器。

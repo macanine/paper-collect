@@ -1,19 +1,21 @@
 import { useState } from 'react';
-import { App, Button, Card, Popconfirm, Table, Tag, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { Group, Stack, Text } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { describeError } from '../../shared/api/errors';
 import type { QuestionRow } from '../../shared/api/types';
 import { formatDateTime } from '../../shared/lib/format';
 import { INDEX_STATUS_LABELS } from '../../shared/lib/labels';
+import { DataTable, type Column } from '../../shared/ui/DataTable';
+import { Section } from '../../shared/ui/Section';
+import { ConfirmButton, message } from '../../shared/ui/feedback';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
+import { Tag } from '../../shared/ui/StatusTags';
 import { enqueueMaterialIndex, getMaterialIndexState, listMaterialQuestions } from './api';
 import { qk } from '../../app/queryKeys';
 
 const PAGE_SIZE = 20;
 
 export function IndexPanel({ materialId, canWrite }: { materialId: string; canWrite: boolean }) {
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const state = useQuery({
@@ -39,83 +41,54 @@ export function IndexPanel({ materialId, canWrite }: { materialId: string; canWr
     onError: (error) => message.error(describeError(error).title),
   });
 
-  const columns: ColumnsType<QuestionRow> = [
-    { title: '页码', dataIndex: 'page_no', key: 'page', width: 80 },
-    { title: '题号', dataIndex: 'question_no', key: 'no', width: 100, render: (value: string) => value || '—' },
-    {
-      title: '题干',
-      dataIndex: 'text',
-      key: 'text',
-      render: (value: string) => (
-        <Typography.Paragraph className="mb-0 whitespace-pre-wrap" ellipsis={{ rows: 3, expandable: true, symbol: '展开' }}>
-          {value}
-        </Typography.Paragraph>
-      ),
-    },
-    {
-      title: '置信度',
-      dataIndex: 'confidence',
-      key: 'confidence',
-      width: 90,
-      render: (value: number) => `${Math.round(value * 100)}%`,
-    },
+  const columns: Column<QuestionRow>[] = [
+    { key: 'page', title: '页码', width: 80, render: (q) => q.page_no },
+    { key: 'no', title: '题号', width: 100, render: (q) => q.question_no || '—' },
+    { key: 'text', wrap: true, title: '题干', render: (q) => <Text size="sm" lineClamp={3} style={{ whiteSpace: 'pre-wrap' }} title={q.text}>{q.text}</Text> },
+    { key: 'confidence', title: '置信度', width: 90, render: (q) => `${Math.round(q.confidence * 100)}%` },
   ];
 
   const status = state.data?.status;
-  const tagColor = status === 'succeeded' ? 'green' : status === 'failed' ? 'red' : status === 'not_applicable' ? 'default' : status ? 'blue' : 'default';
+  const tagColor = status === 'succeeded' ? 'success' : status === 'failed' ? 'error' : status === 'not_applicable' ? 'default' : status ? 'processing' : 'default';
   const indexable = status !== 'not_applicable';
 
   return (
-    <Card
+    <Section
       title="题目索引"
       extra={
-        <div className="flex items-center gap-2">
+        <Group gap="xs">
           <Tag color={tagColor}>{status ? INDEX_STATUS_LABELS[status] : '加载中'}</Tag>
-          {canWrite && indexable ? (
-            <Popconfirm title="重建这份资料的题目索引？" okText="重建" cancelText="取消" onConfirm={() => reindex.mutate()}>
-              <Button size="small" loading={reindex.isPending}>
-                重建索引
-              </Button>
-            </Popconfirm>
-          ) : null}
-        </div>
+          {canWrite && indexable ? <ConfirmButton size="compact-sm" variant="default" loading={reindex.isPending} confirmTitle="重建这份资料的题目索引？" okText="重建" onConfirm={() => reindex.mutate()}>重建索引</ConfirmButton> : null}
+        </Group>
       }
     >
       {state.isPending ? <LoadingState /> : null}
       {state.isError ? <ErrorState error={state.error} onRetry={() => void state.refetch()} /> : null}
       {state.isSuccess ? (
-        <div className="flex flex-col gap-3">
+        <Stack gap="md">
           {indexable ? (
-            <div className="flex flex-wrap gap-4 text-sm">
-              <span>页数：{state.data.page_count || '—'}</span>
-              <span>题目：{state.data.question_count}</span>
-              <span>索引时间：{state.data.indexed_at ? formatDateTime(state.data.indexed_at) : '—'}</span>
-            </div>
+            <Group gap="lg">
+              <Text size="sm">页数：{state.data.page_count || '—'}</Text>
+              <Text size="sm">题目：{state.data.question_count}</Text>
+              <Text size="sm">索引时间：{state.data.indexed_at ? formatDateTime(state.data.indexed_at) : '—'}</Text>
+            </Group>
           ) : (
-            <Typography.Text type="secondary">只有试卷和试卷+答案资料需要建立题目索引。</Typography.Text>
+            <Text size="sm" c="dimmed">只有试卷和试卷+答案资料需要建立题目索引。</Text>
           )}
-          {state.data.status === 'failed' ? (
-            <Typography.Text type="danger">{state.data.error || '索引失败'}</Typography.Text>
-          ) : null}
+          {state.data.status === 'failed' ? <Text size="sm" c="red">{state.data.error || '索引失败'}</Text> : null}
           {state.data.status === 'succeeded' ? (
-            <Table<QuestionRow>
-              rowKey="id"
-              size="small"
+            <DataTable
+              rows={questions.data?.items ?? []}
               columns={columns}
-              dataSource={questions.data?.items ?? []}
+              rowKey={(q) => q.id}
               loading={questions.isPending}
-              locale={{ emptyText: '暂无题目' }}
-              pagination={{
-                current: questions.data?.page ?? page,
-                pageSize: PAGE_SIZE,
-                total: questions.data?.total ?? 0,
-                showSizeChanger: false,
-                onChange: setPage,
-              }}
+              minWidth={560}
+              empty={<Text size="sm" c="dimmed">暂无题目</Text>}
+              pagination={{ page: questions.data?.page ?? page, pageSize: PAGE_SIZE, total: questions.data?.total ?? 0, pageSizes: [PAGE_SIZE], onChange: (p) => setPage(p) }}
             />
           ) : null}
-        </div>
+        </Stack>
       ) : null}
-    </Card>
+    </Section>
   );
 }

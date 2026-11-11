@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MantineProvider } from '@mantine/core';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import type { SearchHit } from '../../shared/api/types';
@@ -6,9 +7,11 @@ import { SearchResultCard } from './SearchPage';
 
 function renderResult(hit: SearchHit): string {
   return renderToStaticMarkup(
-    <MemoryRouter>
-      <SearchResultCard hit={hit} onOpenPage={() => {}} />
-    </MemoryRouter>,
+    <MantineProvider>
+      <MemoryRouter>
+        <SearchResultCard hit={hit} onOpenPage={() => {}} />
+      </MemoryRouter>
+    </MantineProvider>,
   );
 }
 

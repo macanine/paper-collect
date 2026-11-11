@@ -1,8 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
-import { Empty, Input, Modal, Spin, Typography } from 'antd';
-import type { InputRef } from 'antd';
-import { CloudUploadOutlined, FileTextOutlined, SearchOutlined } from '@ant-design/icons';
+import { Box, Group, Loader, Modal, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { IconCloudUpload, IconFileText, IconSearch } from '@tabler/icons-react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { href, ROUTES, SETTINGS, type LazyPage } from '../app/routes';
 import { useAuth } from '../features/auth/AuthContext';
@@ -31,7 +30,7 @@ export function CommandPalette({ open, onClose, onImport }: { open: boolean; onC
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const input = useRef<InputRef>(null);
+  const input = useRef<HTMLInputElement>(null);
   const deferred = useDeferredValue(query.trim());
   const searchPacks = can('materials:read') && deferred.length >= 2;
 
@@ -59,7 +58,7 @@ export function CommandPalette({ open, onClose, onImport }: { open: boolean; onC
     const out: Command[] = [];
     const q = deferred;
     if (onImport && can('uploads:write') && matches(q, '导入资料', 'upload import 上传')) {
-      out.push({ id: 'import', group: '操作', label: '导入资料', icon: <CloudUploadOutlined />, run: () => { onClose(); onImport(); } });
+      out.push({ id: 'import', group: '操作', label: '导入资料', icon: <IconCloudUpload size={18} />, run: () => { onClose(); onImport(); } });
     }
     for (const route of ROUTES) {
       if (!route.nav || (route.scope && !can(route.scope)) || !matches(q, route.title, route.keywords)) continue;
@@ -71,11 +70,11 @@ export function CommandPalette({ open, onClose, onImport }: { open: boolean; onC
     }
     // 题目搜索排在页面之后，输入页面名称时回车直接跳转页面。
     if (q && can('materials:read')) {
-      out.push({ id: 'search', group: '操作', label: `搜题：${q}`, icon: <SearchOutlined />, run: go(href.search(q)) });
+      out.push({ id: 'search', group: '操作', label: `搜题：${q}`, icon: <IconSearch size={18} />, run: go(href.search(q)) });
     }
     if (searchPacks) {
       for (const pack of packs.data?.items ?? []) {
-        out.push({ id: `pack:${pack.id}`, group: '套卷', label: pack.title || '未命名套卷', hint: `${pack.members.length} 个文件`, icon: <FileTextOutlined />, run: go(href.pack(pack.id)) });
+        out.push({ id: `pack:${pack.id}`, group: '套卷', label: pack.title || '未命名套卷', hint: `${pack.members.length} 个文件`, icon: <IconFileText size={18} />, run: go(href.pack(pack.id)) });
       }
     }
     return out;
@@ -104,49 +103,58 @@ export function CommandPalette({ open, onClose, onImport }: { open: boolean; onC
 
   let lastGroup = '';
   return (
-    <Modal open={open} onCancel={onClose} footer={null} closable={false} width={560} destroyOnHidden className="command-palette" title={null}>
-      <Input
+    <Modal opened={open} onClose={onClose} withCloseButton={false} size={560} padding={0} yOffset="12vh" centered={false} trapFocus>
+      <TextInput
         ref={input}
-        size="large"
-        variant="borderless"
-        prefix={<SearchOutlined />}
+        size="md"
+        variant="unstyled"
+        px="md"
+        leftSection={<IconSearch size={18} />}
+        rightSection={searchPacks && packs.isFetching ? <Loader size="xs" /> : null}
         placeholder="跳转页面、搜题或查找套卷…"
         value={query}
-        onChange={(event) => setQuery(event.target.value)}
+        onChange={(event) => setQuery(event.currentTarget.value)}
         onKeyDown={onKeyDown}
         aria-label="命令"
         aria-controls="command-palette-list"
         aria-activedescendant={commands[active] ? `command-${commands[active].id}` : undefined}
-        suffix={searchPacks && packs.isFetching ? <Spin size="small" /> : null}
+        styles={{ input: { paddingInline: 40 } }}
+        style={{ borderBottom: '1px solid var(--mantine-color-gray-2)' }}
       />
-      <div className="command-palette__list" id="command-palette-list" role="listbox" aria-label="结果">
+      <Box id="command-palette-list" role="listbox" aria-label="结果" mah={360} style={{ overflowY: 'auto' }} p="xs">
         {commands.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的结果" />
+          <Text c="dimmed" size="sm" ta="center" py="xl">没有匹配的结果</Text>
         ) : (
           commands.map((command, index) => {
             const heading = command.group !== lastGroup ? command.group : null;
             lastGroup = command.group;
             return (
               <div key={command.id}>
-                {heading ? <div className="command-palette__group">{heading}</div> : null}
-                <div
+                {heading ? <Text size="xs" c="dimmed" fw={600} px="sm" pt="xs" pb={4}>{heading}</Text> : null}
+                <UnstyledButton
                   id={`command-${command.id}`}
                   role="option"
                   aria-selected={index === active}
-                  className={`command-palette__item${index === active ? ' is-active' : ''}`}
+                  w="100%"
+                  px="sm"
+                  py={8}
+                  bg={index === active ? 'blue.0' : undefined}
+                  style={{ borderRadius: 'var(--mantine-radius-md)' }}
                   onMouseEnter={() => setActive(index)}
                   onClick={() => command.run()}
                 >
-                  <span className="command-palette__icon" aria-hidden="true">{command.icon}</span>
-                  <span className="command-palette__label">{command.label}</span>
-                  {command.hint ? <Typography.Text type="secondary" className="command-palette__hint">{command.hint}</Typography.Text> : null}
-                </div>
+                  <Group gap="sm" wrap="nowrap">
+                    <Box c={index === active ? 'blue' : 'dimmed'} style={{ display: 'flex' }}>{command.icon}</Box>
+                    <Text size="sm" flex={1} truncate>{command.label}</Text>
+                    {command.hint ? <Text size="xs" c="dimmed" truncate>{command.hint}</Text> : null}
+                  </Group>
+                </UnstyledButton>
               </div>
             );
           })
         )}
-      </div>
-      <div className="command-palette__footer">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+      </Box>
+      <Text size="xs" c="dimmed" px="md" py="xs" style={{ borderTop: '1px solid var(--mantine-color-gray-2)' }}>↑↓ 选择 · Enter 打开 · Esc 关闭</Text>
     </Modal>
   );
 }

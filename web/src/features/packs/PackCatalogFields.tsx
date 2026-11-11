@@ -1,4 +1,5 @@
-import { AutoComplete, Form, Input, Select } from 'antd';
+import { Autocomplete, MultiSelect, Select, SimpleGrid, TagsInput, TextInput } from '@mantine/core';
+import type { UseFormReturnType } from '@mantine/form';
 import type { DocType, Grade, Pack, PackFacets, PackUpdate, SubjectCode, Term } from '../../shared/api/types';
 import { FIELD_LABELS } from '../../shared/lib/labels';
 import { DOC_TYPE_OPTIONS, GRADE_OPTIONS, SUBJECT_OPTIONS, TERM_OPTIONS, cohortOptions } from '../../shared/lib/options';
@@ -83,6 +84,7 @@ export function formToUpdate(values: CatalogFormValues, fields: (CatalogField | 
 }
 
 interface Props {
+  form: UseFormReturnType<CatalogFormValues>;
   fields?: CatalogField[];
   facets?: PackFacets;
   /** 人工锁定的字段，表单项附注“已锁定”。 */
@@ -90,74 +92,34 @@ interface Props {
   columns?: 1 | 2 | 3;
 }
 
-export function PackCatalogFields({ fields = ALL_FIELDS, facets, locked = [], columns = 2 }: Props) {
-  const warn = (name: string) => (locked.includes(name) ? { help: '人工设定，AI 不会改动' } : {});
+/** 表单校验：目前只有考试时间格式。 */
+export function validateCatalog(values: CatalogFormValues): Record<string, string> {
+  if (values.exam_date && !/^\d{4}-(0[1-9]|1[0-2])$/.test(values.exam_date)) return { exam_date: '格式为 YYYY-MM，如 2024-09' };
+  return {};
+}
+
+export function PackCatalogFields({ form, fields = ALL_FIELDS, facets, locked = [], columns = 2 }: Props) {
+  const note = (name: string) => (locked.includes(name) ? { description: '人工设定，AI 不会改动' } : {});
   const regionOptions = REGIONS.map((value) => ({ value, label: value }));
-  const orgOptions = (facets?.organizations ?? []).map((f) => ({ value: f.value }));
-  const tagOptions = (facets?.tags ?? []).map((f) => ({ value: f.value, label: f.value }));
+  const orgOptions = (facets?.organizations ?? []).map((f) => f.value);
+  const tagOptions = (facets?.tags ?? []).map((f) => f.value);
   const has = (field: CatalogField) => fields.includes(field);
+  const v = form.values;
+  const set = <K extends keyof CatalogFormValues>(name: K) => (value: CatalogFormValues[K] | null) => form.setFieldValue(name, (value ?? undefined) as never);
+  const err = (name: keyof CatalogFormValues) => form.errors[name as string];
   return (
-    <div className={`catalog-grid catalog-grid--${columns}`}>
-      {has('doc_type') ? (
-        <Form.Item name="doc_type" label={FIELD_LABELS.doc_type} {...warn('doc_type')}>
-          <Select allowClear showSearch optionFilterProp="label" options={DOC_TYPE_OPTIONS} placeholder="如 联考、月考、讲义" />
-        </Form.Item>
-      ) : null}
-      {has('subject_codes') ? (
-        <Form.Item name="subject_codes" label={FIELD_LABELS.subject_codes} {...warn('subject_codes')}>
-          <Select mode="multiple" allowClear optionFilterProp="label" options={SUBJECT_OPTIONS} placeholder="选择学科" />
-        </Form.Item>
-      ) : null}
-      {has('grade') ? (
-        <Form.Item name="grade" label={FIELD_LABELS.grade} {...warn('grade')}>
-          <Select allowClear options={GRADE_OPTIONS} placeholder="选择年级" />
-        </Form.Item>
-      ) : null}
-      {has('cohort') ? (
-        <Form.Item name="cohort" label={FIELD_LABELS.cohort} {...warn('cohort')} tooltip="毕业年份，如 2025 届高三">
-          <Select allowClear options={cohortOptions()} placeholder="选择届别" />
-        </Form.Item>
-      ) : null}
-      {has('term') ? (
-        <Form.Item name="term" label={FIELD_LABELS.term} {...warn('term')}>
-          <Select allowClear options={TERM_OPTIONS} placeholder="上 / 下学期" />
-        </Form.Item>
-      ) : null}
-      {has('region') ? (
-        <Form.Item name="region" label={FIELD_LABELS.region} {...warn('region')}>
-          <Select allowClear showSearch optionFilterProp="label" options={regionOptions} placeholder="如 浙江、新高考I卷" />
-        </Form.Item>
-      ) : null}
-      {has('organization') ? (
-        <Form.Item name="organization" label={FIELD_LABELS.organization} {...warn('organization')}>
-          <AutoComplete allowClear options={orgOptions} placeholder="学校或联盟的规范全称" filterOption />
-        </Form.Item>
-      ) : null}
-      {has('exam_date') ? (
-        <Form.Item
-          name="exam_date"
-          label={FIELD_LABELS.exam_date}
-          {...warn('exam_date')}
-          rules={[{ pattern: /^\d{4}-(0[1-9]|1[0-2])$/, message: '格式为 YYYY-MM，如 2024-09' }]}
-        >
-          <Input allowClear placeholder="YYYY-MM" maxLength={7} />
-        </Form.Item>
-      ) : null}
-      {has('exam_name') ? (
-        <Form.Item name="exam_name" label={FIELD_LABELS.exam_name} {...warn('exam_name')}>
-          <Input allowClear placeholder="试卷上印的考试名称" maxLength={255} />
-        </Form.Item>
-      ) : null}
-      {has('chapter') ? (
-        <Form.Item name="chapter" label={FIELD_LABELS.chapter} {...warn('chapter')}>
-          <Input allowClear placeholder="教材章节或知识点" maxLength={255} />
-        </Form.Item>
-      ) : null}
-      {has('tags') ? (
-        <Form.Item name="tags" label={FIELD_LABELS.tags} {...warn('tags')}>
-          <Select mode="tags" allowClear options={tagOptions} placeholder="回车添加" maxCount={30} />
-        </Form.Item>
-      ) : null}
-    </div>
+    <SimpleGrid cols={{ base: 1, sm: columns }} spacing="md">
+      {has('doc_type') ? <Select label={FIELD_LABELS.doc_type} {...note('doc_type')} clearable searchable data={DOC_TYPE_OPTIONS} placeholder="如 联考、月考、讲义" value={v.doc_type ?? null} onChange={(x) => set('doc_type')(x as DocType | null)} /> : null}
+      {has('subject_codes') ? <MultiSelect label={FIELD_LABELS.subject_codes} {...note('subject_codes')} clearable searchable data={SUBJECT_OPTIONS} placeholder="选择学科" value={v.subject_codes ?? []} onChange={(x) => form.setFieldValue('subject_codes', x as SubjectCode[])} /> : null}
+      {has('grade') ? <Select label={FIELD_LABELS.grade} {...note('grade')} clearable data={GRADE_OPTIONS} placeholder="选择年级" value={v.grade ?? null} onChange={(x) => set('grade')(x as Grade | null)} /> : null}
+      {has('cohort') ? <Select label={FIELD_LABELS.cohort} {...note('cohort')} description={locked.includes('cohort') ? '人工设定，AI 不会改动' : '毕业年份，如 2025 届高三'} clearable data={cohortOptions().map((o) => ({ value: String(o.value), label: o.label }))} placeholder="选择届别" value={v.cohort ? String(v.cohort) : null} onChange={(x) => set('cohort')(x ? Number(x) : null)} /> : null}
+      {has('term') ? <Select label={FIELD_LABELS.term} {...note('term')} clearable data={TERM_OPTIONS} placeholder="上 / 下学期" value={v.term ?? null} onChange={(x) => set('term')(x as Term | null)} /> : null}
+      {has('region') ? <Select label={FIELD_LABELS.region} {...note('region')} clearable searchable data={regionOptions} placeholder="如 浙江、新高考I卷" value={v.region ?? null} onChange={set('region')} /> : null}
+      {has('organization') ? <Autocomplete label={FIELD_LABELS.organization} {...note('organization')} data={orgOptions} placeholder="学校或联盟的规范全称" value={v.organization ?? ''} onChange={(x) => form.setFieldValue('organization', x || undefined)} /> : null}
+      {has('exam_date') ? <TextInput label={FIELD_LABELS.exam_date} {...note('exam_date')} placeholder="YYYY-MM" maxLength={7} value={v.exam_date ?? ''} error={err('exam_date')} onChange={(e) => form.setFieldValue('exam_date', e.currentTarget.value || undefined)} /> : null}
+      {has('exam_name') ? <TextInput label={FIELD_LABELS.exam_name} {...note('exam_name')} placeholder="试卷上印的考试名称" maxLength={255} value={v.exam_name ?? ''} onChange={(e) => form.setFieldValue('exam_name', e.currentTarget.value || undefined)} /> : null}
+      {has('chapter') ? <TextInput label={FIELD_LABELS.chapter} {...note('chapter')} placeholder="教材章节或知识点" maxLength={255} value={v.chapter ?? ''} onChange={(e) => form.setFieldValue('chapter', e.currentTarget.value || undefined)} /> : null}
+      {has('tags') ? <TagsInput label={FIELD_LABELS.tags} {...note('tags')} data={tagOptions} placeholder="回车添加" maxTags={30} clearable value={v.tags ?? []} onChange={(x) => form.setFieldValue('tags', x)} /> : null}
+    </SimpleGrid>
   );
 }

@@ -58,7 +58,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, AppErrorBounda
   override render() {
     if (this.state.error) {
       return (
-        <div className="app-loading-screen">
+        <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
           <ErrorState error={this.state.error} title="页面加载失败" onRetry={() => window.location.reload()} />
         </div>
       );

@@ -1,11 +1,11 @@
-import { ArrowLeftOutlined } from '@ant-design/icons';
+import { Anchor, Group } from '@mantine/core';
+import { IconArrowLeft } from '@tabler/icons-react';
 import { Link } from 'react-router';
 
 export function BackLink({ to, children }: { to: string; children: string }) {
   return (
-    <Link to={to} className="detail-back-link">
-      <ArrowLeftOutlined />
-      {children}
-    </Link>
+    <Anchor component={Link} to={to} size="sm" c="dimmed" w="fit-content">
+      <Group gap={4} wrap="nowrap"><IconArrowLeft size={16} />{children}</Group>
+    </Anchor>
   );
 }

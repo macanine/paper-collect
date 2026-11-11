@@ -1,31 +1,51 @@
 import type { ReactNode } from 'react';
-import { Card, Skeleton, Statistic, Tag } from 'antd';
-import {
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
-  FileSearchOutlined,
-  FolderOpenOutlined,
-  InboxOutlined,
-  SyncOutlined,
-} from '@ant-design/icons';
+import { Anchor, Group, Paper, Skeleton, SimpleGrid, Stack, Text, ThemeIcon, Title, UnstyledButton } from '@mantine/core';
+import { IconCircleCheck, IconFileSearch, IconFolders, IconHourglass, IconInbox, IconRefresh } from '@tabler/icons-react';
 import { Link } from 'react-router';
 import { formatDateTime } from '../../shared/lib/format';
+import { ItemList, ItemRow } from '../../shared/ui/ItemList';
+import { LinkButton } from '../../shared/ui/LinkButton';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, InlineError } from '../../shared/ui/States';
-import { UploadStatusTag } from '../../shared/ui/StatusTags';
-import { LinkButton } from '../../shared/ui/LinkButton';
+import { Tag, UploadStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
 import { Completeness, PackMeta } from '../packs/PackBadges';
 import { useLibraryStats, useRecentPacks, useRecentUploads } from './queries';
 import { href } from '../../app/routes';
 
-function StatCard({ to, title, value, icon, tone }: { to: string; title: string; value: number | undefined; icon: ReactNode; tone?: 'warning' | 'error' }) {
+function StatCard({ to, title, value, icon, color = 'blue' }: { to: string; title: string; value: number | undefined; icon: ReactNode; color?: string }) {
   return (
-    <Link to={to} className={`stat-card${tone ? ` stat-card--${tone}` : ''}`}>
-      <Card hoverable size="small">
-        <Statistic title={title} value={value ?? '—'} prefix={icon} />
-      </Card>
-    </Link>
+    <UnstyledButton component={Link} to={to}>
+      <Paper p="md" h="100%">
+        <Group gap="md" wrap="nowrap">
+          <ThemeIcon variant="light" color={color} size={40} radius="md">{icon}</ThemeIcon>
+          <Stack gap={0}>
+            <Text size="sm" c="dimmed">{title}</Text>
+            <Text fz={26} fw={600} lh={1.2}>{value ?? '—'}</Text>
+          </Stack>
+        </Group>
+      </Paper>
+    </UnstyledButton>
+  );
+}
+
+function Section({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
+  return (
+    <Stack gap="sm" miw={0}>
+      <Group justify="space-between">
+        <Title order={4}>{title}</Title>
+        {extra}
+      </Group>
+      {children}
+    </Stack>
+  );
+}
+
+function ListSkeleton() {
+  return (
+    <Paper p="md" aria-label="正在加载">
+      <Stack gap="sm"><Skeleton h={14} w="68%" /><Skeleton h={12} /><Skeleton h={12} w="80%" /></Stack>
+    </Paper>
   );
 }
 
@@ -39,94 +59,78 @@ export function DashboardPage() {
   const s = stats.data;
 
   return (
-    <div className="page-stack">
+    <Stack gap="lg">
       <PageHeader
         title="工作台"
         description="查看资料整理进度、最近更新和需要你处理的事项。"
-        extra={canRead ? <LinkButton to="/library">浏览资料库</LinkButton> : null}
+        extra={canRead ? <LinkButton variant="default" to="/library">浏览资料库</LinkButton> : null}
       />
       {stats.error ? <InlineError error={stats.error} /> : null}
 
       {canRead ? (
-        <div className="stat-grid">
-          <StatCard to="/inbox" title="需关注" value={s?.needs_attention} icon={<InboxOutlined />} tone={s && s.needs_attention > 0 ? 'warning' : undefined} />
-          <StatCard to="/inbox?stage=processing" title="AI 整理中" value={s?.processing} icon={<SyncOutlined />} />
-          <StatCard to="/inbox?stage=waiting_ai" title="等待 AI" value={s?.waiting_ai} icon={<ExclamationCircleOutlined />} tone={s && s.waiting_ai > 0 ? 'error' : undefined} />
-          <StatCard to="/library?missing=answers" title="缺答案的试卷" value={s?.missing_answers} icon={<FileSearchOutlined />} />
-          <StatCard to="/library" title="套卷" value={s?.packs} icon={<FolderOpenOutlined />} />
-          <StatCard to="/library" title="已入库文件" value={s?.ready} icon={<CheckCircleOutlined />} />
-        </div>
+        <SimpleGrid cols={{ base: 1, xs: 2, md: 3 }} spacing="md">
+          <StatCard to="/inbox" title="需关注" value={s?.needs_attention} icon={<IconInbox size={22} />} color={s && s.needs_attention > 0 ? 'yellow' : 'blue'} />
+          <StatCard to="/inbox?stage=processing" title="AI 整理中" value={s?.processing} icon={<IconRefresh size={22} />} />
+          <StatCard to="/inbox?stage=waiting_ai" title="等待 AI" value={s?.waiting_ai} icon={<IconHourglass size={22} />} color={s && s.waiting_ai > 0 ? 'red' : 'blue'} />
+          <StatCard to="/library?missing=answers" title="缺答案的试卷" value={s?.missing_answers} icon={<IconFileSearch size={22} />} />
+          <StatCard to="/library" title="套卷" value={s?.packs} icon={<IconFolders size={22} />} />
+          <StatCard to="/library" title="已入库文件" value={s?.ready} icon={<IconCircleCheck size={22} />} color="green" />
+        </SimpleGrid>
       ) : null}
 
       {s && s.attention > 0 && can('storage:read') ? (
-        <Card size="small">
-          存储：{s.attention} 个文件同步需要注意。
-          <Link to="/storage" className="ml-2">
-            查看存储
-          </Link>
-        </Card>
+        <Paper p="sm" px="md">
+          <Text size="sm">存储：{s.attention} 个文件同步需要注意。<Anchor component={Link} to="/storage" ml="xs" size="sm">查看存储</Anchor></Text>
+        </Paper>
       ) : null}
 
-      <div className="dashboard-columns">
+      <SimpleGrid cols={{ base: 1, md: canRead && canUpload ? 2 : 1 }} spacing="lg">
         {canRead ? (
-          <Card title="最近更新的套卷" extra={<Link to="/library">全部</Link>}>
-            {packs.isPending ? (
-              <div className="dashboard-list-loading" aria-label="正在加载最近套卷">
-                <Skeleton active title={{ width: '68%' }} paragraph={{ rows: 2 }} />
-              </div>
-            ) : packs.data?.items.length ? (
-              <ul className="dashboard-list">
+          <Section title="最近更新的套卷" extra={<Anchor component={Link} to="/library" size="sm">全部</Anchor>}>
+            {packs.isPending ? <ListSkeleton /> : packs.data?.items.length ? (
+              <ItemList>
                 {packs.data.items.map((pack) => (
-                  <li key={pack.id} className="dashboard-list__item">
-                    <Link to={href.pack(pack.id)} className="dashboard-list__title">
-                      {pack.title}
-                    </Link>
-                    <div className="dashboard-list__meta">
-                      <PackMeta pack={pack} />
-                      <Completeness pack={pack} />
-                    </div>
-                  </li>
+                  <ItemRow
+                    key={pack.id}
+                    main={
+                      <Stack gap={4}>
+                        <Anchor component={Link} to={href.pack(pack.id)} fw={600} c="inherit" truncate>{pack.title}</Anchor>
+                        <Group gap="sm" wrap="wrap"><PackMeta pack={pack} /><Completeness pack={pack} /></Group>
+                      </Stack>
+                    }
+                  />
                 ))}
-              </ul>
-            ) : (
-              <EmptyState description="还没有资料，把文件拖到页面任意位置即可导入" />
-            )}
-          </Card>
+              </ItemList>
+            ) : <Paper><EmptyState description="还没有资料，把文件拖到页面任意位置即可导入" /></Paper>}
+          </Section>
         ) : null}
         {canUpload ? (
-          <Card title="最近导入" extra={<Link to="/imports">导入中心</Link>}>
-            {uploads.isPending ? (
-              <div className="dashboard-list-loading" aria-label="正在加载最近导入">
-                <Skeleton active title={{ width: '68%' }} paragraph={{ rows: 2 }} />
-              </div>
-            ) : uploads.data?.items.length ? (
-              <ul className="dashboard-list">
+          <Section title="最近导入" extra={<Anchor component={Link} to="/imports" size="sm">导入中心</Anchor>}>
+            {uploads.isPending ? <ListSkeleton /> : uploads.data?.items.length ? (
+              <ItemList>
                 {uploads.data.items.map((upload) => (
-                  <li key={upload.id} className="dashboard-list__item dashboard-list__item--upload">
-                    <div className="dashboard-list__content">
-                      <Link to={href.upload(upload.id)} className="dashboard-list__title">
-                        {upload.title}
-                      </Link>
-                      <span className="dashboard-list__meta-text">
-                        {formatDateTime(upload.created_at)}
-                        {upload.status === 'completed' ? (
-                          <>
-                            {' · '}新增 {upload.new_count} · 已存在 {upload.duplicate_count}
-                            {upload.skipped.length > 0 ? <Tag>跳过 {upload.skipped.length}</Tag> : null}
-                          </>
-                        ) : null}
-                      </span>
-                    </div>
-                    <UploadStatusTag status={upload.status} />
-                  </li>
+                  <ItemRow
+                    key={upload.id}
+                    main={
+                      <Stack gap={4}>
+                        <Anchor component={Link} to={href.upload(upload.id)} fw={600} c="inherit" truncate>{upload.title}</Anchor>
+                        <Group gap={6}>
+                          <Text size="sm" c="dimmed">
+                            {formatDateTime(upload.created_at)}
+                            {upload.status === 'completed' ? ` · 新增 ${upload.new_count} · 已存在 ${upload.duplicate_count}` : ''}
+                          </Text>
+                          {upload.status === 'completed' && upload.skipped.length > 0 ? <Tag>跳过 {upload.skipped.length}</Tag> : null}
+                        </Group>
+                      </Stack>
+                    }
+                    aside={<UploadStatusTag status={upload.status} />}
+                  />
                 ))}
-              </ul>
-            ) : (
-              <EmptyState description="暂无导入" />
-            )}
-          </Card>
+              </ItemList>
+            ) : <Paper><EmptyState description="暂无导入" /></Paper>}
+          </Section>
         ) : null}
-      </div>
-    </div>
+      </SimpleGrid>
+    </Stack>
   );
 }

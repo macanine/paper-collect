@@ -1,21 +1,21 @@
-import { Tag, Tooltip } from 'antd';
+import { Group, Text, Tooltip } from '@mantine/core';
 import type { Pack } from '../../shared/api/types';
 import { GRADE_LABELS, SUBJECT_LABELS } from '../../shared/lib/labels';
-import { DocTypeTag, StageTag } from '../../shared/ui/StatusTags';
+import { DocTypeTag, StageTag, Tag } from '../../shared/ui/StatusTags';
 
 /** 试卷类套卷的齐全度：试题 / 答案 / 答题卡。 */
 export function Completeness({ pack }: { pack: Pick<Pack, 'is_exam' | 'has_questions' | 'has_answers' | 'has_answer_sheet'> }) {
   if (!pack.is_exam) return null;
   return (
-    <span className="completeness" aria-label="齐全度">
-      <Tooltip title={pack.has_questions ? '有试题' : '缺试题'}>
-        <Tag color={pack.has_questions ? 'success' : 'default'}>{pack.has_questions ? '✓' : '✗'} 试题</Tag>
+    <Group gap={6} wrap="nowrap" aria-label="齐全度">
+      <Tooltip label={pack.has_questions ? '有试题' : '缺试题'}>
+        <span><Tag color={pack.has_questions ? 'success' : 'default'}>{pack.has_questions ? '✓' : '✗'} 试题</Tag></span>
       </Tooltip>
-      <Tooltip title={pack.has_answers ? '有答案' : '缺答案'}>
-        <Tag color={pack.has_answers ? 'success' : 'warning'}>{pack.has_answers ? '✓' : '✗'} 答案</Tag>
+      <Tooltip label={pack.has_answers ? '有答案' : '缺答案'}>
+        <span><Tag color={pack.has_answers ? 'success' : 'warning'}>{pack.has_answers ? '✓' : '✗'} 答案</Tag></span>
       </Tooltip>
       {pack.has_answer_sheet ? <Tag color="success">✓ 答题卡</Tag> : null}
-    </span>
+    </Group>
   );
 }
 
@@ -30,10 +30,10 @@ export function PackMeta({ pack }: { pack: Pack }) {
     pack.exam_date,
   ].filter(Boolean);
   return (
-    <span className="pack-meta">
+    <Group gap={6} wrap="nowrap" miw={0}>
       <DocTypeTag type={pack.doc_type} />
       {pack.stage !== 'ready' ? <StageTag stage={pack.stage} /> : null}
-      <span className="pack-meta__text">{bits.join(' · ') || '未编目'}</span>
-    </span>
+      <Text size="sm" c="dimmed" truncate>{bits.join(' · ') || '未编目'}</Text>
+    </Group>
   );
 }

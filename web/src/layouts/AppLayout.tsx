@@ -1,16 +1,10 @@
 import { memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { App as AntdApp, Avatar, Badge, Button, Drawer, Dropdown, Tooltip } from 'antd';
-import type { MenuProps } from 'antd';
 import {
-  BookOutlined,
-  CloudUploadOutlined,
-  LogoutOutlined,
-  MenuFoldOutlined,
-  MenuOutlined,
-  MenuUnfoldOutlined,
-  SearchOutlined,
-} from '@ant-design/icons';
+  ActionIcon, Anchor, AppShell, Avatar, Badge, Breadcrumbs, Burger, Button, Group, Kbd, Menu, NavLink, ScrollArea, Stack, Text, Tooltip, UnstyledButton,
+} from '@mantine/core';
+import { useDisclosure, useLocalStorage } from '@mantine/hooks';
+import { IconBook2, IconCloudUpload, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLogout, IconSearch } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { NAV_SECTION_LABELS, resolveLocation, ROUTES, SETTINGS, SETTINGS_NAV, type NavSection } from '../app/routes';
 import { getLibraryStats } from '../features/materials/api';
@@ -21,6 +15,7 @@ import { useAuth } from '../features/auth/AuthContext';
 import type { Scope } from '../shared/api/types';
 import { USER_ROLE_LABELS } from '../shared/lib/labels';
 import { NetworkActivity } from '../shared/ui/NetworkActivity';
+import { message } from '../shared/ui/feedback';
 import { FullPageLoading, LoadingState } from '../shared/ui/States';
 import { CommandPalette, useCommandShortcut } from './CommandPalette';
 import { qk } from '../app/queryKeys';
@@ -37,16 +32,6 @@ interface NavGroup {
   key: NavSection;
   label: string;
   items: NavItem[];
-}
-
-const COLLAPSE_KEY = 'paper-collect:sidebar-collapsed';
-
-function readCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(COLLAPSE_KEY) === '1';
-  } catch {
-    return false;
-  }
 }
 
 function useNavigation(can: (scope: Scope) => boolean): NavGroup[] {
@@ -78,72 +63,61 @@ interface SidebarProps {
 
 const Sidebar = memo(function Sidebar({ groups, activeKey, attention, collapsed = false, onNavigate }: SidebarProps) {
   return (
-    <div className="app-sidebar__inner">
-      <Link to="/" className="app-brand" onClick={onNavigate} aria-label="返回工作台">
-        <span className="app-brand__mark" aria-hidden="true">
-          <BookOutlined />
-        </span>
-        {collapsed ? null : (
-          <span className="app-brand__copy">
-            <span className="app-brand__title">中学资料库</span>
-            <span className="app-brand__subtitle">Paper Collect</span>
-          </span>
-        )}
+    <Stack gap="md" h="100%" p={collapsed ? 'xs' : 'sm'}>
+      <Link to="/" onClick={onNavigate} aria-label="返回工作台" style={{ textDecoration: 'none', color: 'inherit' }}>
+        <Group gap="sm" wrap="nowrap" px={collapsed ? 0 : 'xs'} py={6} justify={collapsed ? 'center' : 'flex-start'}>
+          <Avatar color="blue" variant="filled" radius="md" size={34}><IconBook2 size={20} /></Avatar>
+          {collapsed ? null : (
+            <Stack gap={0}>
+              <Text fw={600} size="sm" lh={1.3}>中学资料库</Text>
+              <Text size="xs" c="dimmed" lh={1.3}>Paper Collect</Text>
+            </Stack>
+          )}
+        </Group>
       </Link>
-      <nav className="app-nav" aria-label="主导航">
-        {groups.map((group) => (
-          <section key={group.key} className="app-nav__section">
-            {collapsed ? null : <div className="app-nav__heading">{group.label}</div>}
-            <div className="app-nav__items">
+      <ScrollArea flex={1} type="auto" offsetScrollbars>
+        <Stack gap="md" component="nav" aria-label="主导航">
+          {groups.map((group) => (
+            <Stack key={group.key} gap={2}>
+              {collapsed ? null : <Text size="xs" c="dimmed" fw={600} px="xs" pb={2}>{group.label}</Text>}
               {group.items.map((item) => {
                 const active = item.path === activeKey;
                 const showBadge = item.badge === 'attention' && attention > 0;
                 const link = (
-                  <Link
+                  <NavLink
                     key={item.path}
+                    component={Link}
                     to={item.path}
-                    className={`app-nav__link${active ? ' is-active' : ''}`}
+                    active={active}
                     aria-current={active ? 'page' : undefined}
                     aria-label={collapsed ? item.label : undefined}
                     onClick={onNavigate}
                     onMouseEnter={() => void item.preload?.()}
                     onFocus={() => void item.preload?.()}
-                  >
-                    <span className="app-nav__icon" aria-hidden="true">
-                      {collapsed && showBadge ? <Badge dot>{item.icon}</Badge> : item.icon}
-                    </span>
-                    {collapsed ? null : <span className="app-nav__label">{item.label}</span>}
-                    {!collapsed && showBadge ? (
-                      <span className="app-nav__badge" aria-label={`${attention} 个需关注文件`}>
-                        <Badge count={attention} size="small" overflowCount={999} />
-                      </span>
-                    ) : null}
-                  </Link>
+                    label={collapsed ? undefined : item.label}
+                    leftSection={item.icon}
+                    rightSection={!collapsed && showBadge ? <Badge size="sm" color="red" variant="filled" aria-label={`${attention} 个需关注文件`}>{attention > 999 ? '999+' : attention}</Badge> : undefined}
+                    styles={{ root: { borderRadius: 'var(--mantine-radius-md)', justifyContent: collapsed ? 'center' : undefined }, section: collapsed ? { margin: 0 } : undefined }}
+                    variant="light"
+                  />
                 );
-                return collapsed ? (
-                  <Tooltip key={item.path} title={item.label} placement="right">
-                    {link}
-                  </Tooltip>
-                ) : (
-                  link
-                );
+                return collapsed ? <Tooltip key={item.path} label={item.label} position="right">{link}</Tooltip> : link;
               })}
-            </div>
-          </section>
-        ))}
-      </nav>
-    </div>
+            </Stack>
+          ))}
+        </Stack>
+      </ScrollArea>
+    </Stack>
   );
 });
 
 const HeaderUploadButton = memo(function HeaderUploadButton() {
   const { openDialog } = useUploads();
   return (
-    <span className="app-header__upload">
-      <Button aria-label="导入资料" icon={<CloudUploadOutlined />} onClick={openDialog}>
-        <span className="app-header__upload-label">导入资料</span>
-      </Button>
-    </span>
+    <>
+      <Button visibleFrom="sm" leftSection={<IconCloudUpload size={16} />} onClick={openDialog}>导入资料</Button>
+      <ActionIcon hiddenFrom="sm" size={32} variant="filled" aria-label="导入资料" onClick={openDialog}><IconCloudUpload size={18} /></ActionIcon>
+    </>
   );
 });
 
@@ -184,10 +158,9 @@ function AppFrame() {
   const attention = stats.data?.needs_attention ?? 0;
   const navigate = useNavigate();
   const location = useLocation();
-  const { message } = AntdApp.useApp();
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileOpened, mobile] = useDisclosure(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [collapsed, setCollapsed] = useLocalStorage({ key: 'paper-collect:sidebar-collapsed', defaultValue: false, getInitialValueInEffect: false });
   const groups = useNavigation(can);
   const where = resolveLocation(location.pathname);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -195,23 +168,13 @@ function AppFrame() {
   useCommandShortcut(openPalette);
 
   useEffect(() => {
-    setMobileNavOpen(false);
+    mobile.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
   useEffect(() => {
     document.title = `${where.detail ?? where.title} · 中学资料库`;
   }, [where.detail, where.title]);
-
-  const toggleCollapsed = () => {
-    setCollapsed((value) => {
-      try {
-        window.localStorage.setItem(COLLAPSE_KEY, value ? '0' : '1');
-      } catch {
-        // 无痕模式等禁用存储时只影响本次会话。
-      }
-      return !value;
-    });
-  };
 
   const handleLogout = async () => {
     try {
@@ -222,107 +185,66 @@ function AppFrame() {
     }
   };
 
-  const accountItems = useMemo<MenuProps['items']>(
-    () => [
-      { key: 'identity', disabled: true, label: user ? `${user.username} · ${USER_ROLE_LABELS[user.role]}` : '当前账户' },
-      { type: 'divider' },
-      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
-    ],
-    [user],
-  );
-
   return (
-    <div className={`app-shell${collapsed ? ' is-collapsed' : ''}`}>
-      <aside className="app-sidebar">
-        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} collapsed={collapsed} />
-        <button
-          type="button"
-          className="app-sidebar__toggle"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
-          aria-expanded={!collapsed}
-        >
-          {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-        </button>
-      </aside>
-
-      <Drawer
-        open={mobileNavOpen}
-        onClose={() => setMobileNavOpen(false)}
-        placement="left"
-        size={312}
-        title="主导航"
-        closable={{ 'aria-label': '关闭导航' }}
-        rootClassName="app-mobile-drawer"
-        styles={{ body: { padding: 0 } }}
-      >
-        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} onNavigate={() => setMobileNavOpen(false)} />
-      </Drawer>
-
-      <div className="app-main">
-        <header className="app-header">
-          <div className="app-header__context">
-            <button
-              type="button"
-              className="app-icon-button app-mobile-trigger"
-              aria-label="打开导航"
-              aria-expanded={mobileNavOpen}
-              onClick={() => setMobileNavOpen(true)}
-            >
-              <MenuOutlined />
-            </button>
-            <nav className="app-breadcrumb" aria-label="当前位置">
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{ width: collapsed ? 68 : 232, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
+      padding={{ base: 'sm', sm: 'lg' }}
+      bg="gray.0"
+    >
+      <AppShell.Header>
+        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap" miw={0}>
+            <Burger opened={mobileOpened} onClick={mobile.toggle} hiddenFrom="sm" size="sm" aria-label="打开导航" />
+            <ActionIcon visibleFrom="sm" variant="subtle" color="gray" onClick={() => setCollapsed((v) => !v)} aria-label={collapsed ? '展开侧栏' : '收起侧栏'}>
+              {collapsed ? <IconLayoutSidebarLeftExpand size={20} /> : <IconLayoutSidebarLeftCollapse size={20} />}
+            </ActionIcon>
+            <Breadcrumbs separator="/" aria-label="当前位置" style={{ flexWrap: 'nowrap', minWidth: 0 }}>
               {where.detail ? (
-                <>
-                  <Link to={where.navKey || '/'} className="app-breadcrumb__current">{where.title}</Link>
-                  <span className="app-breadcrumb__separator" aria-hidden="true">/</span>
-                  <span className="app-breadcrumb__detail" aria-current="page">{where.detail}</span>
-                </>
-              ) : (
-                <span className="app-breadcrumb__current" aria-current="page">{where.title}</span>
-              )}
-            </nav>
-          </div>
-
-          <div className="app-header__actions">
+                <Anchor component={Link} to={where.navKey || '/'} size="sm" c="dimmed">{where.title}</Anchor>
+              ) : null}
+              <Text size="sm" fw={600} aria-current="page" truncate>{where.detail ?? where.title}</Text>
+            </Breadcrumbs>
+          </Group>
+          <Group gap="sm" wrap="nowrap">
             {can('audit:read') ? <NetworkActivity /> : null}
-            <button type="button" className="app-header__search" onClick={openPalette} aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K">
-              <SearchOutlined />
-              <span>搜索或跳转</span>
-              <kbd className="app-header__kbd">⌘K</kbd>
-            </button>
+            <UnstyledButton visibleFrom="md" onClick={openPalette} aria-label="打开命令面板" aria-keyshortcuts="Control+K Meta+K" style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 'var(--mantine-radius-md)', padding: '0 10px', height: 32, minWidth: 220 }}>
+              <Group gap="xs" justify="space-between" h="100%">
+                <Group gap={6}><IconSearch size={15} color="var(--mantine-color-dimmed)" /><Text size="sm" c="dimmed">搜索或跳转</Text></Group>
+                <Kbd size="xs">⌘K</Kbd>
+              </Group>
+            </UnstyledButton>
+            <ActionIcon hiddenFrom="md" variant="default" size={32} onClick={openPalette} aria-label="打开命令面板"><IconSearch size={16} /></ActionIcon>
             {can('uploads:write') ? <HeaderUploadButton /> : null}
             {user ? (
-              <Dropdown
-                trigger={['click']}
-                placement="bottomRight"
-                menu={{
-                  items: accountItems,
-                  onClick: ({ key }) => {
-                    if (key === 'logout') void handleLogout();
-                  },
-                }}
-              >
-                <button type="button" className="app-account" aria-label="打开账户菜单">
-                  <Avatar size={32} className="app-account__avatar">
-                    {user.username.slice(0, 1).toUpperCase()}
-                  </Avatar>
-                </button>
-              </Dropdown>
+              <Menu position="bottom-end" width={200}>
+                <Menu.Target>
+                  <UnstyledButton aria-label="打开账户菜单"><Avatar color="blue" size={32}>{user.username.slice(0, 1).toUpperCase()}</Avatar></UnstyledButton>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>{user.username} · {USER_ROLE_LABELS[user.role]}</Menu.Label>
+                  <Menu.Divider />
+                  <Menu.Item leftSection={<IconLogout size={14} />} onClick={() => void handleLogout()}>退出登录</Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
             ) : null}
-          </div>
-        </header>
+          </Group>
+        </Group>
+      </AppShell.Header>
 
-        <main className="app-content" id="main-content">
-          <div className="app-content__inner">
-            <Suspense fallback={<LoadingState />}>
-              <Outlet />
-            </Suspense>
-          </div>
-        </main>
-      </div>
+      <AppShell.Navbar>
+        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} collapsed={collapsed && !mobileOpened} onNavigate={mobile.close} />
+      </AppShell.Navbar>
+
+      <AppShell.Main id="main-content">
+        <Stack maw={1440} mx="auto" gap="lg" miw={0}>
+          <Suspense fallback={<LoadingState />}>
+            <Outlet />
+          </Suspense>
+        </Stack>
+      </AppShell.Main>
       <PaletteHost open={paletteOpen} onClose={closePalette} />
-    </div>
+    </AppShell>
   );
 }
 

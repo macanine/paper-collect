@@ -1,25 +1,16 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
-import { Button, Drawer, Table, Tag, Tooltip, Typography } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { ApiOutlined, ClearOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Box, Button, Drawer, Group, Paper, SimpleGrid, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { IconApi, IconBolt, IconTrash } from '@tabler/icons-react';
 import { networkTelemetry, summarizeNetwork, type NetworkSample } from '../api/telemetry';
 import { formatBytes, shortId } from '../lib/format';
-import { useCompactViewport } from '../lib/useCompactViewport';
 import { CopyButton } from './CopyButton';
+import { DataTable, type Column } from './DataTable';
 import { EmptyState } from './States';
+import { Tag } from './StatusTags';
 
-const clockFormatter = new Intl.DateTimeFormat('zh-CN', {
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false,
-});
+const clockFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
-const OPERATION_LABELS: Record<NetworkSample['operation'], string> = {
-  request: 'API',
-  download: '下载',
-  upload: '上传',
-};
+const OPERATION_LABELS: Record<NetworkSample['operation'], string> = { request: 'API', download: '下载', upload: '上传' };
 
 function latencyText(value: number): string {
   if (value < 1) return '<1 ms';
@@ -28,258 +19,114 @@ function latencyText(value: number): string {
 }
 
 function statusTag(sample: NetworkSample) {
-  if (sample.status === 0) return <Tag color="red">连接失败</Tag>;
-  if (sample.status < 400) return <Tag color="green">{sample.status}</Tag>;
-  if (sample.status < 500) return <Tag color="orange">{sample.status}</Tag>;
-  return <Tag color="red">{sample.status}</Tag>;
+  if (sample.status === 0) return <Tag color="error">连接失败</Tag>;
+  if (sample.status < 400) return <Tag color="success">{sample.status}</Tag>;
+  if (sample.status < 500) return <Tag color="warning">{sample.status}</Tag>;
+  return <Tag color="error">{sample.status}</Tag>;
+}
+
+const COLUMNS: Column<NetworkSample>[] = [
+  { key: 'time', title: '时间', width: 84, render: (s) => <Text size="xs" c="dimmed" ff="monospace">{clockFormatter.format(s.startedAt)}</Text> },
+  {
+    key: 'request',
+    title: '请求',
+    render: (s) => (
+      <Stack gap={2} miw={0}>
+        <Group gap="xs" wrap="nowrap">
+          <Tag>{s.method}</Tag>
+          <Text size="xs" ff="monospace" truncate="end" maw={260} title={s.path}>{s.path}</Text>
+        </Group>
+        <Text size="xs" c="dimmed">{OPERATION_LABELS[s.operation]}</Text>
+      </Stack>
+    ),
+  },
+  { key: 'status', title: '结果', width: 90, render: statusTag },
+  {
+    key: 'duration', title: '耗时', width: 90, align: 'right',
+    render: (s) => <Text size="sm" c={s.durationMs >= 3000 ? 'red' : s.durationMs >= 1000 ? 'orange' : undefined}>{latencyText(s.durationMs)}</Text>,
+  },
+  { key: 'bytes', title: '数据', width: 90, align: 'right', render: (s) => <Text size="xs" c="dimmed">{s.bytes === undefined ? '—' : formatBytes(s.bytes)}</Text> },
+  {
+    key: 'rid', title: '请求 ID', width: 170,
+    render: (s) => s.requestId ? (
+      <Group gap={6} wrap="nowrap">
+        <Tooltip label={s.requestId}><Text size="xs" ff="monospace">{shortId(s.requestId)}</Text></Tooltip>
+        <CopyButton value={s.requestId} label="复制" />
+      </Group>
+    ) : <Text size="xs" c="dimmed">—</Text>,
+  },
+];
+
+function Stat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
+  return (
+    <Paper p="sm">
+      <Text size="xs" c="dimmed">{label}</Text>
+      <Text fw={600} fz={22} lh={1.3}>{value}</Text>
+      <Text size="xs" c="dimmed">{hint}</Text>
+    </Paper>
+  );
 }
 
 export function NetworkActivity() {
   const [open, setOpen] = useState(false);
-  const compact = useCompactViewport();
-  const telemetry = useSyncExternalStore(
-    networkTelemetry.subscribe,
-    networkTelemetry.getSnapshot,
-    networkTelemetry.getSnapshot,
-  );
+  const telemetry = useSyncExternalStore(networkTelemetry.subscribe, networkTelemetry.getSnapshot, networkTelemetry.getSnapshot);
   const summary = useMemo(() => summarizeNetwork(telemetry.samples), [telemetry.samples]);
   const recent = useMemo(() => [...telemetry.samples].reverse(), [telemetry.samples]);
   const latest = telemetry.samples.at(-1);
-
-  // These columns are independent of telemetry samples. Keeping them stable avoids
-  // rebuilding the entire table definition every time a request finishes.
-  const desktopColumns = useMemo<ColumnsType<NetworkSample>>(
-    () => [
-      {
-        title: '时间',
-        dataIndex: 'startedAt',
-        key: 'startedAt',
-        width: 82,
-        render: (value: number) => (
-          <span className="tabular-nums text-xs text-slate-500">{clockFormatter.format(value)}</span>
-        ),
-      },
-      {
-        title: '请求',
-        key: 'request',
-        render: (_: unknown, sample) => (
-          <div className="network-request-cell">
-            <div className="flex min-w-0 items-center gap-2">
-              <Tag className="network-method">{sample.method}</Tag>
-              <Typography.Text ellipsis={{ tooltip: sample.path }} className="min-w-0 font-mono text-xs">
-                {sample.path}
-              </Typography.Text>
-            </div>
-            <span className="text-xs text-slate-500">{OPERATION_LABELS[sample.operation]}</span>
-          </div>
-        ),
-      },
-      {
-        title: '结果',
-        key: 'status',
-        width: 90,
-        render: (_: unknown, sample) => statusTag(sample),
-      },
-      {
-        title: '耗时',
-        dataIndex: 'durationMs',
-        key: 'durationMs',
-        width: 88,
-        align: 'right',
-        render: (value: number) => (
-          <span className={`tabular-nums ${value >= 3000 ? 'text-red-600' : value >= 1000 ? 'text-amber-600' : ''}`}>
-            {latencyText(value)}
-          </span>
-        ),
-      },
-      {
-        title: '数据',
-        dataIndex: 'bytes',
-        key: 'bytes',
-        width: 88,
-        align: 'right',
-        render: (value: number | undefined) => (
-          <span className="tabular-nums text-xs text-slate-500">{value === undefined ? '—' : formatBytes(value)}</span>
-        ),
-      },
-      {
-        title: '请求 ID',
-        dataIndex: 'requestId',
-        key: 'requestId',
-        width: 150,
-        render: (value: string | undefined) =>
-          value ? (
-            <div className="flex items-center gap-1">
-              <Tooltip title={value}>
-                <span className="font-mono text-xs">{shortId(value)}</span>
-              </Tooltip>
-              <CopyButton value={value} label="复制" />
-            </div>
-          ) : (
-            <span className="text-xs text-slate-400">—</span>
-          ),
-      },
-    ],
-    [],
-  );
-
-  const compactColumns = useMemo<ColumnsType<NetworkSample>>(
-    () => [
-      {
-        title: '请求',
-        key: 'summary',
-        render: (_: unknown, sample) => (
-          <div className="compact-entity">
-            <div className="compact-entity__heading">
-              <span className="compact-entity__title flex min-w-0 items-center gap-2">
-                <Tag className="network-method">{sample.method}</Tag>
-                <span className="min-w-0 break-all font-mono text-xs">{sample.path}</span>
-              </span>
-              {statusTag(sample)}
-            </div>
-            <div className="compact-entity__meta">
-              <span>{clockFormatter.format(sample.startedAt)}</span>
-              <span>{OPERATION_LABELS[sample.operation]}</span>
-              <span
-                className={`tabular-nums ${sample.durationMs >= 3000 ? 'text-red-600' : sample.durationMs >= 1000 ? 'text-amber-600' : ''}`}
-              >
-                {latencyText(sample.durationMs)}
-              </span>
-              <span className="tabular-nums">
-                {sample.bytes === undefined ? '数据量未知' : formatBytes(sample.bytes)}
-              </span>
-            </div>
-            <div className="compact-entity__links">
-              {sample.requestId ? (
-                <>
-                  <span className="font-mono text-xs text-slate-500">请求 ID {shortId(sample.requestId)}</span>
-                  <CopyButton value={sample.requestId} label="复制" />
-                </>
-              ) : (
-                <span className="text-xs text-slate-400">无请求 ID</span>
-              )}
-            </div>
-          </div>
-        ),
-      },
-    ],
-    [],
-  );
+  const live = telemetry.inflight > 0;
 
   return (
     <>
-      <button
-        type="button"
-        className={`app-observe-button${telemetry.inflight > 0 ? ' is-live' : ''}`}
-        onClick={() => setOpen(true)}
-        aria-label="打开网络与性能观测"
-      >
-        <span className="app-observe-button__icon">
-          {telemetry.inflight > 0 ? <ThunderboltOutlined /> : <ApiOutlined />}
-        </span>
-        <span className="app-observe-button__copy">
-          <span>网络</span>
-          <small>
-            {telemetry.inflight > 0
-              ? `${telemetry.inflight} 项进行中`
-              : latest
-                ? latencyText(latest.durationMs)
-                : '等待请求'}
-          </small>
-        </span>
-      </button>
+      <UnstyledButton onClick={() => setOpen(true)} aria-label="打开网络与性能观测" visibleFrom="lg" style={{ border: '1px solid var(--mantine-color-gray-3)', borderRadius: 'var(--mantine-radius-md)', padding: '0 10px', height: 32 }}>
+        <Group gap={6} h="100%" wrap="nowrap">
+          {live ? <IconBolt size={15} color="var(--mantine-color-blue-6)" /> : <IconApi size={15} color="var(--mantine-color-dimmed)" />}
+          <Text size="xs">网络</Text>
+          <Text size="xs" c="dimmed">{live ? `${telemetry.inflight} 项进行中` : latest ? latencyText(latest.durationMs) : '等待请求'}</Text>
+        </Group>
+      </UnstyledButton>
 
       <Drawer
-        open={open}
+        opened={open}
         onClose={() => setOpen(false)}
-        placement="right"
-        size={720}
-        title={
-          <div className="network-drawer__title">
-            <span>网络与性能</span>
-            <small>当前浏览器会话 · 不记录正文、凭据或查询参数</small>
-          </div>
-        }
-        extra={
-          <Button
-            size="small"
-            icon={<ClearOutlined />}
-            disabled={telemetry.samples.length === 0}
-            onClick={() => networkTelemetry.clear()}
-          >
-            清空
-          </Button>
-        }
-        rootClassName="network-drawer"
+        position="right"
+        size="min(720px, 100vw)"
+        title={<Stack gap={0}><Text fw={600}>网络与性能</Text><Text size="xs" c="dimmed">当前浏览器会话 · 不记录正文、凭据或查询参数</Text></Stack>}
       >
-        <div className="network-summary">
-          <div className="network-summary__item">
-            <span>P95 延迟</span>
-            <strong>{latencyText(summary.p95Ms)}</strong>
-            <small>最近 {summary.sampleCount} 次采样</small>
-          </div>
-          <div className="network-summary__item">
-            <span>成功率</span>
-            <strong>{Math.round(summary.successRate * 100)}%</strong>
-            <small>{summary.errorCount} 次失败</small>
-          </div>
-          <div className="network-summary__item">
-            <span>传输数据</span>
-            <strong>{formatBytes(telemetry.totalBytes)}</strong>
-            <small>响应体与文件总量</small>
-          </div>
-          <div className="network-summary__item">
-            <span>进行中</span>
-            <strong>{telemetry.inflight}</strong>
-            <small>已完成 {telemetry.completed} 次</small>
-          </div>
-        </div>
-
-        <div className="network-latency">
-          <div className="network-latency__heading">
-            <span>延迟轨迹</span>
-            <span>平均 {latencyText(summary.averageMs)} · 中位 {latencyText(summary.medianMs)}</span>
-          </div>
-          <LatencyBars samples={telemetry.samples.slice(-32)} />
-        </div>
-
-        <Table<NetworkSample>
-          rowKey="id"
-          size="small"
-          className={compact ? 'compact-list-table' : undefined}
-          columns={compact ? compactColumns : desktopColumns}
-          dataSource={recent}
-          showHeader={!compact}
-          pagination={false}
-          scroll={compact ? undefined : { x: 660, y: 420 }}
-          locale={{ emptyText: <EmptyState description="发出请求后，这里会显示真实的网络与耗时数据" /> }}
-        />
+        <Stack gap="md">
+          <Group justify="flex-end">
+            <Button size="compact-sm" variant="default" leftSection={<IconTrash size={14} />} disabled={telemetry.samples.length === 0} onClick={() => networkTelemetry.clear()}>清空</Button>
+          </Group>
+          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+            <Stat label="P95 延迟" value={latencyText(summary.p95Ms)} hint={`最近 ${summary.sampleCount} 次采样`} />
+            <Stat label="成功率" value={`${Math.round(summary.successRate * 100)}%`} hint={`${summary.errorCount} 次失败`} />
+            <Stat label="传输数据" value={formatBytes(telemetry.totalBytes)} hint="响应体与文件总量" />
+            <Stat label="进行中" value={telemetry.inflight} hint={`已完成 ${telemetry.completed} 次`} />
+          </SimpleGrid>
+          <Paper p="sm">
+            <Group justify="space-between" mb="xs">
+              <Text size="sm" fw={600}>延迟轨迹</Text>
+              <Text size="xs" c="dimmed">平均 {latencyText(summary.averageMs)} · 中位 {latencyText(summary.medianMs)}</Text>
+            </Group>
+            <LatencyBars samples={telemetry.samples.slice(-32)} />
+          </Paper>
+          <DataTable rows={recent} columns={COLUMNS} rowKey={(s) => s.id} minWidth={640} empty={<EmptyState description="发出请求后，这里会显示真实的网络与耗时数据" />} />
+        </Stack>
       </Drawer>
     </>
   );
 }
 
 function LatencyBars({ samples }: { samples: readonly NetworkSample[] }) {
-  if (samples.length === 0) {
-    return <div className="network-latency__empty">暂无网络采样</div>;
-  }
-  const max = Math.max(1, ...samples.map((sample) => sample.durationMs));
+  if (samples.length === 0) return <Text size="sm" c="dimmed" ta="center" py="md">暂无网络采样</Text>;
+  const max = Math.max(1, ...samples.map((s) => s.durationMs));
   return (
-    <div className="network-latency__bars" aria-label="最近请求延迟柱状图">
-      {samples.map((sample) => {
-        const height = Math.max(4, Math.round((sample.durationMs / max) * 100));
-        return (
-          <Tooltip
-            key={sample.id}
-            title={`${sample.method} ${sample.path} · ${latencyText(sample.durationMs)}${sample.ok ? '' : ' · 失败'}`}
-          >
-            <span
-              className={`network-latency__bar${sample.ok ? '' : ' is-error'}`}
-              style={{ height: `${height}%` }}
-            />
-          </Tooltip>
-        );
-      })}
-    </div>
+    <Group gap={3} align="flex-end" h={72} wrap="nowrap" aria-label="最近请求延迟柱状图">
+      {samples.map((s) => (
+        <Tooltip key={s.id} label={`${s.method} ${s.path} · ${latencyText(s.durationMs)}${s.ok ? '' : ' · 失败'}`}>
+          <Box flex={1} h={`${Math.max(5, Math.round((s.durationMs / max) * 100))}%`} bg={s.ok ? 'blue.4' : 'red.5'} style={{ borderRadius: 2, minWidth: 3 }} />
+        </Tooltip>
+      ))}
+    </Group>
   );
 }
+

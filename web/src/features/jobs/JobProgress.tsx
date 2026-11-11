@@ -1,4 +1,5 @@
-import { Tag, Timeline, Typography } from 'antd';
+import { Group, Stack, Text, Timeline } from '@mantine/core';
+import { Tag } from '../../shared/ui/StatusTags';
 import type { Job } from '../../shared/api/types';
 import { formatBytes, formatDateTime, formatDuration, formatRate } from '../../shared/lib/format';
 
@@ -12,26 +13,27 @@ export function progressText(job: Job): string {
 
 export function JobProgress({ job }: { job: Job }) {
   const logs = job.logs ?? [];
-  if (logs.length === 0) return <Typography.Text type="secondary">{progressText(job)}。此任务没有保存更早的处理记录。</Typography.Text>;
+  if (logs.length === 0) return <Text c="dimmed" size="sm">{progressText(job)}。此任务没有保存更早的处理记录。</Text>;
   const started = new Date(logs[0]?.time ?? job.started_at ?? job.created_at).getTime();
   return (
-    <Timeline items={logs.map((entry) => ({
-      color: entry.level === 'error' ? 'red' : 'blue',
-      content: (
-        <div className="job-log">
-          <div className="job-log__message">
-            {entry.level === 'error' ? <Tag color="red">错误</Tag> : null}
-            <span>{entry.message}</span>
-          </div>
-          <div className="job-log__meta">
-            <span>{formatDateTime(entry.time)}</span>
-            <span>T+{formatDuration(entry.elapsed_ms ?? Math.max(0, new Date(entry.time).getTime() - started))}</span>
-            {entry.duration_ms ? <span>耗时 {formatDuration(entry.duration_ms)}</span> : null}
-          </div>
-          {entry.metrics ? <JobMetrics metrics={entry.metrics} /> : null}
-        </div>
-      ),
-    }))} />
+    <Timeline bulletSize={14} lineWidth={2} active={logs.length}>
+      {logs.map((entry, index) => (
+        <Timeline.Item key={index} color={entry.level === 'error' ? 'red' : 'blue'}>
+          <Stack gap={4}>
+            <Group gap={6} wrap="nowrap" align="flex-start">
+              {entry.level === 'error' ? <Tag color="error">错误</Tag> : null}
+              <Text size="sm">{entry.message}</Text>
+            </Group>
+            <Group gap="md">
+              <Text size="xs" c="dimmed">{formatDateTime(entry.time)}</Text>
+              <Text size="xs" c="dimmed">T+{formatDuration(entry.elapsed_ms ?? Math.max(0, new Date(entry.time).getTime() - started))}</Text>
+              {entry.duration_ms ? <Text size="xs" c="dimmed">耗时 {formatDuration(entry.duration_ms)}</Text> : null}
+            </Group>
+            {entry.metrics ? <JobMetrics metrics={entry.metrics} /> : null}
+          </Stack>
+        </Timeline.Item>
+      ))}
+    </Timeline>
   );
 }
 
@@ -64,12 +66,12 @@ function JobMetrics({ metrics }: { metrics: Record<string, string | number | boo
   const entries = Object.entries(metrics).filter(([key]) => key !== 'duration_ms');
   if (entries.length === 0) return null;
   return (
-    <div className="job-log__metrics">
+    <Group gap={4}>
       {entries.map(([key, value]) => (
         <Tag key={key}>
           {METRIC_LABELS[key] ?? key}：{metricText(key, value)}
         </Tag>
       ))}
-    </div>
+    </Group>
   );
 }

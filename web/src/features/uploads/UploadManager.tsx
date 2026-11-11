@@ -1,3 +1,4 @@
+import { Center, Paper, Stack, Text } from '@mantine/core';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { UploadHints } from '../../shared/api/types';
@@ -271,12 +272,14 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
     <UploadContext.Provider value={value}>
       {children}
       {dragging && !dialogOpen ? (
-        <div className="upload-drop-overlay" aria-hidden="true">
-          <div className="upload-drop-overlay__panel">
-            <strong>松开即可上传</strong>
-            <span>文件、文件夹或压缩包都可以，系统会自动去重、识别和配套</span>
-          </div>
-        </div>
+        <Center aria-hidden="true" pos="fixed" inset={0} bg="rgba(22, 119, 255, 0.08)" style={{ zIndex: 1000, pointerEvents: 'none' }}>
+          <Paper p="xl" shadow="md" style={{ border: '2px dashed var(--mantine-color-blue-6)' }}>
+            <Stack gap={4} align="center">
+              <Text fw={600} size="lg">松开即可上传</Text>
+              <Text size="sm" c="dimmed">文件、文件夹或压缩包都可以，系统会自动去重、识别和配套</Text>
+            </Stack>
+          </Paper>
+        </Center>
       ) : null}
     </UploadContext.Provider>
   );
