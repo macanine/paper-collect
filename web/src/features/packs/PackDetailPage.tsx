@@ -13,7 +13,7 @@ import { BackLink } from '../../shared/ui/BackLink';
 import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { StageTag } from '../../shared/ui/StatusTags';
-import { PackAIPanel } from '../ai/AnalysisPanel';
+import { PackAIPanel } from '../ai/AIPanels';
 import { PURGE_NOTE } from '../trash/TrashPage';
 import { useAuth } from '../auth/AuthContext';
 import { downloadMaterial, updateMaterial } from '../materials/api';

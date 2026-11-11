@@ -14,7 +14,7 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { MaterialStatusTag, PartTag, StageTag, SyncStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
-import { AnalysisPanel } from '../ai/AnalysisPanel';
+import { AnalysisPanel } from '../ai/AIPanels';
 import { IndexPanel } from '../search/IndexPanel';
 import { useDrives, useRefreshShare, useSyncMaterial } from '../storage/queries';
 import { MovePackModal } from '../packs/MovePackModal';

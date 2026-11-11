@@ -1,5 +1,5 @@
 // 清单上传的前端校验，与 docs/API.md「POST /uploads」合同一致（服务端仍会再次校验）。
-import { normalizePath, validateRelativePath } from '../../shared/lib/paths';
+import { normalizePath, validateRelativePath } from './paths';
 
 export const ALLOWED_SUFFIXES = [
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
