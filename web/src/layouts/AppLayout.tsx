@@ -1,10 +1,10 @@
 import { memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import {
-  ActionIcon, Anchor, AppShell, Avatar, Badge, Breadcrumbs, Burger, Button, Group, Kbd, Menu, NavLink, ScrollArea, Stack, Text, Tooltip, UnstyledButton,
+  ActionIcon, Anchor, AppShell, Avatar, Breadcrumbs, Burger, Button, Group, Indicator, Kbd, Menu, NavLink, ScrollArea, Stack, Text, Tooltip, UnstyledButton,
 } from '@mantine/core';
-import { useDisclosure, useLocalStorage } from '@mantine/hooks';
-import { IconBook2, IconCloudUpload, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLogout, IconSearch } from '@tabler/icons-react';
+import { useDisclosure } from '@mantine/hooks';
+import { IconBook2, IconCloudUpload, IconLogout, IconSearch } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { NAV_SECTION_LABELS, resolveLocation, ROUTES, SETTINGS, SETTINGS_NAV, type NavSection } from '../app/routes';
 import { getLibraryStats } from '../features/materials/api';
@@ -57,29 +57,21 @@ interface SidebarProps {
   groups: NavGroup[];
   activeKey: string;
   attention: number;
-  collapsed?: boolean;
   onNavigate?: () => void;
 }
 
-const Sidebar = memo(function Sidebar({ groups, activeKey, attention, collapsed = false, onNavigate }: SidebarProps) {
+const Sidebar = memo(function Sidebar({ groups, activeKey, attention, onNavigate }: SidebarProps) {
   return (
-    <Stack gap="md" h="100%" p={collapsed ? 'xs' : 'sm'}>
+    <Stack gap="md" h="100%" p="xs">
       <Link to="/" onClick={onNavigate} aria-label="返回工作台" style={{ textDecoration: 'none', color: 'inherit' }}>
-        <Group gap="sm" wrap="nowrap" px={collapsed ? 0 : 'xs'} py="xs" justify={collapsed ? 'center' : 'flex-start'}>
-          <Avatar color="blue" variant="filled" radius="md" size={36}><IconBook2 size={20} /></Avatar>
-          {collapsed ? null : (
-            <Stack gap={0}>
-              <Text fw={600} size="md" lh={1.3}>中学资料库</Text>
-              <Text size="xs" c="dimmed" lh={1.3}>Paper Collect</Text>
-            </Stack>
-          )}
+        <Group wrap="nowrap" py="xs" justify="center">
+          <Avatar color="blue" variant="filled" radius="md" size={40}><IconBook2 size={20} /></Avatar>
         </Group>
       </Link>
-      <ScrollArea flex={1} type="auto" offsetScrollbars>
-        <Stack gap="lg" component="nav" aria-label="主导航">
+      <ScrollArea flex={1} type="never">
+        <Stack gap="md" component="nav" aria-label="主导航">
           {groups.map((group) => (
-            <Stack key={group.key} gap={4}>
-              {collapsed ? null : <Text size="xs" c="dimmed" fw={600} px="sm" pb={4}>{group.label}</Text>}
+            <Stack key={group.key} gap={4} align="center">
               {group.items.map((item) => {
                 const active = item.path === activeKey;
                 const showBadge = item.badge === 'attention' && attention > 0;
@@ -90,18 +82,16 @@ const Sidebar = memo(function Sidebar({ groups, activeKey, attention, collapsed 
                     to={item.path}
                     active={active}
                     aria-current={active ? 'page' : undefined}
-                    aria-label={collapsed ? item.label : undefined}
+                    aria-label={item.label}
                     onClick={onNavigate}
                     onMouseEnter={() => void item.preload?.()}
                     onFocus={() => void item.preload?.()}
-                    label={collapsed ? undefined : item.label}
-                    leftSection={item.icon}
-                    rightSection={!collapsed && showBadge ? <Badge color="red" variant="filled" aria-label={`${attention} 个需关注文件`}>{attention > 999 ? '999+' : attention}</Badge> : undefined}
-                    styles={{ root: { borderRadius: 'var(--mantine-radius-md)', justifyContent: collapsed ? 'center' : undefined }, section: collapsed ? { margin: 0 } : undefined }}
+                    leftSection={showBadge ? <Indicator color="red" size={8} offset={2} aria-label={`${attention} 个需关注文件`}>{item.icon}</Indicator> : item.icon}
+                    styles={{ root: { width: 40, height: 40, padding: 0, borderRadius: 'var(--mantine-radius-md)', justifyContent: 'center' }, section: { margin: 0 }, body: { display: 'none' } }}
                     variant="light"
                   />
                 );
-                return collapsed ? <Tooltip key={item.path} label={item.label} position="right">{link}</Tooltip> : link;
+                return <Tooltip key={item.path} label={item.label} position="right">{link}</Tooltip>;
               })}
             </Stack>
           ))}
@@ -160,7 +150,6 @@ function AppFrame() {
   const location = useLocation();
   const [mobileOpened, mobile] = useDisclosure(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [collapsed, setCollapsed] = useLocalStorage({ key: 'paper-collect:sidebar-collapsed', defaultValue: false, getInitialValueInEffect: false });
   const groups = useNavigation(can);
   const where = resolveLocation(location.pathname);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -188,7 +177,7 @@ function AppFrame() {
   return (
     <AppShell
       header={{ height: 64 }}
-      navbar={{ width: collapsed ? 72 : 240, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
+      navbar={{ width: 72, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
       padding={{ base: 'md', sm: 'xl' }}
       bg="gray.0"
     >
@@ -196,9 +185,6 @@ function AppFrame() {
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
           <Group gap="sm" wrap="nowrap" miw={0}>
             <Burger opened={mobileOpened} onClick={mobile.toggle} hiddenFrom="sm" size="sm" aria-label="打开导航" />
-            <ActionIcon visibleFrom="sm" size={40} variant="subtle" color="gray" onClick={() => setCollapsed((v) => !v)} aria-label={collapsed ? '展开侧栏' : '收起侧栏'}>
-              {collapsed ? <IconLayoutSidebarLeftExpand size={20} /> : <IconLayoutSidebarLeftCollapse size={20} />}
-            </ActionIcon>
             <Breadcrumbs separator="/" aria-label="当前位置" style={{ flexWrap: 'nowrap', minWidth: 0 }}>
               {where.detail ? (
                 <Anchor component={Link} to={where.navKey || '/'} size="sm" c="dimmed">{where.title}</Anchor>
@@ -233,7 +219,7 @@ function AppFrame() {
       </AppShell.Header>
 
       <AppShell.Navbar>
-        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} collapsed={collapsed && !mobileOpened} onNavigate={mobile.close} />
+        <Sidebar groups={groups} activeKey={where.navKey} attention={attention} onNavigate={mobile.close} />
       </AppShell.Navbar>
 
       <AppShell.Main id="main-content">
