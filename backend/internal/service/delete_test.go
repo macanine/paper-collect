@@ -107,7 +107,7 @@ func TestPurgeExpiredTrashOnlyTakesExpiredAndAudits(t *testing.T) {
 	live := e.material("在用", "在用.pdf", []byte("live"), nil)
 	e.trash(old.PackID, recent.PackID)
 	if err := e.conn.Unscoped().Model(&model.Pack{}).Where("id = ?", old.PackID).
-		Update("deleted_at", time.Now().Add(-trashRetention-time.Hour)).Error; err != nil {
+		Update("deleted_at", time.Now().UTC().Add(-trashRetention-time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
 	n, err := e.svc.PurgeExpiredTrash(e.ctx)

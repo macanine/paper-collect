@@ -22,6 +22,11 @@ func Open(driver, dsn string) (*gorm.DB, error) {
 	cfg := &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
 		SkipDefaultTransaction: true,
+		// Keep GORM-generated timestamps in the same UTC representation used by
+		// service.Now. SQLite stores time values without an offset, so mixing
+		// local soft-delete timestamps with UTC retention cutoffs shifts expiry
+		// by the host's timezone offset.
+		NowFunc: func() time.Time { return time.Now().UTC() },
 	}
 	var (
 		conn *gorm.DB
