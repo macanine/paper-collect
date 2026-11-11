@@ -14,6 +14,7 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { StageTag } from '../../shared/ui/StatusTags';
 import { PackAIPanel } from '../ai/AnalysisPanel';
+import { PURGE_NOTE } from '../trash/TrashPage';
 import { useAuth } from '../auth/AuthContext';
 import { downloadMaterial, updateMaterial } from '../materials/api';
 import { invalidateLibrary } from '../materials/queries';
@@ -23,9 +24,11 @@ import { downloadPack } from './api';
 import { AddToCollectionModal } from './BulkModals';
 import { MovePackModal } from './MovePackModal';
 import { Completeness, PackMeta } from './PackBadges';
-import { PackCatalogFields, formToUpdate, packToForm, type CatalogFormValues } from './PackCatalogFields';
+import { PackCatalogFields, formToUpdate, packToForm, type CatalogField, type CatalogFormValues } from './PackCatalogFields';
 import { usePack, usePackFacets, usePackMutations, useUpdatePack } from './queries';
 import { href } from '../../app/routes';
+
+const EDITABLE_FIELDS: (CatalogField | 'title')[] = ['title', 'doc_type', 'subject_codes', 'grade', 'cohort', 'term', 'region', 'organization', 'exam_date', 'exam_name', 'chapter', 'tags'];
 
 function CatalogView({ pack }: { pack: Pack }) {
   const dash = (value: string | number | undefined) => (value ? value : '—');
@@ -82,26 +85,35 @@ export function PackDetailPage() {
   const trashed = pack.deleted_at !== null;
 
   const startEdit = () => {
+    form.resetFields(); // clears touched state from an earlier edit
     form.setFieldsValue({ ...packToForm(pack), description: pack.description || undefined });
     setEditing(true);
   };
   const save = async () => {
     const values = await form.validateFields();
+    // Only fields the person changed are sent: each one sent becomes locked.
+    const touched = EDITABLE_FIELDS.filter((field) => form.isFieldTouched(field));
+    const patch = formToUpdate(values, touched);
+    if (form.isFieldTouched('description')) patch.description = values.description ?? '';
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
     try {
-      await update.mutateAsync({
-        ...formToUpdate(values, ['title', 'doc_type', 'subject_codes', 'grade', 'cohort', 'term', 'region', 'organization', 'exam_date', 'exam_name', 'chapter', 'tags']),
-        description: values.description ?? '',
-      });
-      message.success('已保存，文件名已按新信息更新');
+      await update.mutateAsync(patch);
+      message.success(touched.length > 0 ? '已保存，修改的字段由人工锁定' : '已保存');
       setEditing(false);
     } catch (error) {
       message.error(errorMessage(error));
     }
   };
+  const unlockAll = () =>
+    run(() => update.mutateAsync({ unlock_fields: pack.locked_fields }), 'AI 将重新编目这套资料');
   const changePart = async (member: PackMember, part: Part) => {
     try {
       await updateMaterial(member.id, { part });
       invalidateLibrary(queryClient);
+      message.success(`已将 ${member.file_name} 设为${PART_OPTIONS.find((o) => o.value === part)?.label ?? part}`);
     } catch (error) {
       message.error(errorMessage(error));
     }
@@ -216,14 +228,14 @@ export function PackDetailPage() {
                 <Button type="primary" onClick={() => void run(() => restore.mutateAsync([pack.id]), '已恢复')}>
                   恢复
                 </Button>
-                <Popconfirm title="彻底删除后无法恢复，确定？" okButtonProps={{ danger: true }} onConfirm={() => void run(() => purge.mutateAsync([pack.id]), '已彻底删除', () => navigate('/trash', { replace: true }))}>
+                <Popconfirm title="彻底删除后无法恢复，确定？" description={PURGE_NOTE} okButtonProps={{ danger: true }} onConfirm={() => void run(() => purge.mutateAsync([pack.id]), '已彻底删除', () => navigate('/trash', { replace: true }))}>
                   <Button danger>彻底删除</Button>
                 </Popconfirm>
               </Space>
             ) : null
           ) : (
             <Space wrap>
-              <Button type="primary" icon={<DownloadOutlined />} loading={downloading} onClick={() => void downloadAll()}>
+              <Button type={editing ? 'default' : 'primary'} icon={<DownloadOutlined />} loading={downloading} onClick={() => void downloadAll()}>
                 {pack.members.length > 1 ? '下载整套' : '下载'}
               </Button>
               {canWrite ? (
@@ -274,9 +286,18 @@ export function PackDetailPage() {
       <Card
         title="编目信息"
         extra={
-          <Typography.Text type="secondary">
-            {pack.stage === 'processing' ? 'AI 整理中' : pack.locked_fields.length > 0 ? `${pack.locked_fields.length} 个字段由人工设定，AI 不会改动` : '由 AI 编目'}
-          </Typography.Text>
+          <Space size={4}>
+            <Typography.Text type="secondary">
+              {pack.stage === 'processing' ? 'AI 整理中' : pack.locked_fields.length > 0 ? `人工锁定 ${pack.locked_fields.length} 个字段` : '由 AI 编目'}
+            </Typography.Text>
+            {canWrite && !trashed && !editing && pack.locked_fields.length > 0 ? (
+              <Popconfirm title="交还 AI？" description="人工设定的字段解除锁定，AI 会重新编目这套资料。" onConfirm={() => void unlockAll()}>
+                <Button type="link" size="small" loading={update.isPending}>
+                  交还 AI
+                </Button>
+              </Popconfirm>
+            ) : null}
+          </Space>
         }
       >
         {editing ? (
@@ -288,6 +309,7 @@ export function PackDetailPage() {
             <Form.Item name="description" label="备注">
               <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} maxLength={4000} />
             </Form.Item>
+            <Typography.Paragraph type="secondary">只有你修改过的字段会被锁定，其余字段继续由 AI 维护。部件修改立即生效。</Typography.Paragraph>
             <Space>
               <Button type="primary" loading={update.isPending} onClick={() => void save()}>
                 保存

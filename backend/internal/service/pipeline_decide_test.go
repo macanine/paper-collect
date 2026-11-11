@@ -129,3 +129,33 @@ func TestCommitDecideForPurgedPackSucceedsQuietly(t *testing.T) {
 		t.Fatalf("job = %s", j.Status)
 	}
 }
+
+func TestUnlockFieldsHandsBackToAI(t *testing.T) {
+	e := newSyncEnv(t)
+	m := e.material("卷", "卷.pdf", []byte("unlock"), nil)
+	grade := "grade10"
+	if _, err := e.svc.UpdatePack(e.ctx, syncAdmin, m.PackID, PackPatch{Grade: &grade}); err != nil {
+		t.Fatal(err)
+	}
+	if locked := e.pack(m.PackID).Locked(); !locked[catalogai.FieldGrade] || len(locked) != 1 {
+		t.Fatalf("locked after editing grade = %v, want only grade", locked)
+	}
+	if _, err := e.svc.UpdatePack(e.ctx, syncAdmin, m.PackID, PackPatch{Grade: &grade, UnlockFields: []string{catalogai.FieldGrade}}); err == nil {
+		t.Fatal("setting and unlocking one field must be refused")
+	}
+	if _, err := e.svc.UpdatePack(e.ctx, syncAdmin, m.PackID, PackPatch{UnlockFields: []string{"description"}}); err == nil {
+		t.Fatal("unlocking a non-lockable field must be refused")
+	}
+	if _, err := e.svc.UpdatePack(e.ctx, syncAdmin, m.PackID, PackPatch{UnlockFields: []string{catalogai.FieldGrade}}); err != nil {
+		t.Fatal(err)
+	}
+	p := e.pack(m.PackID)
+	if len(p.Locked()) != 0 || p.Grade != grade {
+		t.Fatalf("after unlock: locked=%v grade=%s (value stays until the AI decides)", p.Locked(), p.Grade)
+	}
+	var pending int64
+	e.conn.Model(&model.Job{}).Where("kind = ? AND pack_id = ? AND status = ?", model.JobDecide, m.PackID, model.JobPending).Count(&pending)
+	if pending != 1 || e.reload(m).Stage != model.StageProcessing {
+		t.Fatalf("unlock should queue a decision: pending=%d stage=%s", pending, e.reload(m).Stage)
+	}
+}

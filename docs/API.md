@@ -95,7 +95,7 @@ GET 分页，200 Page<APIKey>。POST `{"name":"检索 Agent","scopes":["material
 
 ### PATCH /packs/{id}（materials:write）
 
-JSON 部分更新，可含 title/doc_type/subject_codes/grade/term/cohort/region/organization/exam_date/exam_name/chapter/tags/description，至少一个字段，枚举与长度按数据字典校验。PATCH 中出现的编目字段加入 `locked_fields`，之后 AI 编目不再改动；`title` 非空会锁定标题并同步全部成员文件名，空串解除标题锁定、恢复自动命名。`region` 必须取固定地区列表；`organization` 与 `tags` 按名称词典归一：已有写法（含别名）映射到规范名称，新名称建立人工锁定的条目。200 Pack。
+JSON 部分更新，可含 title/doc_type/subject_codes/grade/term/cohort/region/organization/exam_date/exam_name/chapter/tags/description/unlock_fields，至少一个字段，枚举与长度按数据字典校验。PATCH 中出现的编目字段加入 `locked_fields`，之后 AI 编目不再改动；`title` 非空会锁定标题并同步全部成员文件名，空串解除标题锁定、恢复自动命名。`unlock_fields`（字段名取自 `locked_fields`）把这些字段交还 AI：解除锁定并重新安排编目，字段值保留到 AI 给出新结果；同一请求不能既修改又交还同一字段，否则 400。批量修改不接受 `unlock_fields`。`region` 必须取固定地区列表；`organization` 与 `tags` 按名称词典归一：已有写法（含别名）映射到规范名称，新名称建立人工锁定的条目。200 Pack。
 
 ### POST /packs/bulk（materials:write）
 

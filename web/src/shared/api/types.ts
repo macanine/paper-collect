@@ -37,6 +37,8 @@ export interface PackUpdate {
   chapter?: string;
   tags?: string[];
   description?: string;
+  /** 交还 AI 的人工锁定字段；AI 会重新编目这套资料。 */
+  unlock_fields?: string[];
 }
 
 export interface MaterialUpdate {

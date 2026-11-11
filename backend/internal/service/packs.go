@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,10 +80,13 @@ type PackPatch struct {
 	Chapter      *string
 	Tags         *[]string
 	Description  *string
+	// UnlockFields hands human-set fields back to the AI; the set is
+	// decided again so the AI fills them.
+	UnlockFields []string
 }
 
 func (pt PackPatch) empty() bool {
-	return pt.Title == nil && pt.DocType == nil && pt.SubjectCodes == nil && pt.Grade == nil &&
+	return len(pt.UnlockFields) == 0 && pt.Title == nil && pt.DocType == nil && pt.SubjectCodes == nil && pt.Grade == nil &&
 		pt.Term == nil && pt.Cohort == nil && pt.Region == nil && pt.Organization == nil &&
 		pt.ExamDate == nil && pt.ExamName == nil && pt.Chapter == nil && pt.Tags == nil && pt.Description == nil
 }
@@ -291,9 +295,15 @@ func (s *Service) UpdatePack(ctx context.Context, p auth.Principal, id string, p
 	var renamed []string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
-		renamed, err = s.applyPackPatchTx(tx, id, pt, true, s.now())
+		now := s.now()
+		renamed, err = s.applyPackPatchTx(tx, id, pt, true, now)
 		if err != nil {
 			return err
+		}
+		if len(pt.UnlockFields) > 0 {
+			if err := s.redecideTx(tx, id, now); err != nil {
+				return err
+			}
 		}
 		return s.audit(tx, p, "pack.update", id)
 	})
@@ -314,6 +324,9 @@ func (s *Service) BulkUpdatePacks(ctx context.Context, p auth.Principal, ids []s
 	}
 	if pt.Title != nil {
 		return 0, apperr.Validation("批量修改不能设置标题")
+	}
+	if len(pt.UnlockFields) > 0 {
+		return 0, apperr.Validation("批量修改不能解除锁定")
 	}
 	var renamed []string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -372,6 +385,9 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 	lock(catalogai.FieldExamName, pt.ExamName != nil)
 	lock(catalogai.FieldChapter, pt.Chapter != nil)
 	lock(catalogai.FieldTags, pt.Tags != nil)
+	if err := unlockFields(locked, pt); err != nil {
+		return nil, err
+	}
 	lockedList := make([]string, 0, len(locked))
 	for _, f := range catalogai.LockableFields {
 		if locked[f] {
@@ -513,6 +529,29 @@ func (s *Service) applyPackPatchTx(tx *gorm.DB, id string, pt PackPatch, manual 
 		}
 	}
 	return ids, nil
+}
+
+// unlockFields removes the fields in pt.UnlockFields from locked. A field
+// cannot be set and handed back to the AI in the same request.
+func unlockFields(locked map[string]bool, pt PackPatch) error {
+	set := map[string]bool{
+		catalogai.FieldTitle: pt.Title != nil, catalogai.FieldDocType: pt.DocType != nil,
+		catalogai.FieldSubjects: pt.SubjectCodes != nil, catalogai.FieldGrade: pt.Grade != nil,
+		catalogai.FieldTerm: pt.Term != nil, catalogai.FieldCohort: pt.Cohort != nil,
+		catalogai.FieldRegion: pt.Region != nil, catalogai.FieldOrganization: pt.Organization != nil,
+		catalogai.FieldExamDate: pt.ExamDate != nil, catalogai.FieldExamName: pt.ExamName != nil,
+		catalogai.FieldChapter: pt.Chapter != nil, catalogai.FieldTags: pt.Tags != nil,
+	}
+	for _, f := range pt.UnlockFields {
+		if !slices.Contains(catalogai.LockableFields, f) {
+			return apperr.Validation("unlock_fields 含有不可锁定的字段：" + f)
+		}
+		if set[f] {
+			return apperr.Validation("同一字段不能同时修改和交还 AI：" + f)
+		}
+		delete(locked, f)
+	}
+	return nil
 }
 
 // MergePacks moves every file of the source packs into the target pack and

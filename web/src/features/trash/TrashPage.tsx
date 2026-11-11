@@ -13,6 +13,9 @@ import { href } from '../../app/routes';
 
 const RETENTION_DAYS = 30;
 
+/** 彻底删除只清理本机文件；已上传到云盘的副本保留为规则外副本。 */
+export const PURGE_NOTE = '本机原件会被删除；云盘上的副本保留，可在“存储 → 副本”中删除。';
+
 function daysLeft(deletedAt: string | null): number {
   if (!deletedAt) return RETENTION_DAYS;
   const elapsed = (Date.now() - new Date(deletedAt).getTime()) / 86_400_000;
@@ -46,7 +49,7 @@ export function TrashPage() {
             <Button type="primary" onClick={() => void run('restore', selected)}>
               恢复
             </Button>
-            <Popconfirm title="彻底删除后无法恢复，确定？" okButtonProps={{ danger: true }} onConfirm={() => void run('purge', selected)}>
+            <Popconfirm title="彻底删除后无法恢复，确定？" description={PURGE_NOTE} okButtonProps={{ danger: true }} onConfirm={() => void run('purge', selected)}>
               <Button danger>彻底删除</Button>
             </Popconfirm>
           </Space>
@@ -86,7 +89,7 @@ export function TrashPage() {
                     <Button type="link" size="small" onClick={() => void run('restore', [pack.id])}>
                       恢复
                     </Button>
-                    <Popconfirm title="彻底删除？" okButtonProps={{ danger: true }} onConfirm={() => void run('purge', [pack.id])}>
+                    <Popconfirm title="彻底删除？" description={PURGE_NOTE} okButtonProps={{ danger: true }} onConfirm={() => void run('purge', [pack.id])}>
                       <Button type="link" size="small" danger>
                         彻底删除
                       </Button>

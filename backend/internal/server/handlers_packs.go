@@ -33,6 +33,7 @@ type packPatchRequest struct {
 	Chapter      *string   `json:"chapter"`
 	Tags         *[]string `json:"tags"`
 	Description  *string   `json:"description"`
+	UnlockFields []string  `json:"unlock_fields"`
 }
 
 func (r packPatchRequest) patch() service.PackPatch {
@@ -40,6 +41,7 @@ func (r packPatchRequest) patch() service.PackPatch {
 		Title: r.Title, DocType: r.DocType, SubjectCodes: r.SubjectCodes, Grade: r.Grade, Term: r.Term,
 		Cohort: r.Cohort, Region: r.Region, Organization: r.Organization, ExamDate: r.ExamDate,
 		ExamName: r.ExamName, Chapter: r.Chapter, Tags: r.Tags, Description: r.Description,
+		UnlockFields: r.UnlockFields,
 	}
 }
 
@@ -147,26 +149,12 @@ func (s *Server) handleGetPack(c *gin.Context) {
 }
 
 func (s *Server) handlePatchPack(c *gin.Context) {
-	var req struct {
-		Title        *string   `json:"title"`
-		DocType      *string   `json:"doc_type"`
-		SubjectCodes *[]string `json:"subject_codes"`
-		Grade        *string   `json:"grade"`
-		Term         *string   `json:"term"`
-		Cohort       *int      `json:"cohort"`
-		Region       *string   `json:"region"`
-		Organization *string   `json:"organization"`
-		ExamDate     *string   `json:"exam_date"`
-		ExamName     *string   `json:"exam_name"`
-		Chapter      *string   `json:"chapter"`
-		Tags         *[]string `json:"tags"`
-		Description  *string   `json:"description"`
-	}
+	var req packPatchRequest
 	if err := decodeJSON(c, &req); err != nil {
 		respondError(c, err)
 		return
 	}
-	view, err := s.svc.UpdatePack(c.Request.Context(), principal(c), c.Param("id"), packPatchRequest(req).patch())
+	view, err := s.svc.UpdatePack(c.Request.Context(), principal(c), c.Param("id"), req.patch())
 	if err != nil {
 		respondError(c, err)
 		return

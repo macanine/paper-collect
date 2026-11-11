@@ -420,12 +420,7 @@ func (s *Service) RedecidePack(ctx context.Context, p auth.Principal, id string)
 		if count == 0 {
 			return apperr.NotFound("套卷不存在")
 		}
-		now := s.now()
-		if err := tx.Model(&model.Material{}).Where("pack_id = ? AND ai_step <> ?", id, model.StepRead).
-			Updates(map[string]any{"stage": model.StageProcessing, "ai_step": model.StepDecide, "updated_at": now}).Error; err != nil {
-			return err
-		}
-		if err := s.enqueueDecideTx(tx, id, now); err != nil {
+		if err := s.redecideTx(tx, id, s.now()); err != nil {
 			return err
 		}
 		return s.audit(tx, p, "pack.ai_redecide", id)
@@ -435,6 +430,16 @@ func (s *Service) RedecidePack(ctx context.Context, p auth.Principal, id string)
 	}
 	s.notify()
 	return nil
+}
+
+// redecideTx puts a set's settled members back into the decide step and
+// queues a decision; members still being read keep their own step.
+func (s *Service) redecideTx(tx *gorm.DB, id string, now time.Time) error {
+	if err := tx.Model(&model.Material{}).Where("pack_id = ? AND ai_step <> ?", id, model.StepRead).
+		Updates(map[string]any{"stage": model.StageProcessing, "ai_step": model.StepDecide, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	return s.enqueueDecideTx(tx, id, now)
 }
 
 // PackAIView is a set's latest decision plus each member's card.
