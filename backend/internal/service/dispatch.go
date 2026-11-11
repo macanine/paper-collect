@@ -326,6 +326,17 @@ func (s *Service) holdLease(job model.Job, cancel context.CancelCauseFunc) func(
 	}
 }
 
+// stopLocalExecution cancels a job this process is running. The lease is
+// already gone, so the executor stops without requeueing or reporting.
+func (s *Service) stopLocalExecution(jobID string) {
+	s.leaseMu.Lock()
+	lease := s.leases[jobID]
+	s.leaseMu.Unlock()
+	if lease != nil {
+		lease.cancel(errLeaseLost)
+	}
+}
+
 func (s *Service) renewLoop() {
 	for {
 		timer := time.NewTimer(s.workerSettings().HeartbeatInterval)

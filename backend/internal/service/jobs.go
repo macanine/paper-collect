@@ -160,6 +160,40 @@ func (s *Service) RetryJob(ctx context.Context, p auth.Principal, id string) (mo
 	return result, nil
 }
 
+// CancelJob stops a pending or running job at once. The job ends as failed
+// with the same terminal state as a final failure of its kind; RetryJob runs
+// it again. A running execution loses its lease: on the master it is stopped
+// immediately, a worker node stops it at its next heartbeat, and any result
+// that still arrives is refused by the lease fence.
+func (s *Service) CancelJob(ctx context.Context, p auth.Principal, id string) (model.Job, error) {
+	var result model.Job
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job model.Job
+		if err := tx.Where("id = ?", id).First(&job).Error; err != nil {
+			return apperr.NotFound("任务不存在")
+		}
+		if job.Status != model.JobPending && job.Status != model.JobRunning {
+			return apperr.Conflict("只有排队中或运行中的任务可以取消")
+		}
+		if err := s.stopJobTx(tx, job, s.now(), "已由管理员取消"); err != nil {
+			return err
+		}
+		if err := tx.Where("id = ?", job.ID).First(&result).Error; err != nil {
+			return err
+		}
+		return s.audit(tx, p, "job.cancel", job.ID)
+	})
+	if err != nil {
+		if _, ok := err.(*apperr.Error); ok {
+			return model.Job{}, err
+		}
+		return model.Job{}, apperr.Internal(err)
+	}
+	s.stopLocalExecution(id)
+	s.notify() // follow-up work (fallback grouping, decisions) may now be queued
+	return result, nil
+}
+
 var errNoJob = errors.New("no pending job")
 
 const claimAttempts = 64

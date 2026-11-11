@@ -62,6 +62,15 @@ func (s *Server) handleRetryJob(c *gin.Context) {
 	s.respondData(c, http.StatusAccepted, toJob(job))
 }
 
+func (s *Server) handleCancelJob(c *gin.Context) {
+	job, err := s.svc.CancelJob(c.Request.Context(), principal(c), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, toJob(job))
+}
+
 // handleRetryFailedJobs re-queues every failed job, optionally of one kind.
 func (s *Server) handleRetryFailedJobs(c *gin.Context) {
 	var req struct {

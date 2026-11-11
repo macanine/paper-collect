@@ -176,7 +176,7 @@ pending → processing → completed / failed
 
 副本状态为 `pending`（待处理）、`uploading`（上传中）、`moving`（移动中）、`ready`（已就绪）、`failed`（失败）、`skipped`（已跳过：网盘停用、超过大小上限或扩展名不允许）和 `orphaned`（规则外）。
 
-任务状态为 `pending → running → succeeded / failed`。在「处理日志」中可查看归档、复制、AI 阅读、分组、编目、名称去重和索引进度。暂时性失败会自动按 1 分钟到 12 小时的间隔重试，最多 6 次；具有 `jobs:write` 权限的用户可以重试单个或全部失败任务。
+任务状态为 `pending → running → succeeded / failed`。在「处理日志」中可查看归档、复制、AI 阅读、分组、编目、名称去重和索引进度。暂时性失败会自动按 1 分钟到 12 小时的间隔重试，最多 6 次；具有 `jobs:write` 权限的用户可以重试单个或全部失败任务，也可以取消排队中或运行中的任务：任务按失败结束，相关文件进入失败后的状态，之后仍可重试。
 
 ## 9. 节点
 

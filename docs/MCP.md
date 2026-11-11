@@ -159,6 +159,7 @@ curl -sS http://127.0.0.1:8080/mcp \
 | `jobs_stats` | `GET /api/v1/jobs/stats` | `jobs:read` |
 | `jobs_get` | `GET /api/v1/jobs/:id` | `jobs:read` |
 | `jobs_retry` | `POST /api/v1/jobs/:id/retry` | `jobs:write` |
+| `jobs_cancel` | `POST /api/v1/jobs/:id/cancel` | `jobs:write` |
 | `jobs_retry_failed` | `POST /api/v1/jobs/retry-failed` | `jobs:write` |
 | `storage_drives_list` | `GET /api/v1/storage/drives` | `storage:read` |
 | `storage_drives_create` | `POST /api/v1/storage/drives` | `storage:write` |

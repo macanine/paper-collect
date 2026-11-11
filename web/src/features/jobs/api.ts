@@ -25,6 +25,10 @@ export function getJob(id: string): Promise<Job> {
   return apiRequest<Job>(`/jobs/${segment(id)}`);
 }
 
+export function cancelJob(id: string): Promise<Job> {
+  return apiRequest<Job>(`/jobs/${segment(id)}/cancel`, { method: 'POST' });
+}
+
 export function retryJob(id: string): Promise<Job> {
   return apiRequest<Job>(`/jobs/${segment(id)}/retry`, { method: 'POST' });
 }

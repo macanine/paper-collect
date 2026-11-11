@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Job } from '../../shared/api/types';
-import { getJob, listJobs, retryJob, type JobListParams } from './api';
-import { qk } from '../../app/queryKeys';
+import { cancelJob, getJob, listJobs, retryJob, type JobListParams } from './api';
+import { invalidateLibrary, qk } from '../../app/queryKeys';
 
 const JOB_POLL_MS = 3000;
 
@@ -31,6 +31,19 @@ export function useJobDetail(id: string) {
     queryFn: () => getJob(id),
     enabled: id !== '',
     refetchInterval: (query) => (isTerminal(query.state.data) ? false : JOB_POLL_MS),
+  });
+}
+
+/** 取消会让资料、套卷、副本或导入进入失败后的状态，因此一并刷新资料视图。 */
+export function useCancelJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => cancelJob(id),
+    onSuccess: (job) => {
+      queryClient.setQueryData(jobKeys.detail(job.id), job);
+      void queryClient.invalidateQueries({ queryKey: jobKeys.all });
+      invalidateLibrary(queryClient);
+    },
   });
 }
 

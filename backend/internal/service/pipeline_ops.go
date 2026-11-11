@@ -199,10 +199,22 @@ func (s *Service) wakeWaitingAI(ctx context.Context) {
 // poisonJob fails a job that keeps losing its lease (for example because it
 // crashes the process) instead of requeueing it forever.
 func (s *Service) poisonJob(tx *gorm.DB, job model.Job, now time.Time) error {
-	const message = "任务多次中断，已停止自动重试"
+	return s.stopJobTx(tx, job, now, "任务多次中断，已停止自动重试")
+}
+
+// stopJobTx ends a pending or running job as failed without its lease and
+// applies the same terminal projection as a final failure of that kind, so no
+// file, set, replica or upload is left waiting on it. Clearing the lease
+// fences off any execution still running: its result is refused.
+func (s *Service) stopJobTx(tx *gorm.DB, job model.Job, now time.Time, message string) error {
+	var current model.Job
+	if err := tx.Select("id", "log_json").Where("id = ?", job.ID).First(&current).Error; err != nil {
+		return err
+	}
 	if err := tx.Model(&model.Job{}).Where("id = ?", job.ID).Updates(map[string]any{
 		"status": model.JobFailed, "error": message, "progress_message": "处理失败：" + message,
-		"lease_owner": "", "lease_until": nil, "heartbeat_at": nil, "finished_at": now, "updated_at": now,
+		"lease_owner": "", "lease_until": nil, "heartbeat_at": nil, "next_attempt_at": nil, "finished_at": now, "updated_at": now,
+		"log_json": appendJobLog(current.LogJSON, model.JobLog{Time: now, Level: "error", Message: message}),
 	}).Error; err != nil {
 		return err
 	}
@@ -238,7 +250,10 @@ func (s *Service) poisonJob(tx *gorm.DB, job model.Job, now time.Time) error {
 		if job.ReplicaID == "" {
 			return nil
 		}
-		return tx.Model(&model.Replica{}).Where("id = ?", job.ReplicaID).
+		// Only a transfer in progress fails; an orphaned copy being deleted
+		// stays orphaned.
+		return tx.Model(&model.Replica{}).Where("id = ? AND status IN ?", job.ReplicaID,
+			[]string{model.ReplicaPending, model.ReplicaUploading, model.ReplicaMoving}).
 			Updates(map[string]any{"status": model.ReplicaFailed, "error": message, "updated_at": now}).Error
 	case model.JobIngest:
 		if job.UploadID == "" {
@@ -246,6 +261,12 @@ func (s *Service) poisonJob(tx *gorm.DB, job model.Job, now time.Time) error {
 		}
 		return tx.Model(&model.Upload{}).Where("id = ? AND job_id = ?", job.UploadID, job.ID).
 			Updates(map[string]any{"status": model.UploadFailed, "updated_at": now}).Error
+	case model.JobIndex:
+		if job.MaterialID == "" {
+			return nil
+		}
+		return tx.Model(&model.MaterialIndexState{}).Where("material_id = ? AND job_id = ?", job.MaterialID, job.ID).
+			Updates(map[string]any{"status": model.AnalysisFailed, "error": message, "updated_at": now}).Error
 	}
 	return nil
 }

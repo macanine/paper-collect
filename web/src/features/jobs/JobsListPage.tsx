@@ -13,6 +13,7 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { JobKindTag, JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
+import { CancelJobButton } from './CancelJobButton';
 import { useJobsList, useRetryJob } from './queries';
 import { progressText } from './JobProgress';
 import { href } from '../../app/routes';
@@ -148,6 +149,8 @@ export function JobsListPage() {
               重试
             </Button>
           </Popconfirm>
+        ) : canRetry ? (
+          <CancelJobButton job={job} size="small" />
         ) : null,
     },
   ];
@@ -208,6 +211,7 @@ export function JobsListPage() {
                 </Button>
               </Popconfirm>
             ) : null}
+            {canRetry ? <CancelJobButton job={job} size="small" /> : null}
           </div>
         </div>
       ),

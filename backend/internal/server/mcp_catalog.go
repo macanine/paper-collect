@@ -207,6 +207,7 @@ var mcpOperations = func() []mcpOperation {
 		op("jobs_stats", "统计任务总数及状态。", "GET", "/jobs/stats", model.ScopeJobsRead),
 		op("jobs_get", "读取任务进度与日志。", "GET", "/jobs/:id", model.ScopeJobsRead, id),
 		op("jobs_retry", "重试任务。", "POST", "/jobs/:id/retry", model.ScopeJobsWrite, id),
+		op("jobs_cancel", "取消排队中或运行中的任务；任务按失败结束，可再重试。", "POST", "/jobs/:id/cancel", model.ScopeJobsWrite, id),
 		op("jobs_retry_failed", "重新排队所有失败任务，可用 kind 只重试一类（analyze/group/decide/entity/replicate/index/ingest）。", "POST", "/jobs/retry-failed", model.ScopeJobsWrite, bodyS("kind")),
 		op("storage_drives_list", "读取网盘及其能力、副本统计。", "GET", "/storage/drives", model.ScopeStorageRead),
 		op("storage_drives_create", "添加网盘；网盘只描述连接方式，上传什么由同步规则决定。", "POST", "/storage/drives", model.ScopeStorageWrite, mustFields(joined(drive, bodyS("kind")), "name kind")),

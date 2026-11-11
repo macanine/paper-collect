@@ -227,6 +227,10 @@ JSON：
 
 仅 failed 可重试，202 Job（同 id，status=pending，attempts 归零）。其他状态 409。AI 任务重试时相关文件回到 processing。秘密错误须脱敏。
 
+### POST /jobs/{id}/cancel（jobs:write）
+
+取消 pending 或 running 的任务，200 Job（`status=failed`，`error="已由管理员取消"`）；其他状态 409。任务按该类型最终失败处理：阅读任务让文件按文件名继续并标记 metadata_only，分组任务退回单文件成套，编目任务标记 ai_failed，复制任务的传输中副本标记 failed（规则外副本保持不变），索引状态标记 failed，归档任务的上传会话标记 failed。主端正在执行的任务立即停止；从端在下一次心跳的 `lost_job_ids` 中收到并停止，之后提交的结果因租约失效返回 409。取消后可用 retry 重新排队。审计 job.cancel。
+
 ### POST /jobs/retry-failed（jobs:write）
 
 JSON 可空或 `{"kind":"analyze"}`；重新排队最多 500 个失败任务（可只选一类）。202 data=`{"count":n}`。

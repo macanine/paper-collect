@@ -146,6 +146,7 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.GET("/jobs/stats", s.requireScope(model.ScopeJobsRead), s.handleJobStats)
 	authGroup.GET("/jobs/:id", s.requireScope(model.ScopeJobsRead), s.handleGetJob)
 	authGroup.POST("/jobs/:id/retry", s.requireScope(model.ScopeJobsWrite), s.handleRetryJob)
+	authGroup.POST("/jobs/:id/cancel", s.requireScope(model.ScopeJobsWrite), s.handleCancelJob)
 	authGroup.POST("/jobs/retry-failed", s.requireScope(model.ScopeJobsWrite), s.handleRetryFailedJobs)
 
 	authGroup.GET("/storage/drives", s.requireScope(model.ScopeStorageRead), s.handleListDrives)

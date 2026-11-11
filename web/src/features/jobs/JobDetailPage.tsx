@@ -10,6 +10,7 @@ import { BackLink } from '../../shared/ui/BackLink';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { JobStatusTag } from '../../shared/ui/StatusTags';
 import { useAuth } from '../auth/AuthContext';
+import { CancelJobButton } from './CancelJobButton';
 import { useJobDetail, useRetryJob } from './queries';
 import { JobProgress, progressText } from './JobProgress';
 import { href } from '../../app/routes';
@@ -73,6 +74,7 @@ export function JobDetailPage() {
                 </Button>
               </Popconfirm>
             ) : null}
+            {can('jobs:write') ? <CancelJobButton job={job} /> : null}
           </div>
         }
       />
