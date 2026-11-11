@@ -339,6 +339,8 @@ func buildMineruZip(t *testing.T) []byte {
 	_, _ = md.Write([]byte("# 2026 高三数学一轮练习\n\n学生版，函数与导数。"))
 	cl, _ := zw.Create("content_list.json")
 	_, _ = cl.Write([]byte(`[
+		{"type":"text","text":"2026 高三数学一轮练习","text_level":1,"page_idx":0},
+		{"type":"text","text":"学生版，函数与导数。","page_idx":0},
 		{"type":"text","text":"1. 已知函数 f(x)=x^2+2x，求最小值。","page_idx":0},
 		{"type":"text","text":"2. 求函数 f(x)=x^2 的导数。","page_idx":1}
 	]`))

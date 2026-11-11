@@ -186,6 +186,9 @@ func (s *Service) commitAnalyze(ctx context.Context, job model.Job, out *jobexec
 	var meta jobexec.CardMeta
 	_ = json.Unmarshal([]byte(latest.PayloadJSON), &meta)
 	cardIn := meta.CardInput(out.Markdown, out.PageCount, out.MetadataOnly)
+	if out.Document != "" {
+		cardIn = meta.CardInputFromDocument(out.Document, out.PageCount, out.MetadataOnly)
+	}
 	card, problems, err := catalogai.CheckCard(out.Content, cardIn)
 	if err != nil {
 		card, problems = catalogai.Card{}, []catalogai.Problem{catalogai.NotJSON()}

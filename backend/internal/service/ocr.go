@@ -383,7 +383,7 @@ func (s *Service) saveParsedText(ctx context.Context, materialID string, p *jobe
 // textParseKey identifies one OCR configuration, so cached parsed text is
 // reused only while the provider, model and DOCX handling are unchanged.
 func textParseKey(provider model.OCRProvider, mediaType string) string {
-	value := "ocr-text-v2:" + strings.TrimSpace(provider.Kind) + ":" +
+	value := "ocr-text-v3:" + strings.TrimSpace(provider.Kind) + ":" +
 		strings.TrimSpace(provider.BaseURL) + ":" + strings.TrimSpace(provider.Model)
 	if provider.Kind == model.OCRKindRapidOCR && mediaType == blob.MediaTypes[blob.KindDOCX] {
 		value += ":docx-native-v2"

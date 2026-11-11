@@ -257,6 +257,9 @@ func (c *decideChecker) files() {
 			if d.AnswerStartPage < 1 || (m.PageCount > 0 && d.AnswerStartPage > m.PageCount) {
 				c.add(critical("answer_page", "files", "文件 %s 为 full，answer_start_page 必须在 1 到 %d 之间", f.ID, max(m.PageCount, 1)))
 				d.AnswerStartPage = 0
+			} else if d.AnswerStartPage == 1 && m.PageCount != 1 {
+				c.add(critical("answer_page_first", "files", "文件 %s 为 full，答案区不可能从第 1 页开始；请改用该文件阅读记录中的答案起始页，若整份文件都是答案请改 role", f.ID))
+				d.AnswerStartPage = 0
 			}
 		}
 		if d.Role != model.PartFull {

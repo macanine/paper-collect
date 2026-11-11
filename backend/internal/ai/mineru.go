@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -298,7 +299,7 @@ func parseMineruZip(raw []byte) (Result, error) {
 	var markdown string
 	var markdownSize int
 	markdownBytes := 0
-	var contentList []byte
+	var contentList, contentListV2, layout []byte
 	var images [][]byte
 	type imageEntry struct {
 		name string
@@ -317,7 +318,25 @@ func parseMineruZip(raw []byte) (Result, error) {
 		if file.FileInfo().IsDir() {
 			continue
 		}
-		if strings.HasSuffix(lower, "content_list.json") || strings.HasSuffix(lower, "content_list_v2.json") {
+		// The detailed result: layout.json / *_middle.json carry every page with
+		// its blocks, content_list_v2.json groups blocks per page, and
+		// content_list.json is the flat fallback.
+		switch {
+		case strings.HasSuffix(lower, "layout.json") || strings.HasSuffix(lower, "middle.json"):
+			if layout == nil {
+				if data, err := readZipEntry(file, mineruMaxZipBytes/4); err == nil {
+					layout = data
+				}
+			}
+			continue
+		case strings.HasSuffix(lower, "content_list_v2.json"):
+			if contentListV2 == nil {
+				if data, err := readZipEntry(file, mineruMaxMarkdown); err == nil {
+					contentListV2 = data
+				}
+			}
+			continue
+		case strings.HasSuffix(lower, "content_list.json"):
 			if contentList == nil {
 				if data, err := readZipEntry(file, mineruMaxMarkdown); err == nil {
 					contentList = data
@@ -367,12 +386,22 @@ func parseMineruZip(raw []byte) (Result, error) {
 	if allPages == 0 {
 		allPages = len(images)
 	}
-	pages := parseContentListPages(contentList)
+	pages, total := parseLayoutPages(layout)
 	if len(pages) == 0 {
-		pages = []PageText{{PageNo: 1, Text: markdown}}
-		allPages = 1
-	} else if len(pages) > allPages {
-		allPages = len(pages)
+		pages = parseContentListV2Pages(contentListV2)
+		total = len(pages)
+	}
+	if len(pages) == 0 {
+		pages = parseContentListPages(contentList)
+		total = 0
+		for _, page := range pages {
+			total = max(total, page.PageNo)
+		}
+	}
+	// Page structure is never invented: without it the pages stay empty and
+	// the page count is only what the result itself shows.
+	if total > 0 {
+		allPages = total
 	}
 	return Result{Markdown: markdown, Images: images, Pages: pages, PageCount: allPages}, nil
 }
@@ -384,9 +413,13 @@ func parseContentListPages(raw []byte) []PageText {
 		return nil
 	}
 	var blocks []struct {
-		Type    string `json:"type"`
-		Text    string `json:"text"`
-		PageIdx *int   `json:"page_idx"`
+		Type         string   `json:"type"`
+		Text         string   `json:"text"`
+		ListItems    []string `json:"list_items"`
+		TableCaption []string `json:"table_caption"`
+		TableBody    string   `json:"table_body"`
+		ImgCaption   []string `json:"img_caption"`
+		PageIdx      *int     `json:"page_idx"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return nil
@@ -396,11 +429,21 @@ func parseContentListPages(raw []byte) []PageText {
 		if block.PageIdx == nil || *block.PageIdx < 0 {
 			continue
 		}
-		text := strings.TrimSpace(block.Text)
-		if text == "" {
+		parts := []string{block.Text}
+		parts = append(parts, block.ListItems...)
+		parts = append(parts, block.TableCaption...)
+		parts = append(parts, strings.Join(strings.Fields(htmlTag.ReplaceAllString(block.TableBody, " ")), " "))
+		parts = append(parts, block.ImgCaption...)
+		var texts []string
+		for _, part := range parts {
+			if part = strings.TrimSpace(part); part != "" {
+				texts = append(texts, part)
+			}
+		}
+		if len(texts) == 0 {
 			continue
 		}
-		pageTexts[*block.PageIdx+1] = append(pageTexts[*block.PageIdx+1], text)
+		pageTexts[*block.PageIdx+1] = append(pageTexts[*block.PageIdx+1], strings.Join(texts, "\n"))
 	}
 	pages := make([]PageText, 0, len(pageTexts))
 	for pageNo, texts := range pageTexts {
@@ -408,6 +451,136 @@ func parseContentListPages(raw []byte) []PageText {
 	}
 	sort.Slice(pages, func(i, j int) bool { return pages[i].PageNo < pages[j].PageNo })
 	return pages
+}
+
+// parseLayoutPages reads MinerU's detailed layout result (layout.json, also
+// shipped as *_middle.json): pdf_info holds every page, including pages with
+// no text, so its length is the real page count.
+func parseLayoutPages(raw []byte) ([]PageText, int) {
+	if len(raw) == 0 {
+		return nil, 0
+	}
+	var doc struct {
+		PDFInfo []struct {
+			PageIdx    *int              `json:"page_idx"`
+			ParaBlocks []json.RawMessage `json:"para_blocks"`
+		} `json:"pdf_info"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.PDFInfo) == 0 {
+		return nil, 0
+	}
+	pages := make([]PageText, 0, len(doc.PDFInfo))
+	for i, info := range doc.PDFInfo {
+		idx := i
+		if info.PageIdx != nil && *info.PageIdx >= 0 {
+			idx = *info.PageIdx
+		}
+		var parts []string
+		for _, block := range info.ParaBlocks {
+			if text := layoutBlockText(block); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if text := strings.TrimSpace(strings.Join(parts, "\n")); text != "" {
+			pages = append(pages, PageText{PageNo: idx + 1, Text: text})
+		}
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].PageNo < pages[j].PageNo })
+	return pages, len(doc.PDFInfo)
+}
+
+var htmlTag = regexp.MustCompile(`<[^>]*>`)
+
+// layoutBlockText flattens one layout block: its lines and spans, and nested
+// blocks such as table bodies and captions, in reading order.
+func layoutBlockText(raw json.RawMessage) string {
+	var block struct {
+		Lines []struct {
+			Spans []struct {
+				Content string `json:"content"`
+				HTML    string `json:"html"`
+			} `json:"spans"`
+		} `json:"lines"`
+		Blocks []json.RawMessage `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &block); err != nil {
+		return ""
+	}
+	var lines []string
+	for _, line := range block.Lines {
+		var text strings.Builder
+		for _, span := range line.Spans {
+			switch {
+			case strings.TrimSpace(span.Content) != "":
+				text.WriteString(span.Content)
+			case strings.TrimSpace(span.HTML) != "":
+				text.WriteString(strings.Join(strings.Fields(htmlTag.ReplaceAllString(span.HTML, " ")), " "))
+			}
+		}
+		if t := strings.TrimSpace(text.String()); t != "" {
+			lines = append(lines, t)
+		}
+	}
+	for _, nested := range block.Blocks {
+		if t := layoutBlockText(nested); t != "" {
+			lines = append(lines, t)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// parseContentListV2Pages reads content_list_v2.json: one list of blocks per
+// page. Text is collected from every string "content" found in the blocks.
+func parseContentListV2Pages(raw []byte) []PageText {
+	if len(raw) == 0 {
+		return nil
+	}
+	var pagesRaw []json.RawMessage
+	if err := json.Unmarshal(raw, &pagesRaw); err != nil {
+		return nil
+	}
+	pages := make([]PageText, 0, len(pagesRaw))
+	for i, page := range pagesRaw {
+		var value any
+		if err := json.Unmarshal(page, &value); err != nil {
+			continue
+		}
+		var parts []string
+		collectContent(value, &parts)
+		if text := strings.TrimSpace(strings.Join(parts, "\n")); text != "" {
+			pages = append(pages, PageText{PageNo: i + 1, Text: text})
+		}
+	}
+	return pages
+}
+
+// collectContent gathers text values of "content"-like keys, keeping key order
+// stable so the text follows the document.
+func collectContent(value any, out *[]string) {
+	switch v := value.(type) {
+	case []any:
+		for _, item := range v {
+			collectContent(item, out)
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			switch child := v[k].(type) {
+			case string:
+				if k == "content" || k == "text" || k == "html" {
+					if t := strings.Join(strings.Fields(htmlTag.ReplaceAllString(child, " ")), " "); t != "" {
+						*out = append(*out, t)
+					}
+				}
+			default:
+				collectContent(child, out)
+			}
+		}
+	}
 }
 
 func readZipEntry(file *zip.File, limit int64) ([]byte, error) {

@@ -143,3 +143,41 @@ func TestVerifyReaderRejectsTamperedContent(t *testing.T) {
 type nopCloser struct{ *strings.Reader }
 
 func (nopCloser) Close() error { return nil }
+
+func TestBuildCardDocumentMarksPagesAndKeepsEveryPageStart(t *testing.T) {
+	var pages []ai.PageText
+	for i := 1; i <= 20; i++ {
+		text := strings.Repeat("题目内容", 300)
+		if i == 12 {
+			text = "参考答案\n" + text
+		}
+		pages = append(pages, ai.PageText{PageNo: i, Text: text})
+	}
+	doc := BuildCardDocument(pages, "", 8000)
+	if !strings.Contains(doc, "[第 1 页]") || !strings.Contains(doc, "[第 20 页]") {
+		t.Fatalf("page markers missing: %.200s", doc)
+	}
+	if !strings.Contains(doc, "[第 12 页]\n参考答案") {
+		t.Fatal("the heading of a middle page was cut away")
+	}
+	if n := len([]rune(doc)); n > 8000+400 {
+		t.Fatalf("document has %d runes, over the budget", n)
+	}
+}
+
+func TestBuildCardDocumentNamesOmittedPagesWhenTooManyPages(t *testing.T) {
+	var pages []ai.PageText
+	for i := 1; i <= 200; i++ {
+		pages = append(pages, ai.PageText{PageNo: i, Text: strings.Repeat("字", 400)})
+	}
+	doc := BuildCardDocument(pages, "", 8000)
+	if !strings.Contains(doc, "省略第") || !strings.Contains(doc, "[第 200 页]") {
+		t.Fatalf("omission or tail missing: %.300s", doc)
+	}
+}
+
+func TestBuildCardDocumentWithoutPagesFallsBackToMarkdown(t *testing.T) {
+	if got := BuildCardDocument(nil, "整篇正文", 8000); got != "整篇正文" {
+		t.Fatalf("got %q", got)
+	}
+}

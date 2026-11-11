@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -14,7 +15,7 @@ import (
 
 const (
 	// CardDocumentLimit is how much text the model reads per file.
-	CardDocumentLimit          = 8_000
+	CardDocumentLimit          = 16_000
 	AnalysisStoreMarkdownLimit = 2 << 20
 )
 
@@ -39,10 +40,16 @@ type CardMeta struct {
 
 // CardInput rebuilds the checked input from the metadata and the parsed text.
 func (m CardMeta) CardInput(markdown string, pageCount int, metadataOnly bool) catalogai.CardInput {
+	return m.CardInputFromDocument(SampleAnalysisDocument(markdown, CardDocumentLimit), pageCount, metadataOnly)
+}
+
+// CardInputFromDocument builds the input from the exact document text the
+// model was shown, so the master checks quotes against what the model saw.
+func (m CardMeta) CardInputFromDocument(document string, pageCount int, metadataOnly bool) catalogai.CardInput {
 	in := catalogai.CardInput{FileName: m.FileName, MediaType: m.MediaType, Paths: m.Paths, Hints: m.Hints,
 		Siblings: m.Siblings, PageCount: pageCount, MetadataOnly: metadataOnly}
 	if !metadataOnly {
-		in.Document = SampleAnalysisDocument(markdown, CardDocumentLimit)
+		in.Document = document
 	}
 	return in
 }
@@ -67,6 +74,7 @@ type AnalyzeResult struct {
 	Model        string      `json:"model"`
 	Content      string      `json:"content"`
 	Markdown     string      `json:"markdown"`
+	Document     string      `json:"document,omitempty"` // the page-marked text the model read
 	PageCount    int         `json:"page_count"`
 	MetadataOnly bool        `json:"metadata_only"`
 	Parsed       *ParsedText `json:"parsed,omitempty"` // fresh parser output to cache
@@ -80,6 +88,9 @@ func runAnalyze(ctx context.Context, env Env, in AnalyzeInput) (*AnalyzeResult, 
 		switch {
 		case in.Cached != nil && strings.TrimSpace(in.Cached.Markdown) != "":
 			parsed.Markdown, parsed.PageCount = in.Cached.Markdown, in.Cached.PageCount
+			for _, page := range in.Cached.Pages {
+				parsed.Pages = append(parsed.Pages, ai.PageText{PageNo: page.PageNo, Text: page.Text})
+			}
 		case in.OCR == nil:
 			return nil, classed(ClassConfig, errors.New("没有可用的 OCR 服务商，请先在 AI 解析中配置并选择"))
 		default:
@@ -116,7 +127,11 @@ func runAnalyze(ctx context.Context, env Env, in AnalyzeInput) (*AnalyzeResult, 
 		metadataOnly = true
 	}
 	out.Markdown, out.PageCount, out.MetadataOnly = markdown, parsed.PageCount, metadataOnly
-	cardIn := in.Meta.CardInput(markdown, parsed.PageCount, metadataOnly)
+	document := BuildCardDocument(parsed.Pages, markdown, CardDocumentLimit)
+	cardIn := in.Meta.CardInputFromDocument(document, parsed.PageCount, metadataOnly)
+	if !metadataOnly {
+		out.Document = document
+	}
 	if metadataOnly {
 		images = nil
 	}
@@ -155,6 +170,96 @@ func SampleAnalysisDocument(document string, limit int) string {
 	return string(runes[:headCount]) +
 		fmt.Sprintf("\n\n[...正文中间省略 %d 字，以下为末尾内容...]\n\n", omitted) +
 		string(runes[len(runes)-tailCount:])
+}
+
+// BuildCardDocument renders the parsed pages with explicit [第 N 页] markers so
+// the model can tell where each part of the file sits, for example where a
+// combined paper's answers begin. A long document keeps the start of every
+// page, so each page's heading is visible; with too many pages for that it
+// keeps both ends and says which pages were left out. Without page structure
+// it falls back to a plain head-and-tail sample.
+func BuildCardDocument(pages []ai.PageText, markdown string, limit int) string {
+	var kept []ai.PageText
+	for _, page := range pages {
+		if strings.TrimSpace(page.Text) != "" {
+			page.Text = strings.TrimSpace(page.Text)
+			kept = append(kept, page)
+		}
+	}
+	if len(kept) == 0 {
+		return SampleAnalysisDocument(markdown, limit)
+	}
+	render := func(page ai.PageText, text string) string {
+		return fmt.Sprintf("[第 %d 页]\n%s", page.PageNo, text)
+	}
+	total := 0
+	for _, page := range kept {
+		total += utf8.RuneCountInString(page.Text) + 12
+	}
+	if limit <= 0 || total <= limit {
+		parts := make([]string, 0, len(kept))
+		for _, page := range kept {
+			parts = append(parts, render(page, page.Text))
+		}
+		return strings.Join(parts, "\n\n")
+	}
+	const minPerPage = 150
+	if limit/len(kept) >= minPerPage {
+		// Water-filling: short pages stay whole and lend their spare room to long ones.
+		order := make([]int, len(kept))
+		for i := range order {
+			order[i] = i
+		}
+		sort.Slice(order, func(a, b int) bool {
+			return utf8.RuneCountInString(kept[order[a]].Text) < utf8.RuneCountInString(kept[order[b]].Text)
+		})
+		allowance := make([]int, len(kept))
+		budget := limit - 12*len(kept)
+		for rank, i := range order {
+			share := budget / (len(order) - rank)
+			size := utf8.RuneCountInString(kept[i].Text)
+			allowance[i] = min(size, share)
+			budget -= allowance[i]
+		}
+		parts := make([]string, 0, len(kept))
+		for i, page := range kept {
+			text := page.Text
+			if runes := []rune(text); len(runes) > allowance[i] {
+				text = string(runes[:allowance[i]]) + "…"
+			}
+			parts = append(parts, render(page, text))
+		}
+		return strings.Join(parts, "\n\n")
+	}
+	headBudget, tailBudget := limit*2/3, limit-limit*2/3
+	head, tail := 0, len(kept)
+	for head < len(kept) {
+		size := utf8.RuneCountInString(kept[head].Text) + 12
+		if size > headBudget {
+			break
+		}
+		headBudget -= size
+		head++
+	}
+	for tail > head {
+		size := utf8.RuneCountInString(kept[tail-1].Text) + 12
+		if size > tailBudget {
+			break
+		}
+		tailBudget -= size
+		tail--
+	}
+	var parts []string
+	for _, page := range kept[:head] {
+		parts = append(parts, render(page, page.Text))
+	}
+	if tail > head {
+		parts = append(parts, fmt.Sprintf("[...省略第 %d–%d 页的正文，共 %d 页...]", kept[head].PageNo, kept[tail-1].PageNo, tail-head))
+	}
+	for _, page := range kept[tail:] {
+		parts = append(parts, render(page, page.Text))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // capImages bounds visual input by both the page and image limits.

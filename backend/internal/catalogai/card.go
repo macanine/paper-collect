@@ -70,7 +70,7 @@ const cardSystem = `你是中学资料编目员，负责阅读一份文件并记
 规则：
 - 以正文为准。文件名、路径、提示和同文件夹文件名只是旁证；与正文冲突时以正文为准。
 - role 描述这一份文件本身，只能取：%s。判断前必须检查答案的分布，尤其是末尾是否有集中答案区。
-- role=full 时 answer_start_page 写答案区开始的页码，否则写 0。
+- 正文按页给出，每页以 [第 N 页] 开头；中间被省略的页会标注页码范围。role=full 时 answer_start_page 必须取答案区第一页的页码（看哪一页开始出现“参考答案”“答案解析”或集中的答案），不要默认写 1；前面是试题、后面才是答案，所以 full 的答案区一定在第 2 页或之后。若整份文件从第 1 页起就是答案，role 应为答案而不是 full。否则 answer_start_page 写 0。
 - title_text 原样抄写文件首页的考试/资料标题（去掉“试题卷”“答案”等部件字样也可以），没有则留空。
 - doc_type 只能取：%s。
 - subjects 只能取：%s。
@@ -119,6 +119,8 @@ func CheckCard(content string, in CardInput) (Card, []Problem, error) {
 		switch {
 		case raw.AnswerStartPage < 1:
 			problems = append(problems, critical("answer_page_missing", "answer_start_page", "role=full 时必须给出答案区开始的页码"))
+		case raw.AnswerStartPage == 1 && in.PageCount != 1:
+			problems = append(problems, critical("answer_page_first", "answer_start_page", "role=full 时答案区不可能从第 1 页开始（第 1 页之前没有题目）；请按 [第 N 页] 标记找到集中答案区真正开始的页，若整份文件都是答案请改 role"))
 		case in.PageCount > 0 && raw.AnswerStartPage > in.PageCount:
 			problems = append(problems, critical("answer_page_range", "answer_start_page", "answer_start_page=%d 超过文件页数 %d", raw.AnswerStartPage, in.PageCount))
 		default:
