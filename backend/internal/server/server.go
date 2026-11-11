@@ -101,6 +101,7 @@ func (s *Server) Router() *gin.Engine {
 	authGroup.POST("/packs/purge", s.requireScope(model.ScopeMaterialsWrite), s.handlePurgePacks)
 	authGroup.GET("/packs/:id", s.requireScope(model.ScopeMaterialsRead), s.handleGetPack)
 	authGroup.PATCH("/packs/:id", s.requireScope(model.ScopeMaterialsWrite), s.handlePatchPack)
+	authGroup.POST("/packs/:id/confirm", s.requireScope(model.ScopeMaterialsWrite), s.handleConfirmPack)
 	authGroup.POST("/packs/:id/merge", s.requireScope(model.ScopeMaterialsWrite), s.handleMergePacks)
 	authGroup.PUT("/packs/:id/order", s.requireScope(model.ScopeMaterialsWrite), s.handleReorderPack)
 	authGroup.GET("/packs/:id/download", s.requireScope(model.ScopeMaterialsRead), s.handleDownloadPack)

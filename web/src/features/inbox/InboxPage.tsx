@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Checkbox, Collapse, Empty, Form, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router';
@@ -12,10 +12,9 @@ import { PageHeader } from '../../shared/ui/PageHeader';
 import { ErrorState, LoadingState } from '../../shared/ui/States';
 import { PartTag, StageTag } from '../../shared/ui/StatusTags';
 import { PackAIPanel } from '../ai/AnalysisPanel';
-import { updateMaterial } from '../materials/api';
 import { FilePreviewModal, canPreview } from '../materials/FilePreview';
 import { invalidateLibrary, useAcceptMaterials, useInbox } from '../materials/queries';
-import { updatePack } from '../packs/api';
+import { confirmPack } from '../packs/api';
 import { Completeness } from '../packs/PackBadges';
 import { PackCatalogFields, formToUpdate, packToForm, type CatalogField, type CatalogFormValues } from '../packs/PackCatalogFields';
 import { usePackFacets } from '../packs/queries';
@@ -44,7 +43,6 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const facets = usePackFacets();
-  const accept = useAcceptMaterials();
   const [form] = Form.useForm<CatalogFormValues>();
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<PackMember | null>(null);
@@ -54,11 +52,16 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
   const showEdit = editable && editing;
   const attentionIds = group.pack.members.filter((member) => member.stage === 'attention').map((member) => member.id);
 
+  // Load the pack into the form when it really changed (the list polls), but
+  // never while the person is editing: their unsaved input wins.
+  const packRef = useRef(group.pack);
+  packRef.current = group.pack;
   useEffect(() => {
+    if (editing) return;
     form.resetFields();
-    form.setFieldsValue(packToForm(group.pack));
-    setMemberEdits(initialMemberEdits(group.pack.members));
-  }, [form, group.pack]);
+    form.setFieldsValue(packToForm(packRef.current));
+    setMemberEdits(initialMemberEdits(packRef.current.members));
+  }, [form, group.pack.updated_at, editing]);
 
   const updateMember = (member: PackMember, patch: Partial<MemberEdit>) => {
     setMemberEdits((current) => ({
@@ -73,18 +76,13 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
     setSaving(true);
     try {
       const touched = CATALOG_FIELDS.filter((field) => form.isFieldTouched(field));
-      if (touched.length > 0) await updatePack(group.pack.id, formToUpdate(values, touched));
-      const changes = group.pack.members.filter((member) => {
-        const next = memberEdits[member.id];
-        return next && (next.part !== member.part || next.answer_start_page !== member.answer_start_page);
-      });
-      await Promise.all(
-        changes.map((member) => {
-          const next = memberEdits[member.id]!;
-          return updateMaterial(member.id, { part: next.part, answer_start_page: next.answer_start_page });
-        }),
-      );
-      await accept.mutateAsync({ ids: attentionIds });
+      const members = group.pack.members
+        .filter((member) => {
+          const next = memberEdits[member.id];
+          return next && (next.part !== member.part || next.answer_start_page !== member.answer_start_page);
+        })
+        .map((member) => ({ id: member.id, ...memberEdits[member.id]! }));
+      await confirmPack(group.pack.id, { patch: formToUpdate(values, touched), members });
       invalidateLibrary(queryClient);
       message.success(`已确认《${group.pack.title}》`);
       onDone();
@@ -93,7 +91,7 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
     } finally {
       setSaving(false);
     }
-  }, [accept, attentionIds, editable, form, group.pack, memberEdits, message, onDone, queryClient, saving]);
+  }, [attentionIds, editable, form, group.pack, memberEdits, message, onDone, queryClient, saving]);
 
   return (
     <Card
@@ -180,10 +178,11 @@ function AttentionPanel({ group, stage, onDone }: { group: InboxPack; stage: Sta
 
         {editable ? (
           <Space>
-            <Button type="primary" loading={saving || accept.isPending} disabled={attentionIds.length === 0} onClick={() => void confirm()}>
+            <Button type="primary" loading={saving} disabled={attentionIds.length === 0} onClick={() => void confirm()}>
               {showEdit ? '保存并确认' : `确认这套 ${attentionIds.length} 个文件`}
             </Button>
-            <Button type="text" onClick={() => setEditing((v) => !v)}>
+            {/* Leaving edit mode discards the edits: the effect above reloads the pack. */}
+            <Button type="text" onClick={() => setEditing(!showEdit)}>
               {showEdit ? '取消修改' : '修改编目'}
             </Button>
           </Space>
@@ -212,7 +211,7 @@ export function InboxPage() {
   const stage = (TABS.find((tab) => tab.value === params.get('stage'))?.value ?? 'attention') as Stage;
   const reason = params.get('reason') ?? '';
   const [page, setPage] = useState(1);
-  const query = useInbox({ page, page_size: 100, stage, reason: reason || undefined }, { poll: stage === 'attention' ? false : 8000 });
+  const query = useInbox({ page, page_size: 100, stage, reason: reason || undefined }, { poll: stage === 'attention' ? 30_000 : 8000 });
   const accept = useAcceptMaterials();
   const groups = query.data?.items ?? EMPTY_REVIEW_PACKS;
   const [activeId, setActiveId] = useState<string>();

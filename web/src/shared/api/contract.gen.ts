@@ -223,6 +223,12 @@ export interface Pack {
   updated_at: string;
 }
 
+/** Result of confirming a set that needed attention. */
+export interface PackConfirmResult {
+  pack: Pack;
+  accepted: number;
+}
+
 export interface FacetValue {
   value: string;
   count: number;

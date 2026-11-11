@@ -162,6 +162,36 @@ func (s *Server) handlePatchPack(c *gin.Context) {
 	s.respondData(c, http.StatusOK, toPack(view))
 }
 
+type packConfirmDTO struct {
+	Pack     packDTO `json:"pack"`
+	Accepted int     `json:"accepted"`
+}
+
+func (s *Server) handleConfirmPack(c *gin.Context) {
+	var req struct {
+		Patch   packPatchRequest `json:"patch"`
+		Members []struct {
+			ID              string `json:"id"`
+			Part            string `json:"part"`
+			AnswerStartPage int    `json:"answer_start_page"`
+		} `json:"members"`
+	}
+	if err := decodeJSON(c, &req); err != nil {
+		respondError(c, err)
+		return
+	}
+	edits := make([]service.MemberEdit, 0, len(req.Members))
+	for _, m := range req.Members {
+		edits = append(edits, service.MemberEdit{ID: m.ID, Part: m.Part, AnswerStartPage: m.AnswerStartPage})
+	}
+	view, n, err := s.svc.ConfirmPack(c.Request.Context(), principal(c), c.Param("id"), req.Patch.patch(), edits)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	s.respondData(c, http.StatusOK, packConfirmDTO{Pack: toPack(view), Accepted: n})
+}
+
 func (s *Server) handleBulkPatchPacks(c *gin.Context) {
 	var req struct {
 		IDs   []string         `json:"ids"`

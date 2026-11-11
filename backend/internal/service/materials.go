@@ -447,6 +447,86 @@ func (s *Service) AcceptMaterials(ctx context.Context, p auth.Principal, ids []s
 	return count, nil
 }
 
+// MemberEdit is a person's part decision for one file of a set.
+type MemberEdit struct {
+	ID              string
+	Part            string
+	AnswerStartPage int
+}
+
+// ConfirmPack settles a set that needs attention in one transaction: catalogue
+// edits (pt may be empty), member part edits, then acceptance of every file of
+// the set still waiting for a person. Nothing is saved if any step fails.
+func (s *Service) ConfirmPack(ctx context.Context, p auth.Principal, id string, pt PackPatch, members []MemberEdit) (PackView, int, error) {
+	if len(members) > 500 {
+		return PackView{}, 0, apperr.Validation("一次最多修改 500 个文件")
+	}
+	if len(pt.UnlockFields) > 0 {
+		return PackView{}, 0, apperr.Validation("确认时不能解除锁定")
+	}
+	var renamed []string
+	count := 0
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := s.now()
+		var attention []string
+		if err := tx.Model(&model.Material{}).Where("pack_id = ? AND stage = ?", id, model.StageAttention).
+			Pluck("id", &attention).Error; err != nil {
+			return wrap("load attention members", err)
+		}
+		if len(attention) == 0 {
+			var exists int64
+			if err := tx.Model(&model.Pack{}).Where("id = ?", id).Count(&exists).Error; err != nil {
+				return wrap("check pack", err)
+			}
+			if exists == 0 {
+				return apperr.NotFound("套卷不存在")
+			}
+			return apperr.Conflict("这套资料已没有需要确认的文件")
+		}
+		if !pt.empty() {
+			ids, err := s.applyPackPatchTx(tx, id, pt, true, now)
+			if err != nil {
+				return err
+			}
+			renamed = append(renamed, ids...)
+		}
+		for _, e := range members {
+			var packID string
+			if err := tx.Model(&model.Material{}).Where("id = ?", e.ID).Pluck("pack_id", &packID).Error; err != nil {
+				return wrap("check member", err)
+			}
+			if packID != id {
+				return apperr.Validation("文件不属于这套资料")
+			}
+			part, page := e.Part, e.AnswerStartPage
+			ids, err := s.applyMaterialPatchTx(tx, e.ID, MaterialPatch{Part: &part, AnswerStartPage: &page}, now)
+			if err != nil {
+				return err
+			}
+			renamed = append(renamed, ids...)
+		}
+		for _, mid := range attention {
+			if err := tx.Model(&model.Material{}).Where("id = ?", mid).Updates(map[string]any{
+				"stage": model.StageReady, "ai_step": "", "attention_json": "[]", "updated_at": now,
+			}).Error; err != nil {
+				return wrap("accept material", err)
+			}
+			if _, err := s.planMaterialTx(tx, mid, true); err != nil {
+				return err
+			}
+		}
+		count = len(attention)
+		return s.audit(tx, p, "pack.confirm", id)
+	})
+	if err != nil {
+		return PackView{}, 0, err
+	}
+	s.notify()
+	s.renameMaterialFiles(ctx, renamed)
+	view, err := s.GetPack(ctx, id)
+	return view, count, err
+}
+
 func insertPackSubjects(tx *gorm.DB, packID string, codes []string) error {
 	if len(codes) == 0 {
 		return nil

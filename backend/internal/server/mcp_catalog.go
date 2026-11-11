@@ -93,7 +93,7 @@ func destructive(o mcpOperation) mcpOperation          { o.destructive = true; r
 var mcpOperations = func() []mcpOperation {
 	page := queryI("page page_size")
 	id := pathFields("id")
-	packMeta := joined(bodyS("title doc_type grade term region organization exam_date exam_name chapter description"), bodyI("cohort"), bodyA("subject_codes tags"))
+	packMeta := joined(bodyS("title doc_type grade term region organization exam_date exam_name chapter description"), bodyI("cohort"), bodyA("subject_codes tags unlock_fields"))
 	packPatch := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
 		"doc_type": map[string]any{"type": "string"}, "grade": map[string]any{"type": "string"}, "term": map[string]any{"type": "string"},
 		"region": map[string]any{"type": "string"}, "organization": map[string]any{"type": "string"}, "exam_date": map[string]any{"type": "string"},
@@ -166,8 +166,14 @@ var mcpOperations = func() []mcpOperation {
 		op("packs_get", "读取套卷详情、文件部件与齐全度。", "GET", "/packs/:id", model.ScopeMaterialsRead, id),
 		op("packs_ai_get", "读取套卷最近一次 AI 编目决定、校验问题和每个文件的阅读记录。", "GET", "/packs/:id/ai", model.ScopeMaterialsRead, id),
 		op("packs_ai_redecide", "让 AI 重新确定该套卷的编目；人工锁定的字段保持不变。", "POST", "/packs/:id/ai/redecide", model.ScopeMaterialsWrite, id),
-		op("packs_update", "编辑套卷编目字段；修改的字段会被锁定，AI 之后不再改动；title 为空字符串时恢复自动命名。机构和标签会归入名称词典。", "PATCH", "/packs/:id", model.ScopeMaterialsWrite, id, packMeta),
+		op("packs_update", "编辑套卷编目字段；修改的字段会被锁定，AI 之后不再改动；title 为空字符串时恢复自动命名。机构和标签会归入名称词典。unlock_fields 把已锁定字段交还 AI 并重新编目。", "PATCH", "/packs/:id", model.ScopeMaterialsWrite, id, packMeta),
 		op("packs_bulk_update", "对多个套卷应用相同的编目修改。", "POST", "/packs/bulk", model.ScopeMaterialsWrite, ids, mustFields(customField("patch", "object", packPatch), "patch")),
+		op("packs_confirm", "人工确认一套需关注的资料：在一个事务内保存 patch 中的编目修改和 members 中的部件修改（都会锁定），再把套卷内全部需关注文件入库。", "POST", "/packs/:id/confirm", model.ScopeMaterialsWrite, id,
+			customField("patch", "object", packPatch),
+			customField("members", "array", map[string]any{"type": "array", "maxItems": 500, "items": map[string]any{
+				"type": "object", "additionalProperties": false, "required": []string{"id", "part"},
+				"properties": map[string]any{"id": map[string]any{"type": "string"}, "part": map[string]any{"type": "string"}, "answer_start_page": map[string]any{"type": "integer"}},
+			}})),
 		op("packs_merge", "把其他套卷的文件并入该套卷。", "POST", "/packs/:id/merge", model.ScopeMaterialsWrite, id, mustFields(bodyA("source_ids"), "source_ids")),
 		op("packs_reorder", "设置套卷内文件顺序，需包含全部文件。", "PUT", "/packs/:id/order", model.ScopeMaterialsWrite, id, mustFields(bodyA("material_ids"), "material_ids")),
 		op("packs_trash", "把套卷移入回收站，30 天内可恢复。", "POST", "/packs/trash", model.ScopeMaterialsWrite, ids),
@@ -316,6 +322,11 @@ func validateField(f mcpField, v any) bool {
 		obj, ok := v.(map[string]any)
 		if !ok {
 			return false
+		}
+		if f.schema != nil {
+			// A structured body (e.g. a pack patch) is validated field by
+			// field by the REST handler it is forwarded to.
+			return true
 		}
 		for _, item := range obj {
 			if _, ok := item.(string); !ok {

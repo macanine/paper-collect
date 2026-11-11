@@ -65,7 +65,12 @@ export function TrashPage() {
             dataSource={query.data?.items ?? []}
             rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as string[]) }}
             locale={{ emptyText: <EmptyState description="回收站是空的" /> }}
-            pagination={{ current: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: list.setPage, hideOnSinglePage: true }}
+            pagination={{ current: list.page, pageSize: list.pageSize, total: query.data?.total ?? 0, onChange: (page, pageSize) => {
+                // A bulk action only applies to rows the person can see.
+                setSelected([]);
+                list.setPage(page, pageSize);
+              },
+              hideOnSinglePage: true }}
             columns={[
               {
                 title: '套卷',

@@ -150,3 +150,25 @@ func TestMCPCreateOneDriveUsingOpenList(t *testing.T) {
 		t.Fatal("MCP response must not expose the refresh token")
 	}
 }
+
+// Structured bodies are checked against their schema by the REST handler; the
+// MCP layer must not reject numbers or arrays inside them.
+func TestMCPAcceptsStructuredPatchBodies(t *testing.T) {
+	env := newEnv(t)
+	key := createAgentKey(t, env, []string{"materials:write", "materials:read"})
+	patch := map[string]any{"cohort": 2026, "subject_codes": []string{"math"}, "tags": []string{"一轮复习"}}
+	cases := map[string]map[string]any{
+		"packs_bulk_update": {"ids": []string{"missing"}, "patch": patch},
+		"packs_confirm":     {"id": "missing", "patch": patch, "members": []map[string]any{{"id": "m", "part": "answers", "answer_start_page": 0}}},
+	}
+	for name, args := range cases {
+		r := callTool(t, env, key, name, args)
+		if r.Error != nil {
+			t.Errorf("%s rejected valid arguments: %s", name, r.Error.Message)
+		}
+	}
+	r := callTool(t, env, key, "packs_bulk_update", map[string]any{"ids": []string{"missing"}, "patch": "not-an-object"})
+	if r.Error == nil || r.Error.Code != -32602 {
+		t.Error("a non-object patch must be rejected")
+	}
+}

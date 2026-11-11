@@ -86,6 +86,7 @@ var contractTypes = []contractType{
 	{"PackBrief", packBriefDTO{}, ""},
 	{"PackMember", packMemberDTO{}, ""},
 	{"Pack", packDTO{}, ""},
+	{"PackConfirmResult", packConfirmDTO{}, "Result of confirming a set that needed attention."},
 	{"FacetValue", facetValueDTO{}, ""},
 	{"PackFacets", packFacetsDTO{}, ""},
 	{"Material", materialDTO{}, ""},
