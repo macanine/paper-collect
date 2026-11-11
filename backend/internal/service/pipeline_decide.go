@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	decideExcerptRunes = 3000 // text per member shown to the model
-	decideMaxExcerpts  = 8    // members beyond this are described by their card only
+	decideExcerptMax   = 12000 // most text shown per member
+	decideExcerptMin   = 1500  // least text shown per member, however large the set
+	decideExcerptTotal = 48000 // text budget for the whole set, shared by its members
 )
 
 type decidePayload struct {
@@ -133,7 +134,8 @@ func (s *Service) prepareDecide(ctx context.Context, job model.Job) (*jobexec.De
 	}
 	in := catalogai.DecideInput{}
 	mentions, regions := []string{}, []string{}
-	for i, m := range members {
+	excerptRunes := min(decideExcerptMax, max(decideExcerptMin, decideExcerptTotal/len(members)))
+	for _, m := range members {
 		card, ok := cards[m.ID]
 		if !ok {
 			card = catalogai.Card{Role: m.Part, MetadataOnly: true}
@@ -147,8 +149,8 @@ func (s *Service) prepareDecide(ctx context.Context, job model.Job) (*jobexec.De
 		if m.PartLocked {
 			member.LockedRole, member.LockedPage = m.Part, m.AnswerStartPage
 		}
-		if i < decideMaxExcerpts && !card.MetadataOnly {
-			member.Excerpt = jobexec.SampleAnalysisDocument(textByID[m.ID].Markdown, decideExcerptRunes)
+		if !card.MetadataOnly {
+			member.Excerpt = jobexec.SampleAnalysisDocument(textByID[m.ID].Markdown, excerptRunes)
 		}
 		in.Members = append(in.Members, member)
 		mentions = append(mentions, card.OrgMentions...)
