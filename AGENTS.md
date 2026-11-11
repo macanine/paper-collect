@@ -1,7 +1,7 @@
 # 项目协作约定
 
 - 文档入口见 [docs/README.md](docs/README.md)，项目概览看 [README.md](README.md)，部署与环境变量看 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，用户操作看 [docs/USAGE.md](docs/USAGE.md)，接口以 [docs/API.md](docs/API.md) 为准，技术架构与数据流见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，数据库与备份见 [docs/DATA.md](docs/DATA.md)；不保留与当前实现冲突的历史计划文档。
-- `backend/internal/server` 负责 HTTP/MCP 与权限，`internal/service` 负责业务，`internal/model`/`db` 负责模型和迁移，`internal/storage` 负责存储适配；前端按 `web/src/features` 组织。
+- `backend/internal/server` 负责 HTTP/MCP 与权限，`internal/service` 负责业务（文件分组见 `service/doc.go`），`internal/model`/`db` 负责模型和迁移，`internal/storage` 负责存储适配，不访问数据库的纯逻辑放独立包（如 `jobexec`、`catalogai`、`searchtext`）；前端按 `web/src/features/<领域>` 组织，每个领域自带 `api.ts`/`queries.ts`，只有两个以上领域共用的代码才放 `shared/`。完整代码地图见 [docs/ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-代码分层)。
 - 资料是一份逻辑文件，Blob 按 SHA-256 去重；合集条目角色读取资料角色。修改接口、状态或字段时同步 API 文档，并运行 `make contract` 重新生成前端类型（`web/src/shared/api/contract.gen.ts` 不得手改）。
 - 主端只运行一个实例，默认 SQLite 单连接，PostgreSQL 可选。从端（`ROLE=worker`）没有数据库和共享磁盘，通过 `/internal/v1` 领取任务；任务执行代码在 `internal/jobexec`，不得访问数据库。事务内使用传入的 `tx`，不要通过 `s.db` 再取连接。
 - 数据库兼容 SQLite/PostgreSQL，跨表状态变更使用事务；数据库与文件系统或云端操作不能视为同一事务。

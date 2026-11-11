@@ -64,11 +64,18 @@
 
 | 包/目录 | 职责 | 约束 |
 | --- | --- | --- |
-| `cmd/server` | 读取配置、打开数据库、构造依赖、启动 worker 和 HTTP 服务、优雅退出 | 只做装配，不放业务规则 |
+| `cmd/server` | 读取配置、打开数据库、构造依赖、启动 worker 和 HTTP 服务、优雅退出；`ROLE=worker` 时启动从端 | 只做装配，不放业务规则 |
+| `cmd/migrate` | 创建 schema，可把现有 SQLite 一次性复制到空 PostgreSQL | 在应用实例启动前运行 |
+| `cmd/apigen` | 由 DTO 生成前端 `contract.gen.ts`（`make contract`） | 生成文件不得手改 |
 | `internal/config` | 环境变量校验；错误只指出变量名，不回显值 | 缺 `JWT_SECRET`/`MASTER_KEY` 时启动失败 |
 | `internal/db` | 打开 SQLite/PostgreSQL、设置 pragma/连接池、`AutoMigrate` | 无独立版本化迁移；迁移失败启动失败 |
 | `internal/model` | GORM 表定义、枚举、JSON 文本编解码、固定学科字典 | 列表字段用 JSON 文本，保证 SQLite/PostgreSQL 通用 |
-| `internal/service` | 业务用例、事务、任务状态机、同步规则与副本规划、AI 和检索 | 事务内使用传入的 `tx`；网络调用不放在数据库事务里 |
+| `internal/service` | 业务用例、事务、任务状态机、同步规则与副本规划、AI 和检索；文件按领域分组，见 `service/doc.go` | 事务内使用传入的 `tx`；网络调用不放在数据库事务里 |
+| `internal/jobexec` | 复制、阅读、索引、分组、编目、名称任务的无数据库执行部分；主端与从端共用 | 不得访问数据库；输入自包含，结果由主端在一个事务中提交 |
+| `internal/worker` | 从端进程：领取任务、用 `jobexec` 执行、上报结果、本机原件缓存 | 凭据只随任务下发、只存内存 |
+| `internal/catalogai` | AI 编目的提示词、回答解析、校验与名称归一 | 不访问数据库；主从使用同一套校验规则 |
+| `internal/searchtext` | 题目文本归一、n-gram 词项、公式规范化与片段高亮 | 纯文本处理，不访问存储 |
+| `internal/sysstat` | 主机与进程资源采样，用于节点心跳 | 只读本机指标 |
 | `internal/server` | Gin 路由、JSON envelope、鉴权/scope、DTO、MCP | 薄适配层；字段以 API.md 为准 |
 | `internal/storage` | 存储适配器和稳定错误分类 | 不依赖 GORM/HTTP 路由；远端对象只通过 `Adapter` 端口访问 |
 | `internal/ai` | OpenAI 兼容聊天、模型探测、MinerU/PaddleOCR/RapidOCR 解析 | 上游错误必须脱敏，不返回密钥或完整 URL |
@@ -76,27 +83,31 @@
 | `internal/docx` | 直接解析 Word 正文、标题、表格、文本框、公式、分页和嵌入图片 | 不依赖 LibreOffice、PDF 或 OCR 文本层；输出有界 |
 | `internal/office` | DOCX→PDF 预览转换与内容寻址缓存 | 只服务预览；单进程单转换槽，复用 `ooxml` 校验 |
 | `internal/blob` | 本地 CAS、临时文件、文件签名嗅探 | 扩展名不是格式判定的唯一依据 |
-| `internal/archive` | ZIP 全量校验、编码还原、成员提取 | 先 `Inspect` 后 `Extract`；拒绝不安全包 |
+| `internal/archive` | ZIP 全量校验、编码还原、成员提取 | 先 `InspectWithSkipped` 后 `Extract`；拒绝不安全包 |
 | `internal/auth` | JWT、密码哈希、refresh/API Key 原语、登录节流、角色 scope | 不在日志或响应中输出秘密 |
 | `internal/cryptobox` | AES-256-GCM 加解密封装 | 密文绑定 AAD（Provider ID 或 `ai.settings`） |
 | `internal/apperr` | 领域错误到 HTTP 状态/机器码的映射 | 对外 message 必须可安全展示 |
 | `internal/paths` | 相对路径校验、自然排序、忽略系统文件 | 上传清单与 ZIP 成员共用 |
 
-依赖方向大致为 `server → service → {model, db, blob, storage, ai, archive, auth, apperr, ooxml, docx, office}`；`docx` 只依赖 `ooxml`，`office` 只依赖 `ooxml`，`storage` 和 `ai` 不反向依赖 `service` 或 `server`。HTTP/MCP 只通过 service 执行业务，不直接拼 SQL 或访问存储。
+依赖方向大致为 `server → service → {jobexec, catalogai, searchtext, model, db, blob, storage, ai, archive, auth, apperr, ooxml, docx, office}`，`worker → jobexec`；`docx` 只依赖 `ooxml`，`office` 只依赖 `ooxml`，`storage` 和 `ai` 不反向依赖 `service` 或 `server`。HTTP/MCP 只通过 service 执行业务，不直接拼 SQL 或访问存储。
 
 ### 4.2 前端
 
 ```
 web/src/
-  app/            QueryClient 等应用级配置
-  layouts/        登录后的侧栏/头部布局与路由壳
-  features/       按领域组织：packs、materials、inbox、collections、uploads、trash、
-                  jobs、storage、ai、search、auth、apiKeys、users、audit、dashboard
-  shared/         api client/session/errors/types、UI 状态组件、通用 lib
-  styles/         全局样式
+  app/            路由清单 routes.tsx、查询键 queryKeys.ts、QueryClient、主题令牌
+  layouts/        登录后的侧栏/顶栏布局、命令面板
+  features/<领域>/ 页面组件 + api.ts（HTTP 调用）+ queries.ts（TanStack Query 钩子）+ 纯函数与测试
+                  领域：packs、materials、inbox、collections、uploads、trash、jobs、storage、
+                  nodes、ai、search、auth、apiKeys、users、audit、dashboard、settings
+  shared/api/     client、session、errors、请求体类型 types.ts、生成的 contract.gen.ts
+  shared/lib/     跨领域的格式化、标签与选项、列表查询参数
+  shared/ui/      跨领域的状态组件、页头、标签
+  styles/         全局样式（只处理布局与响应式）
 ```
 
-- 路由在 `App.tsx` 声明，登录后的布局及各页面按需加载；`ScopeGuard` 按角色 scope 隐藏/拦截页面，服务端仍逐请求重新授权。
+- 路由与导航在 `app/routes.tsx` 中声明一次（路径、标题、scope、按需加载的页面、侧栏分组），`App.tsx`、侧栏、命令面板和设置页都从它派生；`ScopeGuard` 按角色 scope 隐藏/拦截页面，服务端仍逐请求重新授权。
+- 只被一个领域使用的代码放在该领域目录；被两个以上领域使用时才放进 `shared/`。
 - 所有 API 调用经过 `shared/api/client.ts`：统一 envelope、`ApiError`、401 单飞刷新并重试一次、Blob 下载、XHR 二进制上传进度；请求、下载和上传完成后向浏览器内网络遥测采样。
 - TanStack Query 负责服务端状态；上传、任务、分析和索引按状态轮询，终态停止。
 - 浏览器 access token 只存内存；refresh token 与用户摘要存 `localStorage`，刷新页面后先经 `/auth/me` 校验。浏览器不保存 Agent Secret Key。
@@ -583,21 +594,23 @@ DATA_DIR/
 
 ## 16. 验证状态
 
-最近更新：2026-11-05，基于提交 `51208ab` 之上未提交的网盘同步重构（网盘、同步规则、副本管理）。以下结论针对该工作区代码。
+最近更新：2026-11-11，基于提交 `b7df9e7` 之后的工作区。以下结论只针对实际执行过的检查。
 
-### 本地实际执行并通过
+### 本地实际执行并通过（2026-11-11）
 
-环境：macOS arm64、Go 1.27.3、Node 24.22.1。
+环境：Linux arm64、Go 1.26.10、Node 24.22.2。
 
 ```bash
-make check                      # go test -short、go vet、前端测试与构建
-make test-all                   # 全量：go test、go vet、前端测试与构建（build 含 tsc 类型检查）
-(cd backend && go test -race -count=1 ./internal/service ./internal/server)
-(cd backend && go build ./cmd/server ./cmd/migrate)
-# 前端：12 个测试文件、39 个用例；构建通过，主 chunk 超过 500 kB，有体积警告
+(cd backend && go vet ./... && staticcheck ./... && go test -count=1 ./...)   # 全量，含慢测试
+(cd backend && go test -race -count=1 ./internal/service/ -run 'Purge|Trash|CommitDecide')
+(cd web && npm run build && npm test)   # tsc 类型检查与构建；15 个测试文件、50 个用例
 ```
 
-另在临时 `DATA_DIR` 中启动真实服务（SQLite、`local` 网盘），用 HTTP 脚本走完：空库只有兜底规则 → 上传 → 添加网盘 → 未预览保存被拒 → 预览并保存 → 上传落盘且 SHA-256 一致 → explain → 套卷改名后远端移动 → 统计与 `sync_status` 筛选 → 移除目标后转为规则外且文件保留 → `delete_remote`/`forget` → 下载原件 → MCP 列出并调用存储工具。随后在浏览器中检查桌面（1253px）与移动端（390px）的网盘、同步规则（编辑 → 预览 → 应用）、副本和文件详情页面。
+另在临时 `DATA_DIR` 中启动真实服务（SQLite，未配置模型），用无头 Chromium 在桌面（1366px）与移动端（390px）检查套卷详情：只修改备注不锁定字段、「交还 AI」解除锁定并重新排队编目；以及需关注收件箱：取消修改会丢弃改动、保存并确认只发出一次事务请求且部件修改被保存。
+
+### 早期验证（2026-11-05，网盘同步重构）
+
+在临时 `DATA_DIR` 中启动真实服务（SQLite、`local` 网盘），用 HTTP 脚本走完：空库只有兜底规则 → 上传 → 添加网盘 → 未预览保存被拒 → 预览并保存 → 上传落盘且 SHA-256 一致 → explain → 套卷改名后远端移动 → 统计与 `sync_status` 筛选 → 移除目标后转为规则外且文件保留 → `delete_remote`/`forget` → 下载原件 → MCP 列出并调用存储工具。随后在浏览器中检查桌面（1253px）与移动端（390px）的网盘、同步规则（编辑 → 预览 → 应用）、副本和文件详情页面。
 
 ### GitHub Actions（提交 `51208ab`，网盘同步重构之前）
 
@@ -615,7 +628,7 @@ make test-all                   # 全量：go test、go vet、前端测试与构
   - 权限与 MCP：API 密钥直连 REST、作用域与撤销；MCP 工具按 scope 可见、参数校验、非法 JSON 帧与超大请求被拒、委派管理不能越权、网盘密钥不回显；MCP 工具目录覆盖全部业务路由；未鉴权返回 401。
   - 节点（`server/node_integration_test.go`，`service/nodes_test.go`、`jobs_concurrency_test.go`）：从端无数据库执行副本任务、节点令牌与用户令牌隔离、只能上报自己租约的任务；租约竞争、过期租约回收与资料锁；从端崩溃、排空、停用和主端重启由真实进程场景覆盖。
   - 重复或只校验实现细节的端到端用例已删除，相应行为由 `service`、`jobexec`、`worker` 包的单元测试覆盖（公式转义修复、补建索引、DOCX 预览、本地网盘副本只在主端执行等）。
-- **前端**：上传清单与文件匹配、二进制上传、API 客户端与遥测、网盘表单字段、API 密钥表单、AI 权限与格式化、搜题页与高亮、路径工具。
+- **前端**：上传清单、路径校验与文件匹配、二进制上传、API 客户端与遥测、路由清单与查询键、网盘表单字段、API 密钥表单、节点表单、AI 权限与格式化、搜题页与高亮。
 
 ### 本次未重新验证（沿用重构前结论，需在套卷模型上复测）
 
@@ -648,16 +661,6 @@ make test-all                   # 全量：go test、go vet、前端测试与构
 6. **安全加固**：管理员可配置任意 http(s) 上游地址；未实现通用出站 SSRF 允许列表、全局 API 限流或主密钥轮换流程。
 7. **产品能力**：不提供通用全文检索、Office 转换、病毒扫描、跨请求分片断点续传、Range 下载、跨资料同题聚合。
 8. **搜索设置**：目前只有 HTTP 接口，没有独立管理台页面；索引状态使用 pending/running/succeeded/failed，非试卷类资料显示 not_applicable。
-
-## 18. 文档关系
-
-- [README.md](../README.md)：项目定位、核心能力、最短启动与文档导航。
-- [DEPLOYMENT.md](DEPLOYMENT.md)：开发、部署、环境变量与存储配置。
-- [USAGE.md](USAGE.md)：管理台操作、AI、搜题、角色与状态。
-- [README.md](README.md)：当前文档索引与维护约定。
-- [BACKEND.md](BACKEND.md)：后端职责划分与验证入口。
-- [API.md](API.md)：逐接口合同、字段、状态、错误。
-- [DATA.md](DATA.md)：表清单、数据目录、备份/恢复、增长控制。
 
 ## 18. 主从节点
 
