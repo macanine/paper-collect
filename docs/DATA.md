@@ -33,7 +33,7 @@
 | `jobs` | `Job` | 持久任务；`kind`、`status`、`lease_owner`、`next_attempt_at` 索引；`upload_id`、`replica_id`、`material_id`、`pack_id`、`batch_id`、`entity_id` 索引；`payload_json`（准备时的分组文件或套卷版本）；租约、心跳、`attempts`、脱敏 `error`、当前阶段及最多 200 条脱敏 `log_json` 记录 |
 | `job_locks` | `JobLock` | 资源互斥：同资料 analyze/index、同套卷 decide、全局 group、全局 entity；资源键、任务 ID、租约到期时间 |
 | `storage_drives` | `Drive` | 网盘；`enabled`、`read_order`、`route_mode` 索引；kind、`root_path`、`max_file_bytes`、`allowed_exts_json`、`on_path_change`、上传路由策略、config JSON、加密 secret；kind 不可改 |
-| `drive_node_routes` | `DriveNodeRoute` | 网盘上传节点；唯一索引 `(drive_id,node_id)`；`priority`、`enabled`；优先级越小越先领取，主端也可作为路由节点 |
+| `drive_node_routes` | `DriveNodeRoute` | 网盘操作节点（上传与直接读取共用）；唯一索引 `(drive_id,node_id)`；`priority`、`enabled`；优先级越小越先领取，主端也可作为路由节点 |
 | `sync_rules` | `Rule` | 有序同步规则；`position`、`enabled` 索引；`is_default` 标记兜底规则；`conditions_json` |
 | `sync_rule_targets` | `RuleTarget` | 规则目标；唯一索引 `(rule_id, drive_id)`；`path_template`、`share`、`required`、`position` |
 | `replicas` | `Replica` | Blob×Drive 副本；唯一索引 `(blob_id, drive_id)`；`status`、`rule_id` 索引；`desired_path`/`remote_path`/`remote_id`、`skip_reason`、`share`/`required`、verification、分享字段 |

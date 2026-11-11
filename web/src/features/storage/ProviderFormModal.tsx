@@ -182,8 +182,8 @@ export function ProviderFormModal({ open, drive, onClose, onSaved, nodes = [], c
 
         {canRoute && kind !== 'local' ? (
           <div className="mb-5 rounded-md border border-solid border-slate-200 bg-gray-50 p-4">
-            <div className="mb-3 text-sm font-semibold">上传节点路由</div>
-            <div className="mb-3 text-xs text-slate-500">优先级数字越小越先上传。首选节点不可用时，优先策略会自动切换到下一个节点；独占策略会保持等待。</div>
+            <div className="mb-3 text-sm font-semibold">操作节点路由</div>
+            <div className="mb-3 text-xs text-slate-500">决定哪些从端上传到该网盘、直接从该网盘读取原件，并持有它的凭据。优先级数字越小越先使用；首选节点不可用时，优先策略自动切换到下一个节点，全部不可用时由任意节点处理；独占策略会保持等待。</div>
             <Form.Item name="route_mode" label="分配策略">
               <Select<DriveRouteMode>
                 options={[

@@ -90,7 +90,7 @@ export function DrivesTab({ canWrite, canRoute = false }: { canWrite: boolean; c
       render: (enabled: boolean) => (enabled ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
     },
     {
-      title: '上传节点',
+      title: '操作节点',
       key: 'route',
       width: 220,
       render: (_: unknown, record) => (

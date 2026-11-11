@@ -356,27 +356,41 @@ func (c claimer) scope(query *gorm.DB) *gorm.DB {
 	return query
 }
 
-// applyRouteScope snapshots drive routing for one claim transaction. A
-// preferred route fails over only when every configured node is unavailable;
-// an exclusive route remains pending until one of its configured nodes returns.
+// applyRouteScope snapshots drive routing for one claim transaction.
 func (s *Service) applyRouteScope(tx *gorm.DB, owner claimer) (claimer, error) {
 	if owner.ID == "" {
 		return owner, nil
 	}
-	var drives []model.Drive
-	if err := tx.Select("id", "kind", "route_mode").Where("kind <> ?", model.KindLocal).Find(&drives).Error; err != nil {
+	managed, allowed, err := s.driveRouteScope(tx, owner.ID)
+	if err != nil {
 		return owner, err
 	}
+	owner.RoutedManagedIDs, owner.RoutedAllowedIDs = managed, allowed
+	return owner, nil
+}
+
+// driveRouteScope decides which drives a node may operate. It is the single
+// rule for both directions: uploading replicas and reading originals from
+// them (and therefore holding the drive's credentials). Pool drives are open
+// to every node and are not listed. For preferred and exclusive drives
+// (managed), a node is allowed when it is among the available routed nodes
+// with the best priority. When none of its routed nodes is available, a
+// preferred drive fails over to every node; an exclusive drive waits.
+func (s *Service) driveRouteScope(tx *gorm.DB, nodeID string) (managed, allowed []string, err error) {
+	var drives []model.Drive
+	if err := tx.Select("id", "kind", "route_mode").Where("kind <> ?", model.KindLocal).Find(&drives).Error; err != nil {
+		return nil, nil, err
+	}
 	if len(drives) == 0 {
-		return owner, nil
+		return nil, nil, nil
 	}
 	var routes []model.DriveNodeRoute
 	if err := tx.Where("enabled = ?", true).Order("priority ASC").Order("node_id ASC").Find(&routes).Error; err != nil {
-		return owner, err
+		return nil, nil, err
 	}
 	var nodes []model.Node
 	if err := tx.Find(&nodes).Error; err != nil {
-		return owner, err
+		return nil, nil, err
 	}
 	nodeByID := make(map[string]model.Node, len(nodes))
 	for _, node := range nodes {
@@ -391,45 +405,32 @@ func (s *Service) applyRouteScope(tx *gorm.DB, owner claimer) (claimer, error) {
 	available := func(node model.Node) bool {
 		return node.Enabled && !node.Draining && node.LastSeenAt != nil && now.Sub(*node.LastSeenAt) <= lease
 	}
-	managed := make([]string, 0)
-	allowed := make([]string, 0)
+	managed, allowed = []string{}, []string{}
 	for _, drive := range drives {
 		mode := drive.RouteMode
 		if mode == "" || mode == model.DriveRoutePool {
 			continue
 		}
 		managed = append(managed, drive.ID)
-		driveRoutes := routesByDrive[drive.ID]
-		if len(driveRoutes) == 0 {
-			if mode == model.DriveRoutePreferred {
-				allowed = append(allowed, drive.ID)
-			}
-			continue
-		}
 		minPriority := 0
-		ownerPreferred := false
+		nodePreferred := false
 		active := false
-		for _, route := range driveRoutes {
+		for _, route := range routesByDrive[drive.ID] {
 			node, ok := nodeByID[route.NodeID]
 			if !ok || !available(node) {
 				continue
 			}
 			if !active || route.Priority < minPriority {
-				active, minPriority, ownerPreferred = true, route.Priority, route.NodeID == owner.ID
-			} else if route.Priority == minPriority && route.NodeID == owner.ID {
-				ownerPreferred = true
+				active, minPriority, nodePreferred = true, route.Priority, route.NodeID == nodeID
+			} else if route.Priority == minPriority && route.NodeID == nodeID {
+				nodePreferred = true
 			}
 		}
-		if !active {
-			if mode == model.DriveRoutePreferred {
-				allowed = append(allowed, drive.ID)
-			}
-		} else if ownerPreferred {
+		if (!active && mode == model.DriveRoutePreferred) || (active && nodePreferred) {
 			allowed = append(allowed, drive.ID)
 		}
 	}
-	owner.RoutedManagedIDs, owner.RoutedAllowedIDs = managed, allowed
-	return owner, nil
+	return managed, allowed, nil
 }
 
 func (s *Service) tryClaim(tx *gorm.DB, owner claimer, job model.Job, claimed *model.Job) error {

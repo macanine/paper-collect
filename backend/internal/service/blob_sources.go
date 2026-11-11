@@ -8,10 +8,10 @@ import (
 )
 
 // nodeBlobSources lists the cloud replicas of an original that a worker node
-// may read directly, so originals need not flow out through the master. A
-// drive's routing decides which nodes may hold its credentials: pool drives
-// are open to every node, preferred and exclusive drives only to the nodes
-// routed to them. Local drives live on the master's disk and never qualify.
+// may read directly, so originals need not flow out through the master. Only
+// drives the node may operate under driveRouteScope qualify, the same rule
+// that routes uploads, so a node holds the credentials of exactly the drives
+// it would upload to. Local drives live on the master's disk and never qualify.
 func (s *Service) nodeBlobSources(ctx context.Context, sha, nodeID string) ([]jobexec.BlobSource, error) {
 	var blob model.Blob
 	if err := s.db.WithContext(ctx).Select("id").Where("sha256 = ?", sha).Limit(1).Find(&blob).Error; err != nil || blob.ID == "" {
@@ -21,12 +21,11 @@ func (s *Service) nodeBlobSources(ctx context.Context, sha, nodeID string) ([]jo
 	if err != nil || len(sources) == 0 {
 		return nil, err
 	}
-	var routed []string
-	if err := s.db.WithContext(ctx).Model(&model.DriveNodeRoute{}).
-		Where("node_id = ? AND enabled = ?", nodeID, true).Pluck("drive_id", &routed).Error; err != nil {
+	managedIDs, allowedIDs, err := s.driveRouteScope(s.db.WithContext(ctx), nodeID)
+	if err != nil {
 		return nil, err
 	}
-	allowed := toSet(routed)
+	managed, allowed := toSet(managedIDs), toSet(allowedIDs)
 	out := []jobexec.BlobSource{}
 	for _, source := range sources {
 		drive, replica := source.provider, source.replica
@@ -36,7 +35,7 @@ func (s *Service) nodeBlobSources(ctx context.Context, sha, nodeID string) ([]jo
 		if replica.Status != model.ReplicaReady && replica.Status != model.ReplicaOrphaned {
 			continue
 		}
-		if mode := drive.RouteMode; mode != "" && mode != model.DriveRoutePool && !allowed[drive.ID] {
+		if managed[drive.ID] && !allowed[drive.ID] {
 			continue
 		}
 		cfg, err := s.driveConfig(drive)

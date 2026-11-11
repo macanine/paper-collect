@@ -304,7 +304,7 @@ export function validateProviderForm(values: ProviderFormValues, mode: 'create' 
     errors.routes = '本地网盘只能由主端执行';
   }
   if (values.kind !== 'local' && routeMode !== 'pool') {
-    if (routes.length === 0) errors.routes = '请至少选择一个上传节点';
+    if (routes.length === 0) errors.routes = '请至少选择一个操作节点';
     const nodeIDs = routes.map((route) => route.node_id).filter(Boolean);
     if (new Set(nodeIDs).size !== nodeIDs.length) errors.routes = '同一个节点只能出现一次';
     const priorities = routes.map((route) => route.priority);
