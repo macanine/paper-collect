@@ -306,6 +306,10 @@ func (s *Service) applyDecisionTx(tx *gorm.DB, pack model.Pack, jobID string, ou
 	if err := tx.Model(&model.Pack{}).Where("id = ?", pack.ID).Updates(updates).Error; err != nil {
 		return nil, wrap("apply decision", err)
 	}
+	// A pack that is one part of a printed series joins that series' topic.
+	if err := s.attachSeriesTx(tx, pack.ID, d.Series, now); err != nil {
+		return nil, err
+	}
 	if subjects != nil {
 		if err := tx.Where("pack_id = ?", pack.ID).Delete(&model.PackSubject{}).Error; err != nil {
 			return nil, wrap("clear subjects", err)

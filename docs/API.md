@@ -27,7 +27,7 @@
 
 `MaterialSource`：`id,material_id,upload_id,user_id,path,duplicate:boolean,created_at`；记录每一次到达。`duplicate=true` 表示这次上传的内容此前已经归档。
 
-`Collection`（专题）：`id,title(1..255),description(<=4000),pack_count:integer,created_at,updated_at`；详情额外含 `packs:Pack[]`，按专题内 position 排序。专题只收纳套卷，不含文件，也没有父子层级；同专题同套卷唯一，最多 5000 个套卷。
+`Collection`（专题）：`id,title(1..255),description(<=4000),source:human|ai,locked:boolean,pack_count:integer,created_at,updated_at`；详情额外含 `packs:Pack[]`，按专题内 position 排序。专题只收纳套卷，不含文件，也没有父子层级；同专题同套卷唯一，最多 5000 个套卷。编目给出的 `series`（材料上印着的系列名）会自动建专题并把套卷放进去；`source=ai` 表示由 AI 建立，`locked=true` 表示人工改过标题、说明或成员，之后 AI 不再往里添加。
 
 `Upload`：`id,title,hints:{subject_codes,grade,doc_type,cohort,region,organization,tags},status:pending|processing|completed|failed,job_id,new_count:integer,duplicate_count:integer,skipped:string[],created_at,entries:UploadEntry[],results:UploadResult[]`。`UploadEntry`：`id,relative_path,size_bytes,sha256:string(可空),status:pending|received|existing`。status=received 表示字节数、内容签名和 SHA 已验证；existing 表示声明 SHA 已归档，可秒传、无需上传字节。`UploadResult`：`material_id,pack_id,title,path,duplicate:boolean,stage,part`，finalize 后按条目给出归档结果；`duplicate=true` 表示内容已存在。`skipped` 记录未支持而未归档的路径。folder 使用 `webkitRelativePath`，不上传操作系统路径。
 
@@ -356,7 +356,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 
 `MaterialCard`（AI 对单个文件的阅读记录）：`material_id,status:none|pending|running|succeeded|failed,provider_name,model,page_count,metadata_only:boolean,card:Card,problems:Problem[],markdown_excerpt:string(<=4000),error,updated_at|null`。`Card`：`role:Part,answer_start_page?,title_text?,doc_type?,subjects?,grade?,school_year_start?,cohort?,exam_date?,org_mentions?:string[],region_mentions?:string[],chapter?,fingerprint?:string[],evidence?:{字段:原文摘录},metadata_only?`。`Problem`：`code,field?,message,critical?`；critical 表示结果需要关注，其余表示被剔除的值。
 
-`PackAI`（套卷最近一次 AI 编目决定）：`status:none|pending|running|succeeded|failed,provider_name,model,revision,decision:Decision|null,problems:Problem[],error,decided_at|null,cards:{material_id:Card}`。`Decision`：`doc_type,subjects,grade?,school_year_start?,cohort?,exam_date?,term?,region?,organization?:{id}|{new,aliases?},exam_name?,chapter?,tags?:[{id}|{new}],files:[{id,role,answer_start_page?}],evidence?`。
+`PackAI`（套卷最近一次 AI 编目决定）：`status:none|pending|running|succeeded|failed,provider_name,model,revision,decision:Decision|null,problems:Problem[],error,decided_at|null,cards:{material_id:Card}`。`Decision`：`doc_type,subjects,grade?,school_year_start?,cohort?,exam_date?,term?,region?,organization?:{id}|{new,aliases?},exam_name?,chapter?,series?,tags?:[{id}|{new}],files:[{id,role,answer_start_page?}],evidence?`。
 
 `Entity`（名称词典条目）：`id,kind:organization|tag,name,region,source:ai|human,locked:boolean,aliases:string[],usage:integer`。一所学校、一个联盟或一个标签只有一个规范名称，文中的写法（简称、旧称、带省市前缀等）都是它的别名；套卷的 `organization` 与 `tags` 只使用规范名称。
 

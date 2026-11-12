@@ -373,11 +373,22 @@ type PackSubject struct {
 	Code   string `gorm:"primaryKey;size:32;index"`
 }
 
-// Collection is a hand-curated topic ("专题") of packs.
+// Collection sources: who created a topic.
+const (
+	CollectionSourceHuman = "human"
+	CollectionSourceAI    = "ai"
+)
+
+// Collection is a topic ("专题") of packs. AI creates one per series it reads
+// and keeps adding that series' packs to it until a person edits the topic;
+// Key is the normalised series name the AI matches on and never changes.
 type Collection struct {
 	ID          string `gorm:"primaryKey;size:36"`
 	Title       string `gorm:"size:255;not null"`
 	Description string `gorm:"type:text;not null"`
+	Source      string `gorm:"size:16;not null;default:human"`
+	Key         string `gorm:"size:255;not null;uniqueIndex:idx_collections_key"`
+	Locked      bool   `gorm:"not null;default:false"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

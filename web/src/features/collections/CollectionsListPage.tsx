@@ -9,6 +9,7 @@ import { useListSearch } from '../../shared/lib/listSearch';
 import { useDebouncedFilterInput } from '../../shared/lib/useDebouncedFilterInput';
 import { ItemList, ItemRow } from '../../shared/ui/ItemList';
 import { PageHeader } from '../../shared/ui/PageHeader';
+import { Tag } from '../../shared/ui/StatusTags';
 import { message } from '../../shared/ui/feedback';
 import { EmptyState, ErrorState } from '../../shared/ui/States';
 import { useAuth } from '../auth/AuthContext';
@@ -46,7 +47,7 @@ export function CollectionsListPage() {
     <Stack gap="lg">
       <PageHeader
         title="专题"
-        description="把散落各处的套卷按复习主题整理在一起，如“导数压轴题”“一轮复习”。"
+        description="把散落各处的套卷按复习主题整理在一起；同系列资料由 AI 自动归入，也可以勾选套卷手动加入。"
         extra={can('collections:write') ? <Button leftSection={<IconPlus size={16} />} onClick={() => setOpen(true)}>新建专题</Button> : null}
       />
       <TextInput maw={360} placeholder="搜索专题" leftSection={<IconSearch size={16} />} value={qInput} onChange={(e) => setQInput(e.currentTarget.value)} />
@@ -62,7 +63,10 @@ export function CollectionsListPage() {
                 key={collection.id}
                 main={
                   <Stack gap={4}>
-                    <Anchor component={Link} to={href.collection(collection.id)} fw={600} c="inherit" truncate>{collection.title}</Anchor>
+                    <Group gap={6} wrap="nowrap">
+                      <Anchor component={Link} to={href.collection(collection.id)} fw={600} c="inherit" truncate>{collection.title}</Anchor>
+                      {collection.source === 'ai' ? <Tag>AI 自动</Tag> : null}
+                    </Group>
                     <Text size="sm" c="dimmed" truncate>{collection.pack_count} 个套卷{collection.description ? ` · ${collection.description}` : ''}</Text>
                   </Stack>
                 }

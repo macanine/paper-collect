@@ -159,3 +159,53 @@ func TestUnlockFieldsHandsBackToAI(t *testing.T) {
 		t.Fatalf("unlock should queue a decision: pending=%d stage=%s", pending, e.reload(m).Stage)
 	}
 }
+
+// A series the model read from the material becomes a topic, and every pack of
+// the same series joins it instead of creating another one.
+func TestCommitDecideJoinsTheSeriesTopic(t *testing.T) {
+	e := newSyncEnv(t)
+	series := "十年（2012-2021）高考化学真题分项汇编"
+
+	first := e.material("专题44 水的电离", "专题44.pdf", []byte("series-one"), nil)
+	job := e.runningDecide(first.PackID, e.pack(first.PackID).Revision)
+	out := &jobexec.DecideResult{Usable: true, Decision: catalogai.Decision{
+		DocType: "topic", Subjects: []string{"chemistry"}, Grade: "grade12", Series: series,
+		Files: []catalogai.FileDecision{{ID: first.ID, Role: model.PartQuestions}},
+	}}
+	if err := e.svc.commitDecide(e.ctx, job, out); err != nil {
+		t.Fatal(err)
+	}
+
+	var topic model.Collection
+	if err := e.conn.First(&topic).Error; err != nil {
+		t.Fatal(err)
+	}
+	if topic.Title != series || topic.Source != model.CollectionSourceAI || topic.Locked {
+		t.Fatalf("topic = %+v", topic)
+	}
+
+	second := e.material("专题45 电离平衡", "专题45.pdf", []byte("series-two"), nil)
+	job = e.runningDecide(second.PackID, e.pack(second.PackID).Revision)
+	out = &jobexec.DecideResult{Usable: true, Decision: catalogai.Decision{
+		DocType: "topic", Subjects: []string{"chemistry"}, Grade: "grade12", Series: series,
+		Files: []catalogai.FileDecision{{ID: second.ID, Role: model.PartQuestions}},
+	}}
+	if err := e.svc.commitDecide(e.ctx, job, out); err != nil {
+		t.Fatal(err)
+	}
+
+	var topics []model.Collection
+	if err := e.conn.Find(&topics).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("topics = %d, want 1", len(topics))
+	}
+	var items []model.CollectionItem
+	if err := e.conn.Where("collection_id = ?", topic.ID).Find(&items).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("topic items = %d, want 2", len(items))
+	}
+}

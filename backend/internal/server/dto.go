@@ -211,6 +211,8 @@ type collectionDTO struct {
 	ID          string    `json:"id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
+	Source      string    `json:"source"`
+	Locked      bool      `json:"locked"`
 	PackCount   int64     `json:"pack_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -516,8 +518,8 @@ func toReplica(r model.Replica) replicaDTO {
 func toCollection(v service.CollectionSummary) collectionDTO {
 	c := v.Collection
 	return collectionDTO{
-		ID: c.ID, Title: c.Title, Description: c.Description, PackCount: v.PackCount,
-		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		ID: c.ID, Title: c.Title, Description: c.Description, Source: c.Source, Locked: c.Locked,
+		PackCount: v.PackCount, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 }
 

@@ -156,3 +156,54 @@ func TestExamNameDropsTrailingPartWords(t *testing.T) {
 		t.Fatalf("trimPartWords = %q", got)
 	}
 }
+
+func TestSeriesNeedsThePrintedName(t *testing.T) {
+	in := topicInput()
+	in.Members[0].FileName = "十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH 试题卷.docx"
+	base := `"doc_type":"topic","subjects":["chemistry"],"grade":"grade12",` +
+		`"chapter":"水的电离与溶液的pH",` +
+		`"exam_name":"十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH",` +
+		`"files":[{"id":"f1","role":"questions"}]`
+
+	d, _, err := CheckDecide(`{"series":"十年（2012-2021）高考化学真题分项汇编",`+base+`}`, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Series != "十年（2012-2021）高考化学真题分项汇编" {
+		t.Fatalf("series = %q", d.Series)
+	}
+
+	// A series name that is not printed anywhere is not trusted.
+	d, problems, err := CheckDecide(`{"series":"高考化学分类汇编",`+base+`}`, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Series != "" {
+		t.Fatalf("invented series %q accepted", d.Series)
+	}
+	found := false
+	for _, p := range problems {
+		found = found || (p.Field == "series" && p.Code == "evidence")
+	}
+	if !found {
+		t.Fatalf("no series evidence problem: %+v", problems)
+	}
+
+	// A series identical to the pack's own name adds nothing.
+	d, _, err = CheckDecide(`{"series":"十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH",`+base+`}`, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Series != "" {
+		t.Fatalf("series equal to exam_name accepted: %q", d.Series)
+	}
+
+	// A type label is not a series.
+	d, _, err = CheckDecide(`{"series":"专题练习",`+base+`}`, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Series != "" {
+		t.Fatalf("doc type label accepted as series: %q", d.Series)
+	}
+}

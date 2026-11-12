@@ -107,6 +107,7 @@ type Decision struct {
 	Organization    *EntityChoice     `json:"organization,omitempty"`
 	ExamName        string            `json:"exam_name,omitempty"`
 	Chapter         string            `json:"chapter,omitempty"`
+	Series          string            `json:"series,omitempty"`
 	Tags            []EntityChoice    `json:"tags,omitempty"`
 	Files           []FileDecision    `json:"files"`
 	Evidence        map[string]string `json:"evidence,omitempty"`
@@ -118,7 +119,7 @@ const minRegionEvidenceRunes = 6
 
 const decideSystem = `你是中学资料编目员，负责为一套资料（同一场考试或同一份资料的全部文件）确定最终编目。只输出一个 JSON 对象，不要输出解释。
 格式（analysis 必须最先写，每项一句话、不超过 60 字，用来先想清楚再填后面的字段）：
-{"analysis":{"exam":"这是什么考试：正式名称、系列/品牌、简称","organizer":"谁主办或出卷，依据哪句原文","region":"地区依据出自标题/页眉/主办机构名/文件名中的哪一句；全国性或无依据写“无”"},"doc_type":string,"subjects":string[],"grade":string,"school_year_start":number,"cohort":number,"exam_date":"YYYY-MM","term":string,"region":string,"organization":{"id":"候选id"}|{"new":"完整正式名称","aliases":["文中写法"]}|null,"exam_name":string,"chapter":string,"tags":[{"id":"候选id"}|{"new":"新标签"}],"files":[{"id":"文件id","role":string,"answer_start_page":number}],"evidence":{"字段名":"原文摘录"}}
+{"analysis":{"exam":"这是什么考试：正式名称、系列/品牌、简称","organizer":"谁主办或出卷，依据哪句原文","region":"地区依据出自标题/页眉/主办机构名/文件名中的哪一句；全国性或无依据写“无”"},"doc_type":string,"subjects":string[],"grade":string,"school_year_start":number,"cohort":number,"exam_date":"YYYY-MM","term":string,"region":string,"organization":{"id":"候选id"}|{"new":"完整正式名称","aliases":["文中写法"]}|null,"exam_name":string,"chapter":string,"series":string,"tags":[{"id":"候选id"}|{"new":"新标签"}],"files":[{"id":"文件id","role":string,"answer_start_page":number}],"evidence":{"字段名":"原文摘录"}}
 判断顺序：先弄清“这是什么考试、谁办的”，再判断“属于哪里”，最后填写其余字段。
 证据：
 - 依据每个文件的 card（已校验的阅读记录）、正文摘录、完整文件名、路径和上传者提示综合判断，这些都是证据。正文与文件名冲突时以正文为准；但文件名、路径里出现的专有称呼（如“宁波一模”“杭州二模”“Z20联盟”）是这场考试的名字，不得丢弃或改写成更笼统的说法。
@@ -138,6 +139,7 @@ const decideSystem = `你是中学资料编目员，负责为一套资料（同�
 - exam_name 写这场考试/这份资料的规范名称，例如“2025届浙江Z20名校联盟高三第一次联考”“2025届宁波市高三第一次模拟考试（宁波一模）”，去掉“试题卷”“答案”“学生版”“教师版”“解析版”“答案版”“答题卡”等部件字样。必须保留材料、文件名或路径中出现的城市、联盟、品牌简称和考试称呼（一模、二模、期中联考等），不得只写省份或泛称。
   topic（专题练习）、lecture（讲义）、study_guide（学案）、courseware（课件）、homework（作业）、other（其他）不是一场考试：exam_name 必须是这份资料自己的名字，写清它具体讲的内容，取首页标题、chapter 或正文里最具体的一处，例如“十年高考化学真题分项汇编 专题44 水的电离与溶液的pH”“不规则动词分类速记表（答案版）”。绝不能只写“专题练习”“高三化学讲义”“化学”这类由类型、年级、学科拼出来的泛称；资料本身没有名字时，按正文实际内容起一个，不得编造年份或出处。
 - chapter 是这份资料的内容范围，要写到能一眼看出讲的是什么：专题卷写具体专题（如“水的电离与溶液的pH”“电化学综合”），讲义写主要知识点或题型（如“文言文实词关联成语”），其他资料写它的主题；没有具体内容就留空。专题练习和讲义的 exam_name 必须包含 chapter 的核心说法，标题里要体现这个内容。
+- series 是这套资料所属的系列名，只在一套资料被拆成很多份、共用同一个印着的名字时填写，例如“十年（2012-2021）高考化学真题分项汇编”“高中物理模型方法分类解析”。必须是材料、文件名或路径里印着的名字，长度不少于 4 个字；这套资料自成一体、没有系列，或系列名和 exam_name 一样时留空。不要按学科、年级、类型自己编系列名。
 
 - tags 最多 5 个，优先从候选标签中选择；确有必要才新建，新标签不超过 2 个，每个 2～12 字。考试系列、品牌简称（如 TDA）、轮次（如 一模）适合作标签。
 - files 必须列出每个文件且只列一次。role 只能取：%s。同一套中试题卷、答案、前题后答(full)、教师版、答题卡各最多一份。role=full 时必须给出答案区开始页码。
@@ -203,6 +205,7 @@ func CheckDecide(content string, in DecideInput) (Decision, []Problem, error) {
 	c.place()
 	c.organization()
 	c.examName()
+	c.series()
 	c.tags()
 	c.applyLocks()
 	if len(c.out.Evidence) == 0 {
@@ -564,6 +567,32 @@ func (c *decideChecker) namedFromChapter(name string) bool {
 		return false
 	}
 	return strings.Contains(NormalizeName(name), NormalizeName(chapter))
+}
+
+// series is the printed name of a multi-part series ("十年高考化学真题分项
+// 汇编"). It is checked like exam_name, and a generic label is not a series.
+func (c *decideChecker) series() {
+	name := trimPartWords(clip(c.raw.Series, 120))
+	if name == "" {
+		return
+	}
+	if len([]rune(NormalizeName(name))) < 4 {
+		c.add(warn("invalid", "series", "series「%s」过短，不能作为系列名", name))
+		return
+	}
+	for _, label := range DocTypeLabels {
+		if NormalizeName(name) == NormalizeName(label) {
+			return
+		}
+	}
+	if NormalizeName(name) == NormalizeName(c.out.ExamName) {
+		return
+	}
+	if !c.corpus.Contains(name) {
+		c.add(warn("evidence", "series", "series「%s」缺少可在材料中找到的原文", name))
+		return
+	}
+	c.out.Series = name
 }
 
 // trailingPartWords are the 部件 words a document name often ends with. Material

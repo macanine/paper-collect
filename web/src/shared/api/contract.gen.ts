@@ -330,6 +330,8 @@ export interface Collection {
   id: string;
   title: string;
   description: string;
+  source: string;
+  locked: boolean;
   pack_count: number;
   created_at: string;
   updated_at: string;
@@ -585,6 +587,7 @@ export interface AIDecision {
   organization?: AIEntityChoice;
   exam_name?: string;
   chapter?: string;
+  series?: string;
   tags?: AIEntityChoice[];
   files: AIFileDecision[];
   evidence?: Record<string, string>;

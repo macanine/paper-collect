@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sort"
+	"time"
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/catalogai"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"github.com/nic/paper-collect/backend/internal/paths"
 	"gorm.io/gorm"
@@ -112,8 +115,16 @@ func (s *Service) CreateCollection(ctx context.Context, p auth.Principal, in Col
 		return CollectionView{}, err
 	}
 	now := s.now()
-	c := model.Collection{ID: newID(), Title: title, Description: desc, CreatedAt: now, UpdatedAt: now}
+	c := model.Collection{ID: newID(), Title: title, Description: desc, Source: model.CollectionSourceHuman,
+		Key: collectionKey(title), CreatedAt: now, UpdatedAt: now}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var n int64
+		if err := tx.Model(&model.Collection{}).Where("key = ?", c.Key).Count(&n).Error; err != nil {
+			return wrap("check topic name", err)
+		}
+		if n > 0 {
+			return apperr.Validation("已有同名专题")
+		}
 		if err := tx.Create(&c).Error; err != nil {
 			return wrap("create topic", err)
 		}
@@ -133,7 +144,9 @@ func (s *Service) UpdateCollection(ctx context.Context, p auth.Principal, id str
 	if pt.Title == nil && pt.Description == nil {
 		return CollectionView{}, apperr.Validation("至少需要提供一个可修改字段")
 	}
-	updates := map[string]any{"updated_at": s.now()}
+	// A person edited the topic: AI stops adding packs to it from now on. The
+	// key stays as it was so a rename does not make the AI start a new topic.
+	updates := map[string]any{"updated_at": s.now(), "locked": true}
 	if pt.Title != nil {
 		t, err := validateTitle(*pt.Title)
 		if err != nil {
@@ -177,7 +190,7 @@ func (s *Service) AddCollectionPacks(ctx context.Context, p auth.Principal, id s
 		if err := s.addPacksTx(tx, id, packIDs); err != nil {
 			return err
 		}
-		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Update("updated_at", s.now()).Error; err != nil {
+		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Updates(map[string]any{"updated_at": s.now(), "locked": true}).Error; err != nil {
 			return wrap("touch topic", err)
 		}
 		return s.audit(tx, p, "collection.add_packs", id)
@@ -257,7 +270,7 @@ func (s *Service) ReplaceItems(ctx context.Context, p auth.Principal, id string,
 		if err := s.addPacksTx(tx, id, packIDs); err != nil {
 			return err
 		}
-		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Update("updated_at", s.now()).Error; err != nil {
+		if err := tx.Model(&model.Collection{}).Where("id = ?", id).Updates(map[string]any{"updated_at": s.now(), "locked": true}).Error; err != nil {
 			return wrap("touch topic", err)
 		}
 		return s.audit(tx, p, "collection.replace_items", id)
@@ -290,4 +303,49 @@ func sortedByNatural(values []string) []string {
 	out := append([]string{}, values...)
 	sort.SliceStable(out, func(i, j int) bool { return paths.NaturalLess(out[i], out[j]) })
 	return out
+}
+
+// collectionKey is how a topic is matched to the series name the model read.
+// It folds punctuation and省市 suffixes, so "十年（2012-2021）..." and
+// "十年(2012-2021)..." are the same topic.
+func collectionKey(title string) string {
+	key := truncateRunes(catalogai.NormalizeName(title), 255)
+	if key == "" {
+		return truncateRunes(title, 255)
+	}
+	return key
+}
+
+// attachSeriesTx puts a decided pack into the topic of its series, creating the
+// topic when the series is new. A topic a person has edited is left alone: the
+// AI never renames, reorders or deletes one.
+func (s *Service) attachSeriesTx(tx *gorm.DB, packID, series string, now time.Time) error {
+	if series == "" {
+		return nil
+	}
+	key := collectionKey(series)
+	var topic model.Collection
+	err := tx.Where("key = ?", key).First(&topic).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		topic = model.Collection{ID: newID(), Title: series, Source: model.CollectionSourceAI,
+			Key: key, CreatedAt: now, UpdatedAt: now}
+		if cerr := tx.Create(&topic).Error; cerr != nil {
+			// Another decision created the same series first.
+			if ferr := tx.Where("key = ?", key).First(&topic).Error; ferr != nil {
+				return wrap("create series topic", cerr)
+			}
+		}
+	case err != nil:
+		return wrap("find series topic", err)
+	case topic.Locked:
+		return nil
+	}
+	if err := s.addPacksTx(tx, topic.ID, []string{packID}); err != nil {
+		return err
+	}
+	if err := tx.Model(&model.Collection{}).Where("id = ?", topic.ID).Update("updated_at", now).Error; err != nil {
+		return wrap("touch series topic", err)
+	}
+	return nil
 }
