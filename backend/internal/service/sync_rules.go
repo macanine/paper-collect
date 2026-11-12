@@ -13,6 +13,7 @@ import (
 
 	"github.com/nic/paper-collect/backend/internal/apperr"
 	"github.com/nic/paper-collect/backend/internal/auth"
+	"github.com/nic/paper-collect/backend/internal/jobexec"
 	"github.com/nic/paper-collect/backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -299,6 +300,12 @@ func (s *Service) desiredActions(tx *gorm.DB, m model.Material, rules []SyncRule
 			key = path.Base(key)
 		} else if d.RootPath != "" {
 			key = d.RootPath + "/" + key
+		}
+		// A copy stored beside a taken path keeps the suffixed name: adopting it
+		// avoids planning a move onto the occupied path on every re-sync.
+		if r, ok := have[d.ID]; ok && r.Status == model.ReplicaReady && r.RemotePath != "" &&
+			r.RemotePath == jobexec.ConflictPath(key, m.SHA256) {
+			key = r.RemotePath
 		}
 		base := key
 		for attempt := 0; ; attempt++ {

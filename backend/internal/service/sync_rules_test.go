@@ -590,7 +590,9 @@ func TestWaitingCatalogUntilReadyOrForced(t *testing.T) {
 	}
 }
 
-func TestFailedRequiredTargetNeedsAttentionAndRetryRecovers(t *testing.T) {
+// A file that already sits at the target path is never overwritten; the new
+// copy goes beside it under the SHA suffix instead of failing the replica.
+func TestTakenPathStoresBesideInsteadOfOverwriting(t *testing.T) {
 	e := newSyncEnv(t)
 	d := e.drive("本地", model.KindLocal, nil)
 	m := e.material("卷", "卷.pdf", []byte("conflict"), nil)
@@ -605,26 +607,23 @@ func TestFailedRequiredTargetNeedsAttentionAndRetryRecovers(t *testing.T) {
 	e.apply(fallbackTo(e.rules(), SyncTarget{DriveID: d.ID, PathTemplate: "{文件名}", Required: true}))
 	e.drain()
 	r := e.replica(m, d.ID)
-	if r.Status != model.ReplicaFailed || !strings.Contains(r.Error, "conflict") && !strings.Contains(r.Error, "path_taken") {
+	if r.Status != model.ReplicaReady {
 		t.Fatalf("conflicting upload = %+v", r)
+	}
+	if r.RemotePath == "卷.pdf" || !strings.Contains(r.RemotePath, "(") {
+		t.Fatalf("replica did not move aside: %+v", r)
+	}
+	if r.DesiredPath != r.RemotePath {
+		t.Fatalf("desired path did not follow the suffix: %+v", r)
 	}
 	if data, _ := os.ReadFile(occupied); string(data) != "someone else" {
 		t.Fatal("upload overwrote an existing file")
 	}
-	if got := e.reload(m).SyncStatus; got != model.SyncAttention {
+	if _, err := os.Stat(e.localFile(d.ID, r.RemotePath)); err != nil {
+		t.Fatalf("stored copy missing: %v", err)
+	}
+	if got := e.reload(m).SyncStatus; got != model.SyncSynced {
 		t.Fatalf("sync status = %s", got)
-	}
-
-	if err := os.Remove(occupied); err != nil {
-		t.Fatal(err)
-	}
-	results, err := e.svc.BulkReplicas(e.ctx, syncAdmin, []string{r.ID}, "retry")
-	if err != nil || !results[0].Success {
-		t.Fatalf("retry = %+v %v", results, err)
-	}
-	e.drain()
-	if got := e.replica(m, d.ID).Status; got != model.ReplicaReady {
-		t.Fatalf("retried replica status = %s", got)
 	}
 }
 

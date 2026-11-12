@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/nic/paper-collect/backend/internal/storage"
@@ -56,12 +58,20 @@ func runReplicate(ctx context.Context, env Env, in ReplicateInput) (*ReplicateRe
 		}
 		defer cleanup()
 		env.Progress(ctx, "正在上传文件并验证远端副本", 0, 0, nil)
-		stored, err := adapter.Put(ctx, storage.Object{Key: in.DesiredPath, Path: path, SHA256: in.Blob.SHA256, Size: in.Blob.Size})
+		key := in.DesiredPath
+		stored, err := adapter.Put(ctx, storage.Object{Key: key, Path: path, SHA256: in.Blob.SHA256, Size: in.Blob.Size})
+		if pathConflict(err) {
+			// The drive still holds an older file at this path. Keep both: upload
+			// beside it under the SHA suffix the planner already uses.
+			key = ConflictPath(key, in.Blob.SHA256)
+			env.Progress(ctx, "目标路径已有其他文件，改用带 SHA 后缀的文件名", 0, 0, nil)
+			stored, err = adapter.Put(ctx, storage.Object{Key: key, Path: path, SHA256: in.Blob.SHA256, Size: in.Blob.Size})
+		}
 		if err != nil {
 			return nil, err
 		}
 		out.Uploaded = true
-		out.RemoteID, out.RemotePath = stored.RemoteID, in.DesiredPath
+		out.RemoteID, out.RemotePath = stored.RemoteID, key
 		out.SizeBytes, out.Verification = stored.Size, stored.Verification
 	} else if in.RemotePath != in.DesiredPath && in.Move {
 		mover, ok := adapter.(storage.Mover)
@@ -69,17 +79,47 @@ func runReplicate(ctx context.Context, env Env, in ReplicateInput) (*ReplicateRe
 			return nil, storage.ErrUnsupported
 		}
 		env.Progress(ctx, "正在移动远端副本", 0, 0, nil)
-		stored, err := mover.Move(ctx, in.RemoteID, in.DesiredPath)
+		target := in.DesiredPath
+		stored, err := mover.Move(ctx, in.RemoteID, target)
+		if pathConflict(err) {
+			alt := ConflictPath(target, in.Blob.SHA256)
+			if alt == in.RemotePath {
+				// Already under the conflict-free name; nothing to do.
+				target = in.RemotePath
+				err = nil
+			} else {
+				stored, err = mover.Move(ctx, in.RemoteID, alt)
+				target = alt
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
-		out.Moved = true
-		out.RemoteID, out.RemotePath = stored.RemoteID, in.DesiredPath
+		if target != in.RemotePath {
+			out.Moved = true
+			out.RemoteID, out.RemotePath = stored.RemoteID, target
+		}
 	}
 	if in.Share {
 		out.ShareURL, out.SharePassword, out.ShareExpiresAt, out.ShareStatus, out.Note = ShareReplica(ctx, adapter, out.RemoteID)
 	}
 	return out, nil
+}
+
+// pathConflict reports a target key that already holds a different object.
+// Replicas never overwrite, so the caller retries under a suffixed name.
+func pathConflict(err error) bool {
+	return err != nil && storage.AsCloudError(err).Class == storage.ClassConflict
+}
+
+// ConflictPath appends the first eight characters of the SHA-256 before the
+// extension: the suffix the planner uses when two files resolve to one path.
+func ConflictPath(key, sha string) string {
+	if len(sha) > 8 {
+		sha = sha[:8]
+	}
+	ext := path.Ext(key)
+	return strings.TrimSuffix(key, ext) + " (" + sha + ")" + ext
 }
 
 // ShareReplica asks the adapter for a share link and classifies the outcome.

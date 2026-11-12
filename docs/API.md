@@ -269,7 +269,7 @@ config 或 secret 中出现该 kind 不支持的键会被拒绝；创建前会�
 | onedrive | 可用 | share_scope≠disabled 时 | 支持 | 支持 | 支持 |
 | s3 | 可用 | 签名链接 | 支持（key 前缀） | 复制后删除，非原子 | 支持 |
 
-- 所有适配器的上传都**不覆盖**已有对象：目标路径已有相同内容（大小一致，能校验 SHA 时 SHA 也一致）则直接接管，否则失败为 `conflict`。移动同样不覆盖目标。删除时对象已不存在视为成功。
+- 所有适配器的上传都**不覆盖**已有对象：目标路径已有相同内容（大小一致，能校验 SHA 时 SHA 也一致）则直接接管，否则失败为 `conflict`。移动同样不覆盖目标。删除时对象已不存在视为成功。副本任务遇到 `conflict` 时会在文件名后追加 ` (sha8)` 再传或再移动一次，远端原文件保持不变，副本的 `remote_path` 记录实际使用的路径。
 - local：提供 SHA 时 verification=sha256，否则为 size。
 - webdav：未配置 public_base_url 时不支持分享，配置后返回公开目录拼接链接，不代表该 URL 可匿名访问。提供 SHA 时上传后会完整下载重算。
 - lanzou：按 cookie 会话工作；单文件上限 100 MiB；默认 verification=uploaded，开启 verify_remote_hash 才可能为 sha256；分享返回 URL 与提取码。未对真实服务联调。

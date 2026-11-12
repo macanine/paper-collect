@@ -49,6 +49,11 @@ func newCloudError(class ErrorClass, detail string, retryable bool) *CloudError 
 	return &CloudError{Class: class, Detail: detail, Retryable: retryable}
 }
 
+// NewCloudError builds a classified storage error, for adapters and tests.
+func NewCloudError(class ErrorClass, detail string, retryable bool) *CloudError {
+	return newCloudError(class, detail, retryable)
+}
+
 // AsCloudError 把任意错误归一为 *CloudError；未分类的错误记为 unknown 且不可重试。
 func AsCloudError(err error) *CloudError {
 	if err == nil {

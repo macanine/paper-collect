@@ -136,6 +136,11 @@ func (s *Service) commitReplicate(job model.Job, out *jobexec.ReplicateResult) e
 		updates["remote_path"] = out.RemotePath
 		updates["size_bytes"] = out.SizeBytes
 		updates["verification"] = out.Verification
+		// A taken path made the executor store the copy beside it under the SHA
+		// suffix; that name is now where this copy belongs, so it is not drift.
+		if out.RemotePath != "" && out.RemotePath != replica.DesiredPath {
+			updates["desired_path"] = out.RemotePath
+		}
 	} else if out.Moved {
 		updates["remote_id"] = out.RemoteID
 		updates["remote_path"] = out.RemotePath
