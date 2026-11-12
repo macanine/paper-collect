@@ -350,7 +350,7 @@ type Pack struct {
 	Chapter        string `gorm:"size:255;not null"`
 	// Series is the canonical name of the topic the pack belongs to, copied
 	// from the topic so every set of one series is titled the same way.
-	Series      string `gorm:"size:255;not null"`
+	Series      string `gorm:"size:255;not null;default:''"`
 	TagsJSON    string `gorm:"type:text;not null"`
 	Description string `gorm:"type:text;not null"`
 	// Revision changes whenever the members change; a decision made for an

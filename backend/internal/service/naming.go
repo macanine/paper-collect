@@ -153,7 +153,7 @@ func seriesSpecific(p model.Pack) string {
 		// keep the numbered topic and drop the other series wording.
 		name = name[loc[0]:]
 	}
-	name = trimLeadingNoise(name)
+	name = trimTrailingQualifiers(trimLeadingNoise(name))
 	name = strings.Trim(strings.TrimSpace(name), titleNoise)
 	if catalogai.NormalizeName(name) == "" || catalogai.NormalizeName(name) == catalogai.NormalizeName(p.Series) {
 		return ""
@@ -176,12 +176,17 @@ func cutSeriesPrefix(name, series string) (string, bool) {
 	return name, false
 }
 
-// trimLeadingNoise drops separators and parenthesised qualifiers left in front
-// of the specific part, such as "（全国通用）" after the series was cut away.
+// leadingClosers are what is left when the series name sat inside brackets
+// ("【系列名】专题…") and only the closing bracket remains.
+const leadingClosers = "】）)]」』"
+
+// trimLeadingNoise drops separators, stray closing brackets and parenthesised
+// qualifiers left in front of the specific part, such as "（全国通用）" after
+// the series was cut away.
 func trimLeadingNoise(s string) string {
 	s = strings.TrimSpace(s)
 	for {
-		trimmed := strings.TrimSpace(strings.TrimLeft(s, titleNoise))
+		trimmed := strings.TrimSpace(strings.TrimLeft(s, titleNoise+leadingClosers))
 		pairs := [][2]string{{"（", "）"}, {"(", ")"}, {"【", "】"}, {"[", "]"}}
 		for _, pair := range pairs {
 			if !strings.HasPrefix(trimmed, pair[0]) {
@@ -194,6 +199,32 @@ func trimLeadingNoise(s string) string {
 		}
 		if trimmed == s {
 			return s
+		}
+		s = trimmed
+	}
+}
+
+// trailingQualifiers are version or scope words that do not help tell two sets
+// of one series apart.
+var trailingQualifiers = []string{"全国通用", "通用版", "全国版", "通用"}
+
+// trimTrailingQualifiers drops trailing "（全国通用）"-style words left after
+// the specific part.
+func trimTrailingQualifiers(s string) string {
+	for {
+		trimmed := strings.TrimSpace(s)
+		changed := false
+		for _, qualifier := range trailingQualifiers {
+			for _, pattern := range []string{"（%s）", "(%s)", "【%s】", "[%s]"} {
+				suffix := fmt.Sprintf(pattern, qualifier)
+				if strings.HasSuffix(trimmed, suffix) {
+					trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, suffix))
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			return trimmed
 		}
 		s = trimmed
 	}
