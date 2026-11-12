@@ -195,7 +195,7 @@ web/src/
 ### 6.2 套卷、文件与专题
 
 - 套卷是编目和浏览的单位：学科、年级、届别、地区、机构、类型、标签、描述都在套卷上；文件只保存 `part`、`answer_start_page`、`position`。
-- 套卷标题在 `locked_json` 不含 title 时自动生成（类型 + 学科 + 届别等，缺字段时退回考试名或 AI 读到的首页标题）；人工修改的字段写入 `locked_json`，AI 编目不再覆盖。
+- 套卷标题在 `locked_json` 不含 title 时自动生成：考试类（高考、中考、联考、月考等）按「届 + 地区 + 机构 + 类型 + 年级 + 学科」组合，高考真题不写机构（全国统一命题，机构固定）；专题练习、讲义、学案、课件、作业、其他不是一场考试，直接用 AI 为这份资料起的名字（`exam_name`），名字缺失时才退回编目字段和 AI 读到的首页标题。人工修改的字段写入 `locked_json`，AI 编目不再覆盖。
 - 需关注的文件 `stage=attention`，`attention_json` 记录原因；人工确认后置为 `ready` 并生成同步计划。套卷 stage 取成员中最靠后者（ready < processing < waiting_ai < attention）。
 - 专题只存放套卷引用，替换接口整体替换收录关系，不删除套卷或文件；`position` 显式保存，追加接口放在末尾。
 
@@ -274,7 +274,7 @@ Eligible: part in (questions, full); other parts are not_applicable
 | ZIP | 展开成员后按成员路径分组；ZIP 原件不创建文件、Blob 记录或副本 |
 
 - ZIP 成员记录 `source_path = ZIP 相对路径 + "/" + 成员路径`；不存在 ZIP 容器资料。
-- 套卷标题优先用类型 + 学科 + 届别等编目字段生成；字段不足时退回清单 `title`、考试名或到达文件名。学科、年级、届别、地区、机构、标签来自清单 hints，服务端不从文件名推断学科。
+- 套卷标题：考试类用「届 + 地区 + 机构 + 类型 + 年级 + 学科」编目字段组合（高考真题不含机构），专题、讲义等非考试资料用 AI 给出的名字；都没有时退回清单 `title`、考试名或到达文件名。学科、年级、届别、地区、机构、标签来自清单 hints，服务端不从文件名推断学科。
 - `part` 有 8 类：questions（试题）、answers（答案）、full（题目+答案同文件）、teacher（教师版）、answer_sheet（答题卡）、listening（听力）、main（单文档正文）、other（无法判断）。归档时按文件名关键词给出初始 part，AI 自动应用与人工修改走同一校验；文件名按「套卷标题 + part 标签」生成。
 - 同一事务中还写入：每个新文件的 analyze 阅读任务（文件保持 `waiting_catalog`，AI 编目后再规划同步）、Upload 的 `results`/`new_count`/`duplicate_count`、ingest Job 成功状态和系统审计。分组（group）在同批文件读完后由阅读任务的提交入队，编目（decide）由分组或成员变化入队。
 

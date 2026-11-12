@@ -70,9 +70,67 @@ func TestDecidePromptIsWellFormed(t *testing.T) {
 	if strings.Contains(system, "%!") || strings.Contains(system, "%s") {
 		t.Fatalf("prompt has a formatting error: %.200s", system)
 	}
-	for _, want := range []string{"analysis", "TDA", "evidence.region"} {
+	for _, want := range []string{"analysis", "TDA", "evidence.region", "gaokao_real", "chapter"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("prompt lacks %q", want)
 		}
+	}
+}
+
+func TestGaokaoRealKeepsNoOrganization(t *testing.T) {
+	reply := `{"doc_type":"gaokao_real","subjects":["chemistry"],"grade":"grade12",` +
+		`"organization":{"new":"教育部教育考试院"},"files":[{"id":"f1","role":"questions"}]}`
+	d, problems, err := CheckDecide(reply, decideInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Organization != nil {
+		t.Fatalf("gaokao_real recorded organization %+v", d.Organization)
+	}
+	for _, p := range problems {
+		if p.Field == "organization" {
+			t.Fatalf("gaokao_real reported an organization problem: %+v", p)
+		}
+	}
+}
+
+func topicInput() DecideInput {
+	in := decideInput()
+	in.Members[0] = DecideMember{
+		ID: "f1", FileName: "专题练习 高三 化学 专题44 水的电离与溶液的pH 试题卷.docx", PageCount: 6,
+		Excerpt: "专题44 水的电离与溶液的pH\n1. 常温下，0.1 mol/L 盐酸中由水电离出的 c(H+) 为多少",
+		Card:    Card{Role: "questions"},
+	}
+	return in
+}
+
+func TestTopicPackIsNamedByItsContent(t *testing.T) {
+	name := "高三化学 水的电离与溶液的pH 专题精练"
+	reply := `{"exam_name":"` + name + `","doc_type":"topic","subjects":["chemistry"],"grade":"grade12",` +
+		`"chapter":"水的电离与溶液的pH","files":[{"id":"f1","role":"questions"}]}`
+	d, problems, err := CheckDecide(reply, topicInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ExamName != name {
+		t.Fatalf("exam_name = %q, problems = %+v", d.ExamName, problems)
+	}
+
+	// A name that is not anchored in the chapter it claims is rejected.
+	reply = `{"exam_name":"高三化学 电化学专题精练","chapter":"电化学","doc_type":"topic",` +
+		`"subjects":["chemistry"],"grade":"grade12","files":[{"id":"f1","role":"questions"}]}`
+	d, problems, err = CheckDecide(reply, topicInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ExamName != "" {
+		t.Fatalf("unfounded exam_name %q accepted", d.ExamName)
+	}
+	found := false
+	for _, p := range problems {
+		found = found || (p.Field == "exam_name" && p.Code == "evidence")
+	}
+	if !found {
+		t.Fatalf("no exam_name evidence problem: %+v", problems)
 	}
 }

@@ -57,7 +57,7 @@ func canonicalPackTitle(p model.Pack) string {
 	if p.Region != "" {
 		parts = append(parts, p.Region)
 	}
-	if p.Organization != "" {
+	if p.Organization != "" && p.DocType != catalogai.DocTypeGaokaoReal {
 		parts = append(parts, p.Organization)
 	}
 	if label := docTypeLabels[p.DocType]; label != "" && p.DocType != "other" {
@@ -93,6 +93,27 @@ func canonicalPackTitle(p model.Pack) string {
 	return truncateRunes(strings.Join(parts, " "), maxTitleRunes)
 }
 
+// packTitleFromCatalogue names a set from its catalogue fields, or returns ""
+// when they do not identify it. Exam packs are composed from 届、地区、机构、
+// 类型、年级、学科; 专题练习、讲义、学案、课件、作业、其他 keep the name the
+// model wrote for them, because a field dump says what kind of file it is, not
+// what it is about. The composed name is still the fallback when no name was
+// written at all.
+func packTitleFromCatalogue(p model.Pack) string {
+	if p.ExamName != "" && !catalogai.IsComposedTitleDocType(p.DocType) {
+		return truncateRunes(p.ExamName, maxTitleRunes)
+	}
+	if p.DocType != "" && len(model.DecodeStrings(p.SubjectsJSON)) > 0 {
+		if title := canonicalPackTitle(p); title != "" {
+			return title
+		}
+	}
+	if p.ExamName != "" {
+		return truncateRunes(p.ExamName, maxTitleRunes)
+	}
+	return ""
+}
+
 func truncateRunes(s string, limit int) string {
 	r := []rune(s)
 	if len(r) <= limit {
@@ -115,16 +136,7 @@ func (s *Service) refreshPackNamesTx(tx *gorm.DB, packID string) ([]string, erro
 	}
 	title := pack.Title
 	if !pack.Locked()[catalogai.FieldTitle] {
-		// The field-built name is only used once it says what the pack is
-		// (type and subject); until then the exam name, or the title the AI
-		// read from the first page, identifies it far better.
-		title = ""
-		if pack.DocType != "" && len(model.DecodeStrings(pack.SubjectsJSON)) > 0 {
-			title = canonicalPackTitle(pack)
-		}
-		if title == "" && pack.ExamName != "" {
-			title = truncateRunes(pack.ExamName, maxTitleRunes)
-		}
+		title = packTitleFromCatalogue(pack)
 		if title == "" && len(members) > 0 {
 			ids := make([]string, 0, len(members))
 			for _, m := range members {

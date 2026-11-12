@@ -54,6 +54,24 @@ var ExamDocTypes = map[string]bool{
 	"unit": true, "weekly": true, "topic": true,
 }
 
+// ComposedTitleDocTypes are exam types whose display title is composed from
+// the catalogue fields (届 + 地区 + 机构 + 类型 + 年级 + 学科). Every other
+// document — 专题练习、讲义、学案、课件、作业、其他 — carries a name of its
+// own, which becomes the title as the model wrote it.
+var ComposedTitleDocTypes = map[string]bool{
+	"gaokao_real": true, "gaokao_mock": true, "zhongkao_real": true, "zhongkao_mock": true,
+	"joint": true, "monthly": true, "midterm": true, "final": true, "opening": true,
+	"unit": true, "weekly": true,
+}
+
+// IsComposedTitleDocType reports whether a set of this type is named from its
+// catalogue fields rather than by its own name.
+func IsComposedTitleDocType(v string) bool { return ComposedTitleDocTypes[v] }
+
+// DocTypeGaokaoReal is the national college entrance exam: one organizer and
+// one exam brand, so a set of this type records no organization.
+const DocTypeGaokaoReal = "gaokao_real"
+
 // GradeLabels names grade codes.
 var GradeLabels = map[string]string{
 	"grade7": "初一", "grade8": "初二", "grade9": "初三",
