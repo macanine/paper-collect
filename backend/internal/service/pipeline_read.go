@@ -267,16 +267,7 @@ func (s *Service) batchOrder(db *gorm.DB, rows []model.Material) ([]model.Materi
 	for _, m := range rows {
 		ids = append(ids, m.ID)
 	}
-	paths := map[string]string{}
-	if len(ids) > 0 {
-		var sources []model.MaterialSource
-		_ = db.Where("material_id IN ?", ids).Order("created_at ASC").Find(&sources).Error
-		for _, src := range sources {
-			if _, ok := paths[src.MaterialID]; !ok {
-				paths[src.MaterialID] = src.Path
-			}
-		}
-	}
+	paths := sourcePaths(db, ids)
 	for _, m := range rows {
 		if paths[m.ID] == "" {
 			paths[m.ID] = m.OriginalName
@@ -284,6 +275,32 @@ func (s *Service) batchOrder(db *gorm.DB, rows []model.Material) ([]model.Materi
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return pathsLess(paths[rows[i].ID], paths[rows[j].ID]) })
 	return rows, paths
+}
+
+// sourcePaths returns the first arrival path of each file.
+func sourcePaths(db *gorm.DB, ids []string) map[string]string {
+	paths := map[string]string{}
+	if len(ids) == 0 {
+		return paths
+	}
+	var sources []model.MaterialSource
+	_ = db.Where("material_id IN ?", ids).Order("created_at ASC").Find(&sources).Error
+	for _, src := range sources {
+		if _, ok := paths[src.MaterialID]; !ok {
+			paths[src.MaterialID] = src.Path
+		}
+	}
+	return paths
+}
+
+// folderOf is the arrival folder of a path; top-level files have none, because
+// sharing the root says nothing about belonging to the same set.
+func folderOf(p string) string {
+	d := path.Dir(p)
+	if d == "." || d == "/" || d == "" {
+		return ""
+	}
+	return d
 }
 
 func pathsLess(a, b string) bool { return paths.NaturalLess(a, b) }

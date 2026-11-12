@@ -18,6 +18,7 @@ const (
 	groupChunkFiles     = 80  // files per GROUP call
 	groupChunkStretch   = 120 // a chunk may grow to finish the folder it stopped in
 	groupCandidateLimit = 40  // existing sets offered per call
+	groupPeerLimit      = 40  // same-folder files pulled in from other uploads
 )
 
 type groupPayload struct {
@@ -74,6 +75,12 @@ func (s *Service) prepareGroup(ctx context.Context, job model.Job) (*jobexec.Gro
 		}
 		return nil, errLeaseLost
 	}
+	batchRows, batchPaths := s.batchOrder(db, rows)
+	peers, err := s.groupPeers(db, job.BatchID, batchRows, batchPaths)
+	if err != nil {
+		return nil, err
+	}
+	rows = append(batchRows, peers...)
 	rows, sourcePaths := s.batchOrder(db, rows)
 	chunk := chunkByFolder(rows, sourcePaths)
 	ids := make([]string, 0, len(chunk))
@@ -108,6 +115,53 @@ func (s *Service) prepareGroup(ctx context.Context, job model.Job) (*jobexec.Gro
 	return &jobexec.GroupInput{Request: catalogai.GroupInput{Files: files, Candidates: candidates}, Models: models}, nil
 }
 
+// groupPeers returns files still waiting to be grouped that arrived from the
+// same folder, whatever upload they came in. A drop of one file per upload
+// makes every file its own batch, so without this the two halves of a 试题/答案
+// pair are grouped in separate calls and become two sets. The model still
+// decides membership; this only widens what it can see.
+func (s *Service) groupPeers(db *gorm.DB, batchID string, rows []model.Material, paths map[string]string) ([]model.Material, error) {
+	folders := map[string]bool{}
+	for _, m := range rows {
+		if f := folderOf(paths[m.ID]); f != "" {
+			folders[f] = true
+		}
+	}
+	if len(folders) == 0 {
+		return nil, nil
+	}
+	var waiting []model.Material
+	if err := db.Where("batch_id <> ? AND ai_step = ? AND stage IN ?", batchID, model.StepGroup,
+		[]string{model.StageProcessing, model.StageWaitingAI}).
+		Order("created_at DESC").Limit(groupPeerLimit).Find(&waiting).Error; err != nil {
+		return nil, wrap("load folder peers", err)
+	}
+	if len(waiting) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(waiting))
+	seen := map[string]bool{}
+	for _, m := range rows {
+		seen[m.ID] = true
+	}
+	for _, m := range waiting {
+		if !seen[m.ID] {
+			ids = append(ids, m.ID)
+		}
+	}
+	peerPaths := sourcePaths(db, ids)
+	out := make([]model.Material, 0, len(waiting))
+	for _, m := range waiting {
+		if seen[m.ID] {
+			continue
+		}
+		if folders[folderOf(peerPaths[m.ID])] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 // chunkByFolder takes up to groupChunkFiles files, then keeps going while
 // the next file sits in the same folder as the last one taken.
 func chunkByFolder(rows []model.Material, sourcePaths map[string]string) []model.Material {
@@ -140,6 +194,11 @@ func (s *Service) groupCandidates(db *gorm.DB, batchID string, files []catalogai
 	}
 	for _, id := range batchPacks {
 		pinned[id] = true
+	}
+	// Sets holding files from the same arrival folder are the likely siblings
+	// when each upload carries a single file.
+	if err := pinFolderPacks(db, files, pinned); err != nil {
+		return nil, err
 	}
 	subjects, grades, cohorts := map[string]bool{}, map[string]bool{}, map[int]bool{}
 	for _, f := range files {
@@ -257,6 +316,42 @@ func scoreBase(pinned bool) float64 {
 		return 10
 	}
 	return 0
+}
+
+// pinFolderPacks marks sets that already hold files from the same arrival
+// folder, so a 答案 that arrives after its 试题 was decided can still join it.
+func pinFolderPacks(db *gorm.DB, files []catalogai.GroupFile, pinned map[string]bool) error {
+	folders := map[string]bool{}
+	for _, f := range files {
+		if d := folderOf(f.Path); d != "" {
+			folders[d] = true
+		}
+	}
+	if len(folders) == 0 {
+		return nil
+	}
+	var materialIDs []string
+	for _, folder := range keys(folders) {
+		var ids []string
+		if err := db.Model(&model.MaterialSource{}).
+			Where("path LIKE ? ESCAPE '!'", likeEscape(folder+"/")+"%").
+			Limit(2000).Pluck("material_id", &ids).Error; err != nil {
+			return wrap("load folder files", err)
+		}
+		materialIDs = append(materialIDs, ids...)
+	}
+	if len(materialIDs) == 0 {
+		return nil
+	}
+	var packIDs []string
+	if err := db.Model(&model.Material{}).Where("id IN ? AND pack_id <> ''", materialIDs).
+		Distinct("pack_id").Pluck("pack_id", &packIDs).Error; err != nil {
+		return wrap("load folder sets", err)
+	}
+	for _, id := range packIDs {
+		pinned[id] = true
+	}
+	return nil
 }
 
 func keys(m map[string]bool) []string {
