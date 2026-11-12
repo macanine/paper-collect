@@ -209,3 +209,31 @@ func TestCommitDecideJoinsTheSeriesTopic(t *testing.T) {
 		t.Fatalf("topic items = %d, want 2", len(items))
 	}
 }
+
+// Re-asking for a decision that already answers the current set only spends
+// tokens; force is the explicit "do it anyway".
+func TestRedecideSkipsAnUnchangedDecision(t *testing.T) {
+	e := newSyncEnv(t)
+	m := e.material("卷", "卷.pdf", []byte("skip-redecide"), nil)
+	job := e.runningDecide(m.PackID, e.pack(m.PackID).Revision)
+	out := &jobexec.DecideResult{Usable: true, Decision: catalogai.Decision{DocType: "final",
+		Files: []catalogai.FileDecision{{ID: m.ID, Role: model.PartQuestions}}}}
+	if err := e.svc.commitDecide(e.ctx, job, out); err != nil {
+		t.Fatal(err)
+	}
+
+	queued, err := e.svc.RedecidePack(e.ctx, syncAdmin, m.PackID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued {
+		t.Fatal("an unchanged set was decided again")
+	}
+	queued, err = e.svc.RedecidePack(e.ctx, syncAdmin, m.PackID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !queued {
+		t.Fatal("force must queue the decision")
+	}
+}

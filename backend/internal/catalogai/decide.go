@@ -147,39 +147,46 @@ const decideSystem = `你是中学资料编目员，负责为一套资料（同�
 - locked 中的字段由人工确定，必须原样采用；locked_role 同理。
 - evidence 为 exam_name、organization、region、grade、school_year_start、cohort、exam_date 中你填写了的字段各给一句原文摘录（10～40 字，必须能在材料中逐字找到）。`
 
+// DecidePromptVersion identifies the decide prompt and its message layout.
+// Bump it whenever decideSystem or DecideMessages changes, so a stored decision
+// made by an older prompt is not reused.
+const DecidePromptVersion = "decide-v3"
+
 // DecideMessages builds the DECIDE prompt.
 func DecideMessages(in DecideInput) []ai.ChatMessage {
 	system := fmt.Sprintf(decideSystem, docTypeCodes(), subjectCodes(), strings.Join(Regions, "、"), roleCodes())
-	var b strings.Builder
+	var sections []string
+	// The candidate lists are the same for every set in a batch, so they come
+	// first: provider-side prefix caching then reuses them across calls instead
+	// of re-reading them for each pack. Everything after varies per set.
+	if len(in.Tags) > 0 {
+		tags, _ := json.Marshal(in.Tags)
+		sections = append(sections, "标签候选：\n"+string(tags))
+	}
+	if len(in.SeriesNames) > 0 {
+		series, _ := json.Marshal(in.SeriesNames)
+		sections = append(sections, "已有系列（同一系列原样复用这些写法）：\n"+string(series))
+	}
 	members, _ := json.Marshal(in.Members)
-	b.WriteString("本套文件（card 为已校验的阅读记录）：\n")
-	b.Write(members)
+	sections = append(sections, "本套文件（card 为已校验的阅读记录）：\n"+string(members))
 	for _, m := range in.Members {
 		if strings.TrimSpace(m.Excerpt) == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "\n\n<excerpt file=%q>\n%s\n</excerpt>", m.ID, m.Excerpt)
+		sections = append(sections, fmt.Sprintf("<excerpt file=%q>\n%s\n</excerpt>", m.ID, m.Excerpt))
 	}
 	if !in.Locked.empty() {
 		locked, _ := json.Marshal(in.Locked)
-		b.WriteString("\n\n人工锁定的字段（必须原样采用）：\n")
-		b.Write(locked)
+		sections = append(sections, "人工锁定的字段（必须原样采用）：\n"+string(locked))
 	}
-	orgs, _ := json.Marshal(in.Organizations)
-	tags, _ := json.Marshal(in.Tags)
-	b.WriteString("\n\n机构候选：\n")
-	b.Write(orgs)
-	b.WriteString("\n\n标签候选：\n")
-	b.Write(tags)
-	if len(in.SeriesNames) > 0 {
-		series, _ := json.Marshal(in.SeriesNames)
-		b.WriteString("\n\n已有系列（同名时原样复用这些写法）：\n")
-		b.Write(series)
+	if len(in.Organizations) > 0 {
+		orgs, _ := json.Marshal(in.Organizations)
+		sections = append(sections, "机构候选：\n"+string(orgs))
 	}
 	if in.Hints != "" {
-		b.WriteString("\n\n上传者提示：" + in.Hints)
+		sections = append(sections, "上传者提示："+in.Hints)
 	}
-	return []ai.ChatMessage{ai.TextMessage("system", system), ai.TextMessage("user", b.String())}
+	return []ai.ChatMessage{ai.TextMessage("system", system), ai.TextMessage("user", strings.Join(sections, "\n\n"))}
 }
 
 func (in DecideInput) corpus() Corpus {

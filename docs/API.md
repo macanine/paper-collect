@@ -364,7 +364,7 @@ AI scope：`ai:read`（读取模型/OCR 配置与解析设置）、`ai:write`（
 - `POST /materials/{id}/analysis`（materials:write）：请求可空；让 AI 重新阅读该文件，之后重新确定所在套卷的编目。202 data=`{"queued":true}`。审计 material.ai_reread。
 - `GET /packs/{id}/ai`（materials:read）：200 PackAI。
 - `POST /packs/{id}/confirm`（materials:write）：在一个事务内确认需关注的套卷。JSON `{"patch":{编目字段，同 PATCH /packs/{id}，可为空对象},"members":[{"id","part","answer_start_page"}]}`；patch 中出现的字段与 members 中的部件按人工修改锁定，然后把套卷内全部 stage=attention 的文件置为 ready 并生成同步计划。任一步失败则全部不保存。members 只能是本套卷的文件（否则 400），不接受 `unlock_fields`；套卷没有需关注文件时 409。200 data=`{"pack":Pack,"accepted":n}`。审计 pack.confirm。
-- `POST /packs/{id}/ai/redecide`（materials:write）：让 AI 重新确定该套卷编目，`locked_fields` 与 `part_locked` 保持不变。202 data=`{"queued":true}`。审计 pack.ai_redecide。
+- `POST /packs/{id}/ai/redecide`（materials:write）：让 AI 重新确定该套卷编目，`locked_fields` 与 `part_locked` 保持不变。JSON 可省略，`{"force":true}` 强制重新调用；否则成员数量（revision）与编目提示词版本都没变时直接跳过，返回 `{"queued":false}`。202 data=`{"queued":boolean}`。审计 pack.ai_redecide。
 - `POST /ai/rerun`（ai:write）：JSON `{"mode":"decide"|"full","scope":"attention"|"all","dry_run":true}`。decide 保留分组，只重新编目所选文件所在的套卷；full 让所选文件重新阅读（已有阅读记录直接复用）、分组并编目。dry_run=true 只统计。200 data=`{"materials":n,"packs":n,"estimated_calls":n,"applied":boolean}`。审计 ai.rerun_decide / ai.rerun_full。
 - `GET /entities`（materials:read）：查询 `kind`（必填）、`q`（名称或别名）、page、page_size；200 Page<Entity>。
 - `PATCH /entities/{id}`（materials:write）：JSON `{"name"?,"region"?,"locked"?,"remove_aliases"?:string[]}`；改名同步到所有使用该条目的套卷（标题、文件名与网盘路径随之更新），名称已属于其他条目时 409；任何修改都会锁定条目（可用 locked=false 解锁）。200 Entity。审计 entity.update。

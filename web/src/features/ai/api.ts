@@ -103,9 +103,9 @@ export function getPackAI(packId: string): Promise<PackAI> {
   return apiRequest<PackAI>(`/packs/${segment(packId)}/ai`);
 }
 
-/** 让 AI 重新确定套卷编目；人工锁定的字段保持不变。 */
-export function redecidePack(packId: string): Promise<{ queued: boolean }> {
-  return apiRequest<{ queued: boolean }>(`/packs/${segment(packId)}/ai/redecide`, { method: 'POST', body: {} });
+/** 让 AI 重新确定套卷编目；人工锁定的字段保持不变。force 为 false 时，成员与提示词都没变就直接跳过。 */
+export function redecidePack(packId: string, force = true): Promise<{ queued: boolean }> {
+  return apiRequest<{ queued: boolean }>(`/packs/${segment(packId)}/ai/redecide`, { method: 'POST', body: { force } });
 }
 
 /** 让已有文件重新经过 AI；dry_run 只返回影响范围。 */

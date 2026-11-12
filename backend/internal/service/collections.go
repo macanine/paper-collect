@@ -317,10 +317,11 @@ func collectionKey(title string) string {
 }
 
 // seriesCandidates lists existing topic names so the model reuses one spelling
-// per series instead of inventing a variant for every pack.
+// per series instead of inventing a variant for every pack. Oldest first, so a
+// new topic is appended and the shared prompt prefix stays stable.
 func (s *Service) seriesCandidates(db *gorm.DB) ([]string, error) {
 	var names []string
-	if err := db.Model(&model.Collection{}).Order("updated_at DESC").Limit(200).Pluck("title", &names).Error; err != nil {
+	if err := db.Model(&model.Collection{}).Order("created_at ASC").Limit(200).Pluck("title", &names).Error; err != nil {
 		return nil, wrap("load series candidates", err)
 	}
 	return names, nil

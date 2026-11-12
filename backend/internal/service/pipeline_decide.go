@@ -187,7 +187,8 @@ func (s *Service) prepareDecide(ctx context.Context, job model.Job) (*jobexec.De
 	}
 	now := s.now()
 	if err := db.Save(&model.PackDecision{PackID: pack.ID, Status: model.AnalysisRunning, JobID: job.ID, Revision: pack.Revision,
-		DecisionJSON: "{}", ProblemsJSON: "[]", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		PromptVersion: catalogai.DecidePromptVersion,
+		DecisionJSON:  "{}", ProblemsJSON: "[]", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		return nil, err
 	}
 	return &jobexec.DecideInput{Request: in, Models: models}, nil
@@ -367,7 +368,8 @@ func (s *Service) applyDecisionTx(tx *gorm.DB, pack model.Pack, jobID string, ou
 	decisionJSON, _ := json.Marshal(d)
 	problemsJSON, _ := json.Marshal(out.Problems)
 	if err := tx.Save(&model.PackDecision{PackID: pack.ID, Status: model.AnalysisSucceeded, JobID: jobID, Revision: pack.Revision,
-		ProviderID: out.ProviderID, Model: out.Model, DecisionJSON: string(decisionJSON), ProblemsJSON: string(problemsJSON),
+		PromptVersion: catalogai.DecidePromptVersion,
+		ProviderID:    out.ProviderID, Model: out.Model, DecisionJSON: string(decisionJSON), ProblemsJSON: string(problemsJSON),
 		DecidedAt: &now, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		return nil, err
 	}
@@ -401,7 +403,8 @@ func (s *Service) decisionFailedTx(tx *gorm.DB, packID, jobID, message string, p
 	now := s.now()
 	problemsJSON, _ := json.Marshal(problems)
 	if err := tx.Save(&model.PackDecision{PackID: packID, Status: model.AnalysisFailed, JobID: jobID,
-		DecisionJSON: "{}", ProblemsJSON: string(problemsJSON), Error: message, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		PromptVersion: catalogai.DecidePromptVersion,
+		DecisionJSON:  "{}", ProblemsJSON: string(problemsJSON), Error: message, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		return err
 	}
 	var members []model.Material
@@ -419,26 +422,48 @@ func (s *Service) decisionFailedTx(tx *gorm.DB, packID, jobID, message string, p
 	return nil
 }
 
-// RedecidePack asks the model to decide a set again (locked fields stay).
-func (s *Service) RedecidePack(ctx context.Context, p auth.Principal, id string) error {
+// RedecidePack asks the model to decide a set again (locked fields stay). A set
+// whose members and prompt are unchanged since its last successful decision is
+// left alone unless force is set, so a bulk re-run does not spend tokens to get
+// the answer it already has.
+func (s *Service) RedecidePack(ctx context.Context, p auth.Principal, id string, force bool) (bool, error) {
+	queued := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&model.Pack{}).Where("id = ?", id).Count(&count).Error; err != nil {
-			return err
+		var pack model.Pack
+		if err := tx.Where("id = ?", id).First(&pack).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperr.NotFound("套卷不存在")
+			}
+			return wrap("load pack", err)
 		}
-		if count == 0 {
-			return apperr.NotFound("套卷不存在")
+		if !force && decisionIsCurrent(tx, pack) {
+			return nil
 		}
 		if err := s.redecideTx(tx, id, s.now()); err != nil {
 			return err
 		}
+		queued = true
 		return s.audit(tx, p, "pack.ai_redecide", id)
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
-	s.notify()
-	return nil
+	if queued {
+		s.notify()
+	}
+	return queued, nil
+}
+
+// decisionIsCurrent reports whether the stored decision still answers the set as
+// it is now: it succeeded, no member changed since, and the prompt is the one
+// that produced it.
+func decisionIsCurrent(tx *gorm.DB, pack model.Pack) bool {
+	var d model.PackDecision
+	if err := tx.Where("pack_id = ?", pack.ID).First(&d).Error; err != nil {
+		return false
+	}
+	return d.Status == model.AnalysisSucceeded && d.Revision == pack.Revision &&
+		d.PromptVersion == catalogai.DecidePromptVersion
 }
 
 // redecideTx puts a set's settled members back into the decide step and

@@ -760,18 +760,21 @@ type FileCard struct {
 
 // PackDecision is the latest verified AI catalogue of one pack (DECIDE step).
 type PackDecision struct {
-	PackID       string `gorm:"primaryKey;size:36"`
-	Status       string `gorm:"size:16;not null;index"`
-	JobID        string `gorm:"size:36"`
-	Revision     int    `gorm:"not null"`
-	ProviderID   string `gorm:"size:36"`
-	Model        string `gorm:"size:200"`
-	DecisionJSON string `gorm:"type:text;not null"`
-	ProblemsJSON string `gorm:"type:text;not null"`
-	Error        string `gorm:"type:text;not null"`
-	DecidedAt    *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	PackID     string `gorm:"primaryKey;size:36"`
+	Status     string `gorm:"size:16;not null;index"`
+	JobID      string `gorm:"size:36"`
+	Revision   int    `gorm:"not null"`
+	ProviderID string `gorm:"size:36"`
+	Model      string `gorm:"size:200"`
+	// PromptVersion is the decide prompt that produced this result; a decision
+	// is only reused while the prompt that made it is still the current one.
+	PromptVersion string `gorm:"size:32"`
+	DecisionJSON  string `gorm:"type:text;not null"`
+	ProblemsJSON  string `gorm:"type:text;not null"`
+	Error         string `gorm:"type:text;not null"`
+	DecidedAt     *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Entity kinds kept in the name dictionary.

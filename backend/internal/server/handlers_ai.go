@@ -273,15 +273,19 @@ func (s *Server) handleGetPackAI(c *gin.Context) {
 }
 
 func (s *Server) handleRedecidePack(c *gin.Context) {
-	if _, _, ae := decodeOptionalJSON(c, &struct{}{}); ae != nil {
+	var req struct {
+		Force bool `json:"force"`
+	}
+	if _, _, ae := decodeOptionalJSON(c, &req); ae != nil {
 		respondError(c, ae)
 		return
 	}
-	if err := s.svc.RedecidePack(c.Request.Context(), principal(c), c.Param("id")); err != nil {
+	queued, err := s.svc.RedecidePack(c.Request.Context(), principal(c), c.Param("id"), req.Force)
+	if err != nil {
 		respondError(c, err)
 		return
 	}
-	s.respondData(c, http.StatusAccepted, queuedDTO{Queued: true})
+	s.respondData(c, http.StatusAccepted, queuedDTO{Queued: queued})
 }
 
 func (s *Server) handleRerunAI(c *gin.Context) {

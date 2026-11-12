@@ -123,7 +123,7 @@ export function PackAIPanel({ packId, canWrite, bare }: { packId: string; canWri
 
   const handleRedecide = () => {
     redecide.mutate(undefined, {
-      onSuccess: () => message.success('已交给 AI 重新编目'),
+      onSuccess: (result) => (result.queued ? message.success('已交给 AI 重新编目') : message.info('编目已是最新，未重复调用')),
       onError: (error) => message.error(describeError(error).title),
     });
   };

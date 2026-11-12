@@ -224,3 +224,21 @@ func TestSeriesReusesAnExistingTopicName(t *testing.T) {
 		t.Fatalf("series = %q, problems = %+v", d.Series, problems)
 	}
 }
+
+// Shared candidate lists come first so a batch of calls shares one prompt
+// prefix; the per-set part follows.
+func TestDecideMessagesPutSharedCandidatesFirst(t *testing.T) {
+	in := decideInput()
+	in.Tags = []EntityCandidate{{ID: "t1", Name: "一轮复习"}}
+	in.SeriesNames = []string{"十年（2012-2021）高考化学真题分项汇编"}
+	messages := DecideMessages(in)
+	user, _ := messages[1].Content.(string)
+	if !strings.HasPrefix(user, "标签候选：") {
+		t.Fatalf("prompt does not start with the shared candidates: %.80s", user)
+	}
+	seriesAt := strings.Index(user, "已有系列")
+	packAt := strings.Index(user, "本套文件")
+	if seriesAt < 0 || packAt < 0 || seriesAt > packAt {
+		t.Fatalf("shared candidates must precede the set: series=%d pack=%d", seriesAt, packAt)
+	}
+}
