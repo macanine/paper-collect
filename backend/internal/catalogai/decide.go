@@ -135,7 +135,7 @@ const decideSystem = `你是中学资料编目员，负责为一套资料（同�
   高考真题(gaokao_real) 由教育考试院统一命题，主办方固定且无需区分，organization 必须写 null，不要写教育部教育考试院、省教育考试院或任何其他机构。
   城市级统考（如“嘉兴一模”“宁波市选考模拟考试”）材料里没有更具体的出卷学校或联盟时，organization 写材料中出现的那个市/区县名称（如“嘉兴市”“宁波市”，按原文写法），并在 evidence 中给出含该地名的原文或文件名摘录。考试轮次或类型（一模=第一次模拟考试、二模、三模、期中、月考、联考等）不是机构，绝不能写进 organization，只放在 exam_name 和标签里。
   知名的统一考试品牌，请用你已有的知识补全主办方和通用简称，例如“标准学术能力诊断性测试”简称 TDA，由清华大学（THU）主办，是全国性考试：organization 写“清华大学”，region 留空，exam_name 写成“标准学术能力诊断性测试（TDA）2026年10月测试”这样的形式，并把简称放进标签。前提是材料里确实出现了该考试的名称，并把它作为 evidence 引用；没有把握就不要写。
-- exam_name 写这场考试/这份资料的规范名称，例如“2025届浙江Z20名校联盟高三第一次联考”“2025届宁波市高三第一次模拟考试（宁波一模）”，去掉“试题卷”“答案”等部件字样。必须保留材料、文件名或路径中出现的城市、联盟、品牌简称和考试称呼（一模、二模、期中联考等），不得只写省份或泛称。
+- exam_name 写这场考试/这份资料的规范名称，例如“2025届浙江Z20名校联盟高三第一次联考”“2025届宁波市高三第一次模拟考试（宁波一模）”，去掉“试题卷”“答案”“学生版”“教师版”“解析版”“答案版”“答题卡”等部件字样。必须保留材料、文件名或路径中出现的城市、联盟、品牌简称和考试称呼（一模、二模、期中联考等），不得只写省份或泛称。
   topic（专题练习）、lecture（讲义）、study_guide（学案）、courseware（课件）、homework（作业）、other（其他）不是一场考试：exam_name 必须是这份资料自己的名字，写清它具体讲的内容，取首页标题、chapter 或正文里最具体的一处，例如“十年高考化学真题分项汇编 专题44 水的电离与溶液的pH”“不规则动词分类速记表（答案版）”。绝不能只写“专题练习”“高三化学讲义”“化学”这类由类型、年级、学科拼出来的泛称；资料本身没有名字时，按正文实际内容起一个，不得编造年份或出处。
 - chapter 是这份资料的内容范围，要写到能一眼看出讲的是什么：专题卷写具体专题（如“水的电离与溶液的pH”“电化学综合”），讲义写主要知识点或题型（如“文言文实词关联成语”），其他资料写它的主题；没有具体内容就留空。专题练习和讲义的 exam_name 必须包含 chapter 的核心说法，标题里要体现这个内容。
 
@@ -530,7 +530,7 @@ func (c *decideChecker) orgEvidenced() bool {
 }
 
 func (c *decideChecker) examName() {
-	name := clip(c.raw.ExamName, 255)
+	name := trimPartWords(clip(c.raw.ExamName, 255))
 	if name == "" {
 		return
 	}
@@ -564,6 +564,29 @@ func (c *decideChecker) namedFromChapter(name string) bool {
 		return false
 	}
 	return strings.Contains(NormalizeName(name), NormalizeName(chapter))
+}
+
+// trailingPartWords are the 部件 words a document name often ends with. Material
+// file names are "套卷标题 + part 标签", so a name that keeps them duplicates
+// the label: "…（教师版） 教师版.docx".
+var trailingPartWords = []string{"学生版", "教师版", "解析版", "答案版", "试题卷", "答案卷", "答题卡"}
+
+// trimPartWords removes 部件 words from the end of a name, with or without
+// parentheses. A name made of part words alone is kept as it was.
+func trimPartWords(name string) string {
+	out := strings.TrimSpace(name)
+	for {
+		trimmed := out
+		for _, w := range trailingPartWords {
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "（"+w+"）"))
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "("+w+")"))
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, w))
+		}
+		if trimmed == out || trimmed == "" {
+			return out
+		}
+		out = trimmed
+	}
 }
 
 func (c *decideChecker) tags() {

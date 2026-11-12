@@ -59,6 +59,19 @@ func TestPackTitleKeepsTheNameOfADocumentThatIsNotAnExam(t *testing.T) {
 	}
 }
 
+// A chapter that only repeats the subject would otherwise appear twice.
+func TestCanonicalPackTitleDropsAChapterThatRepeatsTheSubject(t *testing.T) {
+	pack := packFixture("gaokao_real", "grade12", 2026, "浙江", "", "2026-01", `["information_technology"]`)
+	pack.Chapter = "信息技术"
+	if got := canonicalPackTitle(pack); got != "2026届 浙江 1月高考真题 高三 信息技术" {
+		t.Fatalf("title = %q", got)
+	}
+	pack.Chapter = "算法与数据结构"
+	if got := canonicalPackTitle(pack); !strings.HasSuffix(got, "信息技术 算法与数据结构") {
+		t.Fatalf("chapter that adds content was dropped: %q", got)
+	}
+}
+
 func packFixture(docType, grade string, cohort int, region, org, examDate, subjects string) model.Pack {
 	return model.Pack{DocType: docType, Grade: grade, Cohort: cohort, Region: region, Organization: org, ExamDate: examDate, SubjectsJSON: subjects, TagsJSON: "[]"}
 }

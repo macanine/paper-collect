@@ -134,3 +134,25 @@ func TestTopicPackIsNamedByItsContent(t *testing.T) {
 		t.Fatalf("no exam_name evidence problem: %+v", problems)
 	}
 }
+
+// File names are "套卷标题 + part 标签", so a name ending in 教师版 would show
+// up twice: "…（教师版） 教师版.docx".
+func TestExamNameDropsTrailingPartWords(t *testing.T) {
+	reply := `{"exam_name":"十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH（教师版）",` +
+		`"doc_type":"topic","subjects":["chemistry"],"grade":"grade12",` +
+		`"chapter":"水的电离与溶液的pH","files":[{"id":"f1","role":"questions"}]}`
+	d, problems, err := CheckDecide(reply, topicInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ExamName != "十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH" {
+		t.Fatalf("exam_name = %q, problems = %+v", d.ExamName, problems)
+	}
+	// A name made of part words alone is kept rather than emptied.
+	if got := trimPartWords("教师版"); got != "教师版" {
+		t.Fatalf("trimPartWords dropped the whole name: %q", got)
+	}
+	if got := trimPartWords("化学仪器装置图 学生版"); got != "化学仪器装置图" {
+		t.Fatalf("trimPartWords = %q", got)
+	}
+}

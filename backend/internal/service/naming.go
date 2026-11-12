@@ -82,8 +82,17 @@ func canonicalPackTitle(p model.Pack) string {
 	if len(subjects) > 0 {
 		parts = append(parts, strings.Join(subjects, "·"))
 	}
-	if p.Chapter != "" {
-		parts = append(parts, p.Chapter)
+	// A chapter that only repeats the subject ("信息技术" on 信息技术) adds
+	// nothing; content like "水的电离" is kept.
+	chapter := p.Chapter
+	for _, s := range subjects {
+		if chapter == s {
+			chapter = ""
+			break
+		}
+	}
+	if chapter != "" {
+		parts = append(parts, chapter)
 	}
 	// Without type, grade or subject the name says nothing useful; let the
 	// caller fall back to the exam name or the original file name.
