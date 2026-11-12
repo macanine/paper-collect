@@ -140,7 +140,7 @@ const decideSystem = `你是中学资料编目员，负责为一套资料（同�
 - exam_name 写这场考试/这份资料的规范名称，例如“2025届浙江Z20名校联盟高三第一次联考”“2025届宁波市高三第一次模拟考试（宁波一模）”，去掉“试题卷”“答案”“学生版”“教师版”“解析版”“答案版”“答题卡”等部件字样。必须保留材料、文件名或路径中出现的城市、联盟、品牌简称和考试称呼（一模、二模、期中联考等），不得只写省份或泛称。
   topic（专题练习）、lecture（讲义）、study_guide（学案）、courseware（课件）、homework（作业）、other（其他）不是一场考试：exam_name 必须是这份资料自己的名字，写清它具体讲的内容，取首页标题、chapter 或正文里最具体的一处，例如“十年高考化学真题分项汇编 专题44 水的电离与溶液的pH”“不规则动词分类速记表（答案版）”。绝不能只写“专题练习”“高三化学讲义”“化学”这类由类型、年级、学科拼出来的泛称；资料本身没有名字时，按正文实际内容起一个，不得编造年份或出处。
 - chapter 是这份资料的内容范围，要写到能一眼看出讲的是什么：专题卷写具体专题（如“水的电离与溶液的pH”“电化学综合”），讲义写主要知识点或题型（如“文言文实词关联成语”），其他资料写它的主题；没有具体内容就留空。专题练习和讲义的 exam_name 必须包含 chapter 的核心说法，标题里要体现这个内容。
-- series 是这套资料所属的系列名，只在一套资料被拆成很多份、共用同一个印着的名字时填写，例如“十年（2012-2021）高考化学真题分项汇编”“高中物理模型方法分类解析”。必须是材料、文件名或路径里印着的名字，长度不少于 4 个字；这套资料自成一体、没有系列，或系列名和 exam_name 一样时留空。不要按学科、年级、类型自己编系列名。已有系列候选中名字相同的，必须原样复用候选的写法（忽略标点和括号宽窄），不要另起一个带版本或范围括注的名字。
+- series 是这套资料所属的系列名，只在一套资料被拆成很多份、共用同一个印着的名字时填写，例如“十年（2012-2021）高考化学真题分项汇编”“高中物理模型方法分类解析”。必须是材料、文件名或路径里印着的名字，长度不少于 4 个字；这套资料自成一体、没有系列，或系列名和 exam_name 一样时留空。不要按学科、年级、类型自己编系列名。已有系列候选中凡与本套资料属于同一系列的（同一批资料的不同写法，例如同为 2012-2021 年高考化学真题的分项汇编或分类汇编，只是措辞、年份范围、括注不同），必须原样复用候选里的写法，不要按本文件上的另一种写法另建一个系列；只有确认是不同系列时才写新材料里的名字。
 
 - tags 最多 5 个，优先从候选标签中选择；确有必要才新建，新标签不超过 2 个，每个 2～12 字。考试系列、品牌简称（如 TDA）、轮次（如 一模）适合作标签。
 - files 必须列出每个文件且只列一次。role 只能取：%s。同一套中试题卷、答案、前题后答(full)、教师版、答题卡各最多一份。role=full 时必须给出答案区开始页码。
@@ -594,16 +594,18 @@ func (c *decideChecker) series() {
 	if NormalizeName(name) == NormalizeName(c.out.ExamName) {
 		return
 	}
+	// A name taken from the provided candidates is a topic that already exists,
+	// so it does not need to be printed in this file: the same series is often
+	// printed differently from one file to the next.
+	for _, candidate := range c.in.SeriesNames {
+		if NormalizeName(candidate) == NormalizeName(name) {
+			c.out.Series = candidate
+			return
+		}
+	}
 	if !c.corpus.Contains(name) {
 		c.add(warn("evidence", "series", "series「%s」缺少可在材料中找到的原文", name))
 		return
-	}
-	// Reuse the spelling of an existing series so one series stays one topic.
-	for _, candidate := range c.in.SeriesNames {
-		if NormalizeName(candidate) == NormalizeName(name) {
-			name = candidate
-			break
-		}
 	}
 	c.out.Series = name
 }

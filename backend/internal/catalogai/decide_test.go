@@ -207,3 +207,20 @@ func TestSeriesNeedsThePrintedName(t *testing.T) {
 		t.Fatalf("doc type label accepted as series: %q", d.Series)
 	}
 }
+
+// The same series is printed differently from one file to the next, so reusing
+// an existing topic name does not need the exact spelling in this file.
+func TestSeriesReusesAnExistingTopicName(t *testing.T) {
+	in := topicInput()
+	in.SeriesNames = []string{"十年（2012-2021）高考化学真题分项汇编"}
+	reply := `{"series":"十年（2012-2021）高考化学真题分项汇编","exam_name":"专题51 有机实验（选择）",` +
+		`"doc_type":"topic","subjects":["chemistry"],"grade":"grade12",` +
+		`"chapter":"有机实验（选择）","files":[{"id":"f1","role":"questions"}]}`
+	d, problems, err := CheckDecide(reply, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Series != "十年（2012-2021）高考化学真题分项汇编" {
+		t.Fatalf("series = %q, problems = %+v", d.Series, problems)
+	}
+}
