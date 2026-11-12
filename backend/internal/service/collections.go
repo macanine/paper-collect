@@ -316,6 +316,16 @@ func collectionKey(title string) string {
 	return key
 }
 
+// seriesCandidates lists existing topic names so the model reuses one spelling
+// per series instead of inventing a variant for every pack.
+func (s *Service) seriesCandidates(db *gorm.DB) ([]string, error) {
+	var names []string
+	if err := db.Model(&model.Collection{}).Order("updated_at DESC").Limit(200).Pluck("title", &names).Error; err != nil {
+		return nil, wrap("load series candidates", err)
+	}
+	return names, nil
+}
+
 // attachSeriesTx puts a decided pack into the topic of its series, creating the
 // topic when the series is new. A topic a person has edited is left alone: the
 // AI never renames, reorders or deletes one.

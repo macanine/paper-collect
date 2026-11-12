@@ -170,6 +170,9 @@ func (s *Service) prepareDecide(ctx context.Context, job model.Job) (*jobexec.De
 	if in.Tags, err = s.tagCandidates(db); err != nil {
 		return nil, err
 	}
+	if in.SeriesNames, err = s.seriesCandidates(db); err != nil {
+		return nil, err
+	}
 	models, err := s.aiModels(ctx)
 	if err != nil {
 		return nil, err

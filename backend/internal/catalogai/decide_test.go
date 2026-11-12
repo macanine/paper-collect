@@ -70,7 +70,7 @@ func TestDecidePromptIsWellFormed(t *testing.T) {
 	if strings.Contains(system, "%!") || strings.Contains(system, "%s") {
 		t.Fatalf("prompt has a formatting error: %.200s", system)
 	}
-	for _, want := range []string{"analysis", "TDA", "evidence.region", "gaokao_real", "chapter"} {
+	for _, want := range []string{"analysis", "TDA", "evidence.region", "gaokao_real", "chapter", "series"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("prompt lacks %q", want)
 		}
