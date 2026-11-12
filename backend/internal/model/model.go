@@ -348,8 +348,11 @@ type Pack struct {
 	ExamDate       string `gorm:"size:7;not null"`
 	ExamName       string `gorm:"size:255;not null"`
 	Chapter        string `gorm:"size:255;not null"`
-	TagsJSON       string `gorm:"type:text;not null"`
-	Description    string `gorm:"type:text;not null"`
+	// Series is the canonical name of the topic the pack belongs to, copied
+	// from the topic so every set of one series is titled the same way.
+	Series      string `gorm:"size:255;not null"`
+	TagsJSON    string `gorm:"type:text;not null"`
+	Description string `gorm:"type:text;not null"`
 	// Revision changes whenever the members change; a decision made for an
 	// older revision is discarded.
 	Revision  int `gorm:"not null;default:0"`

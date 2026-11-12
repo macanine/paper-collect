@@ -106,10 +106,19 @@ func canonicalPackTitle(p model.Pack) string {
 // when they do not identify it. Exam packs are composed from 届、地区、机构、
 // 类型、年级、学科; 专题练习、讲义、学案、课件、作业、其他 keep the name the
 // model wrote for them, because a field dump says what kind of file it is, not
-// what it is about. The composed name is still the fallback when no name was
+// what it is about. A set that belongs to a series is titled with the topic's
+// canonical name plus its own distinguishing part, so a whole series reads
+// consistently. The composed name is still the fallback when no name was
 // written at all.
 func packTitleFromCatalogue(p model.Pack) string {
-	if p.ExamName != "" && !catalogai.IsComposedTitleDocType(p.DocType) {
+	composed := catalogai.IsComposedTitleDocType(p.DocType)
+	if !composed && p.Series != "" {
+		if specific := seriesSpecific(p); specific != "" {
+			return truncateRunes(p.Series+" "+specific, maxTitleRunes)
+		}
+		return truncateRunes(p.Series, maxTitleRunes)
+	}
+	if !composed && p.ExamName != "" {
 		return truncateRunes(p.ExamName, maxTitleRunes)
 	}
 	if p.DocType != "" && len(model.DecodeStrings(p.SubjectsJSON)) > 0 {
@@ -121,6 +130,73 @@ func packTitleFromCatalogue(p model.Pack) string {
 		return truncateRunes(p.ExamName, maxTitleRunes)
 	}
 	return ""
+}
+
+// seriesNumber finds the 专题NN marker that orders the sets of a series.
+var seriesNumber = regexp.MustCompile(`专题\s*\d+`)
+
+const titleNoise = " \t\r\n-—–_·•:：;；,，.。、/|"
+
+// seriesSpecific extracts the part of a set's own name that tells it apart
+// from the other sets of the same series: "专题44 水的电离与溶液的pH" out of
+// "十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH", or the
+// name itself when it does not repeat the series.
+func seriesSpecific(p model.Pack) string {
+	name := strings.TrimSpace(p.ExamName)
+	if name == "" {
+		return strings.TrimSpace(p.Chapter)
+	}
+	if rest, ok := cutSeriesPrefix(name, p.Series); ok {
+		name = rest
+	} else if loc := seriesNumber.FindStringIndex(name); loc != nil && loc[0] > 0 {
+		// The file printed its series another way ("高考真题分类汇编（2012-2021）专题51 …");
+		// keep the numbered topic and drop the other series wording.
+		name = name[loc[0]:]
+	}
+	name = trimLeadingNoise(name)
+	name = strings.Trim(strings.TrimSpace(name), titleNoise)
+	if catalogai.NormalizeName(name) == "" || catalogai.NormalizeName(name) == catalogai.NormalizeName(p.Series) {
+		return ""
+	}
+	return strings.TrimSpace(name)
+}
+
+// cutSeriesPrefix cuts the series name off the front of a pack name, comparing
+// after normalisation so punctuation and full-width brackets do not matter.
+func cutSeriesPrefix(name, series string) (string, bool) {
+	target := catalogai.NormalizeName(series)
+	if target == "" {
+		return name, false
+	}
+	for i := range name {
+		if catalogai.NormalizeName(name[:i]) == target {
+			return name[i:], true
+		}
+	}
+	return name, false
+}
+
+// trimLeadingNoise drops separators and parenthesised qualifiers left in front
+// of the specific part, such as "（全国通用）" after the series was cut away.
+func trimLeadingNoise(s string) string {
+	s = strings.TrimSpace(s)
+	for {
+		trimmed := strings.TrimSpace(strings.TrimLeft(s, titleNoise))
+		pairs := [][2]string{{"（", "）"}, {"(", ")"}, {"【", "】"}, {"[", "]"}}
+		for _, pair := range pairs {
+			if !strings.HasPrefix(trimmed, pair[0]) {
+				continue
+			}
+			if end := strings.Index(trimmed, pair[1]); end > 0 {
+				trimmed = strings.TrimSpace(trimmed[end+len(pair[1]):])
+			}
+			break
+		}
+		if trimmed == s {
+			return s
+		}
+		s = trimmed
+	}
 }
 
 func truncateRunes(s string, limit int) string {

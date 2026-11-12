@@ -72,6 +72,31 @@ func TestCanonicalPackTitleDropsAChapterThatRepeatsTheSubject(t *testing.T) {
 	}
 }
 
+// One series, one naming pattern: the topic's name leads every title and the
+// file's own spelling of the series is not repeated.
+func TestSeriesPacksShareOnePrefix(t *testing.T) {
+	series := "十年（2012-2021）高考化学真题分项汇编"
+	cases := map[string]string{
+		"十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH": "十年（2012-2021）高考化学真题分项汇编 专题44 水的电离与溶液的pH",
+		"专题01 化学常识 化学与生活":                         "十年（2012-2021）高考化学真题分项汇编 专题01 化学常识 化学与生活",
+		"高考真题分类汇编（2012-2021）专题51 有机实验（选择）":        "十年（2012-2021）高考化学真题分项汇编 专题51 有机实验（选择）",
+	}
+	for name, want := range cases {
+		pack := packFixture("topic", "grade12", 0, "", "", "", `["chemistry"]`)
+		pack.Series = series
+		pack.ExamName = name
+		if got := packTitleFromCatalogue(pack); got != want {
+			t.Fatalf("%q -> %q, want %q", name, got, want)
+		}
+	}
+	// Without any own name the series name alone still identifies the set.
+	nameless := packFixture("topic", "grade12", 0, "", "", "", `["chemistry"]`)
+	nameless.Series = series
+	if got := packTitleFromCatalogue(nameless); got != series {
+		t.Fatalf("nameless series title = %q", got)
+	}
+}
+
 func packFixture(docType, grade string, cohort int, region, org, examDate, subjects string) model.Pack {
 	return model.Pack{DocType: docType, Grade: grade, Cohort: cohort, Region: region, Organization: org, ExamDate: examDate, SubjectsJSON: subjects, TagsJSON: "[]"}
 }

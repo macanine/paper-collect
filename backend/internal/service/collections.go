@@ -328,11 +328,13 @@ func (s *Service) seriesCandidates(db *gorm.DB) ([]string, error) {
 }
 
 // attachSeriesTx puts a decided pack into the topic of its series, creating the
-// topic when the series is new. A topic a person has edited is left alone: the
-// AI never renames, reorders or deletes one.
-func (s *Service) attachSeriesTx(tx *gorm.DB, packID, series string, now time.Time) error {
+// topic when the series is new. It returns the topic's title: that canonical
+// name is what the pack's title is prefixed with, so every set of one series is
+// titled the same way even when the model read a variant spelling. A topic a
+// person has edited is left alone and returns "".
+func (s *Service) attachSeriesTx(tx *gorm.DB, packID, series string, now time.Time) (string, error) {
 	if series == "" {
-		return nil
+		return "", nil
 	}
 	key := collectionKey(series)
 	var topic model.Collection
@@ -344,19 +346,19 @@ func (s *Service) attachSeriesTx(tx *gorm.DB, packID, series string, now time.Ti
 		if cerr := tx.Create(&topic).Error; cerr != nil {
 			// Another decision created the same series first.
 			if ferr := tx.Where("key = ?", key).First(&topic).Error; ferr != nil {
-				return wrap("create series topic", cerr)
+				return "", wrap("create series topic", cerr)
 			}
 		}
 	case err != nil:
-		return wrap("find series topic", err)
+		return "", wrap("find series topic", err)
 	case topic.Locked:
-		return nil
+		return "", nil
 	}
 	if err := s.addPacksTx(tx, topic.ID, []string{packID}); err != nil {
-		return err
+		return "", err
 	}
 	if err := tx.Model(&model.Collection{}).Where("id = ?", topic.ID).Update("updated_at", now).Error; err != nil {
-		return wrap("touch series topic", err)
+		return "", wrap("touch series topic", err)
 	}
-	return nil
+	return topic.Title, nil
 }

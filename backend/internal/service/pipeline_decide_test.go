@@ -183,6 +183,9 @@ func TestCommitDecideJoinsTheSeriesTopic(t *testing.T) {
 	if topic.Title != series || topic.Source != model.CollectionSourceAI || topic.Locked {
 		t.Fatalf("topic = %+v", topic)
 	}
+	if p := e.pack(first.PackID); p.Series != series {
+		t.Fatalf("pack series = %q, want the topic name %q", p.Series, series)
+	}
 
 	second := e.material("专题45 电离平衡", "专题45.pdf", []byte("series-two"), nil)
 	job = e.runningDecide(second.PackID, e.pack(second.PackID).Revision)
