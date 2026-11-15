@@ -381,7 +381,7 @@ func (s *Service) RerunAI(ctx context.Context, p auth.Principal, mode, scope str
 	var uncarded int64
 	if mode == RerunModeFull {
 		if err := selectMaterials(db).Where("id NOT IN (?)", db.Model(&model.FileCard{}).Select("material_id").
-			Where("status = ?", model.AnalysisSucceeded)).Count(&uncarded).Error; err != nil {
+			Where("status = ? AND metadata_only = ?", model.AnalysisSucceeded, false)).Count(&uncarded).Error; err != nil {
 			return out, apperr.Internal(err)
 		}
 		out.EstimatedCalls += uncarded + (out.Materials+groupChunkFiles-1)/groupChunkFiles
@@ -419,6 +419,13 @@ func (s *Service) RerunAI(ctx context.Context, p auth.Principal, mode, scope str
 			ids = append(ids, m.ID)
 		}
 		cards := loadCards(tx, ids)
+		// A card built from the file name alone is not a reading: the file is
+		// read again, since the reason it could not be read may be gone.
+		var nameOnly []string
+		_ = tx.Model(&model.FileCard{}).Where("material_id IN ? AND metadata_only = ?", ids, true).Pluck("material_id", &nameOnly).Error
+		for _, id := range nameOnly {
+			delete(cards, id)
+		}
 		for _, m := range rows {
 			if err := tx.Model(&model.Material{}).Where("id = ?", m.ID).Update("batch_id", batch).Error; err != nil {
 				return err
