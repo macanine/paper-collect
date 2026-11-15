@@ -660,6 +660,12 @@ func (s *Service) recordFailure(job model.Job, class, message string, extra map[
 		s.failAIJob(job, class, message)
 		return
 	}
+	if class == jobexec.ClassConfig && job.Kind == model.JobIndex {
+		// No usable provider or quota right now: wait and look again.
+		if s.retryLater(job, s.now().Add(waitAIRetry), "等待服务可用："+message, false) {
+			return
+		}
+	}
 	if class == jobexec.ClassTransient && job.Attempts < maxJobAttempts && job.Kind != model.JobIngest {
 		delay := backoffFor(job.Attempts)
 		if s.retryLater(job, s.now().Add(delay), fmt.Sprintf("%s（%s 后自动重试）", message, delay), true) {

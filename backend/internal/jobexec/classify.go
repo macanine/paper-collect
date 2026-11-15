@@ -11,6 +11,8 @@ import (
 // Failure classes decide what happens to a failed AI job:
 //   - ClassConfig: no usable model/OCR (missing, disabled, rejected key). The
 //     file waits for AI and the job resumes once the configuration changes.
+//     An exhausted provider quota is treated the same way: it is looked at
+//     again later rather than counted against the file.
 //   - ClassTransient: rate limits, timeouts, unavailable services, lost
 //     nodes. The job is retried with backoff.
 //   - ClassPermanent: retrying the same input will not help.
@@ -43,7 +45,9 @@ func Classify(err error) string {
 	var ae *ai.APIError
 	if errors.As(err, &ae) {
 		switch ae.Class {
-		case "config", "auth":
+		case "config", "auth", "quota":
+			// A used-up quota is a provider state, not a property of the file:
+			// the work waits and runs again instead of being settled by name.
 			return ClassConfig
 		case "rate_limited", "unavailable", "timeout":
 			return ClassTransient
